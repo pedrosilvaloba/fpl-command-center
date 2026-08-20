@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+/* ---- Design tokens ------------------------------------------------- */
+/* Palette grounded in the pitch + scoreboard, not the FPL brand purple:
+   a deep, sophisticated green as the working accent, a muted armband-gold
+   for captaincy/premium highlights, and separate semantic colors for
+   fixture difficulty so they never collide with the accent hue. */
+
+:root {
+  --bg: #f5f7f3;
+  --surface: #ffffff;
+  --surface-2: #eaf0e7;
+  --border: #d7e0d4;
+  --text: #10241c;
+  --text-muted: #4b5a52;
+
+  --accent: #1e8a4c;
+  --accent-contrast: #ffffff;
+  --gold: #a06a1e;
+  --danger: #a83a34;
+  --warn: #a3701a;
+  --success: #1e8a4c;
+
+  --font-display: "Oswald", "Arial Narrow", sans-serif;
+  --font-body: "Public Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1512;
+    --surface: #16201b;
+    --surface-2: #1e2b23;
+    --border: #2a3a31;
+    --text: #eaf2ec;
+    --text-muted: #9fb3a6;
+
+    --accent: #3fbe73;
+    --accent-contrast: #06120c;
+    --gold: #e0b25a;
+    --danger: #e2685f;
+    --warn: #e0a23f;
+    --success: #3fbe73;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0e1512;
+  --surface: #16201b;
+  --surface-2: #1e2b23;
+  --border: #2a3a31;
+  --text: #eaf2ec;
+  --text-muted: #9fb3a6;
+
+  --accent: #3fbe73;
+  --accent-contrast: #06120c;
+  --gold: #e0b25a;
+  --danger: #e2685f;
+  --warn: #e0a23f;
+  --success: #3fbe73;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-accent: var(--accent);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-gold: var(--gold);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-success: var(--success);
+  --font-display: var(--font-display);
+  --font-body: var(--font-body);
+  --font-mono: var(--font-mono);
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
