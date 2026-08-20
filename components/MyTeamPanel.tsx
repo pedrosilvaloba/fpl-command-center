@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ScoredPlayer, TransferSuggestion } from "@/lib/recommend";
 import { suggestTransfers } from "@/lib/recommend";
+import { DEFAULT_TEAM_ID } from "@/lib/constants";
 
 const STORAGE_KEY = "fpl_team_id";
 
@@ -117,12 +118,14 @@ export default function MyTeamPanel({
     // so this legitimately belongs in an effect despite the lint rule
     // below being tuned for the (much more common) anti-pattern of
     // deriving state from props/state that could just be computed inline.
+    // Falls back to DEFAULT_TEAM_ID (this manager's own ID, baked into
+    // this personal deployment) rather than showing an empty form.
     try {
       const saved = window.localStorage.getItem(STORAGE_KEY);
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      if (saved) setTeamId(saved);
+      setTeamId(saved ?? DEFAULT_TEAM_ID);
     } catch {
-      // localStorage unavailable (private browsing, etc.) — just skip persistence.
+      setTeamId(DEFAULT_TEAM_ID);
     }
   }, []);
 
@@ -131,6 +134,8 @@ export default function MyTeamPanel({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     setError(null);
+    setEntry(null);
+    setPicks(null);
     Promise.all([
       fetch(`/api/fpl/entry/${teamId}`).then((r) => r.json()),
       fetch(`/api/fpl/entry/${teamId}/picks?event=${eventId}`).then((r) => r.json()),
@@ -138,8 +143,20 @@ export default function MyTeamPanel({
       .then(([entryRes, picksRes]) => {
         if (entryRes.error) throw new Error(entryRes.error);
         setEntry(entryRes);
-        setPicks(picksRes);
-        if (picksRes.error) setError(picksRes.error);
+        // picksRes can be an error payload ({error, detail}, no `picks`
+        // array) when the FPL API has no saved squad for this gameweek
+        // yet (brand new team, or squad never confirmed before deadline).
+        // Only accept it as real data when it actually has a picks array —
+        // otherwise leave `picks` null and just surface the message, so
+        // nothing downstream tries to .map() over a missing array.
+        if (Array.isArray(picksRes?.picks)) {
+          setPicks(picksRes);
+        } else {
+          setError(
+            picksRes?.error ??
+              "A FPL ainda não tem um plantel guardado para esta jornada com este Team ID — confirma em fantasy.premierleague.com que já escolheste e guardaste os 15 jogadores."
+          );
+        }
       })
       .catch((e) => setError(e.message || "Erro a carregar a equipa"))
       .finally(() => setLoading(false));
@@ -151,7 +168,7 @@ export default function MyTeamPanel({
   );
 
   const ownedScored = useMemo(() => {
-    if (!picks) return [];
+    if (!picks || !Array.isArray(picks.picks)) return [];
     return picks.picks
       .map((pick) => {
         const s = scoredById.get(pick.element);
@@ -166,7 +183,7 @@ export default function MyTeamPanel({
   const bench = ownedScored.filter((p) => p.position > 11);
 
   const suggestions = useMemo(() => {
-    if (!picks) return [];
+    if (!picks || !Array.isArray(picks.picks)) return [];
     return suggestTransfers(
       picks.picks.map((p) => p.element),
       scored,

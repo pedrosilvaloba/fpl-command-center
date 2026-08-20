@@ -31,28 +31,39 @@ app/
   api/fpl/bootstrap/route.ts  Proxy para /bootstrap-static/
   api/fpl/fixtures/route.ts   Proxy para /fixtures/
   api/fpl/entry/[id]/route.ts Proxy para /entry/{id}/ + histórico
+  api/fpl/entry/[id]/picks/route.ts Proxy para /entry/{id}/event/{gw}/picks/
   api/fpl/league/[id]/route.ts Proxy para /leagues-classic/{id}/standings/
 lib/
   types.ts        Tipos TypeScript para as respostas da API da FPL
   fpl-client.ts   Cliente HTTP server-side para a API da FPL (com cache)
   fdr.ts          Construção do fixture ticker / dificuldade de calendário
-  recommend.ts    Motor de pontuação, sugestão de equipa e capitão
+  recommend.ts    Motor de pontuação, sugestão de equipa, onze ideal e capitão
   strategy.ts     Playbook e regras 2026/27 (conteúdo da investigação)
+  constants.ts    Team ID e League ID por omissão desta instalação pessoal
 components/
   CountdownTimer.tsx  Contagem decrescente até ao deadline (client)
   FixtureTicker.tsx   Tabela de calendário com chips de dificuldade
   PlayerTable.tsx     Tabela reutilizável de jogadores pontuados
   MyTeamPanel.tsx     A Minha Equipa — liga um Team ID real (client)
+  ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, localStorage)
 ```
 
-## O que já funciona (v1 + v1.1)
+## O que já funciona (v1.3)
 
 - Dados 100% reais e ao vivo — preço, forma, posse, pontos, calendário —
   vindos diretamente da API oficial, sem qualquer valor inventado ou
   copiado deste chat.
-- **A Minha Equipa** — introduz o teu Team ID (guardado neste browser) e vês
-  o teu plantel real, capitão, banco, valor e rank, com sugestões de
-  transferência calculadas contra o teu plantel verdadeiro (não genéricas).
+- **A Minha Equipa** — introduz o teu Team ID (guardado neste browser, com
+  o teu por omissão) e vês o teu plantel real, capitão, banco, valor e
+  rank, com sugestões de transferência calculadas contra o teu plantel
+  verdadeiro (não genéricas).
+- **A Minha Liga** — classificação ao vivo da tua liga privada ("Haal of
+  Fame", #369689), com a tua linha destacada.
+- **Shadow Team** — monta um plantel paralelo (respeitando orçamento,
+  2-5-5-3 e máx. 3 por clube) para testares ideias de transferência sem
+  tocar na equipa real, com onze ideal e capitão calculados automaticamente.
+  Guardado neste browser por agora (ver roadmap, ponto 1, para persistência
+  partilhada entre dispositivos).
 - Fixture ticker (próximas 5 jornadas) com a dificuldade oficial da FPL.
 - Sugestão de equipa (15 jogadores, £100m, 2-5-5-3, máx. 3 por clube) e de
   onze inicial + capitão/vice, através de uma heurística transparente
@@ -65,13 +76,7 @@ components/
 
 Em ordem de prioridade, a validar em conjunto antes de cada etapa:
 
-1. **As Minhas Ligas** — comparação com rivais nas tuas ligas privadas
-   (precisa de sessão autenticada da FPL — ver ponto 3).
-2. **Shadow Team** — um plantel paralelo, guardado no backend (não só no
-   browser), para simulares transferências/capitães/chips sem tocar na
-   equipa real. Precisa de uma camada de persistência (Vercel KV/Upstash
-   Redis, plano gratuito).
-3. **Login FPL + autopilot de transferências** — decidiste avançar com
+1. **Login FPL + autopilot de transferências** — decidiste avançar com
    automação total (credenciais guardadas, execução automática). Isto usa
    um fluxo de login não-oficial (`users.premierleague.com/accounts/login/`)
    que a Premier League pode alterar sem aviso. Antes de implementar:
@@ -87,11 +92,14 @@ Em ordem de prioridade, a validar em conjunto antes de cada etapa:
    - Um interruptor geral (armar/desarmar) e um registo de auditoria de
      cada ação automática, com a razão por trás da decisão.
    - Vamos falar sobre isto em detalhe antes de mexer em credenciais reais.
-4. **Otimizador real** — substituir a heurística gananciosa em
+2. **Otimizador real** — substituir a heurística gananciosa em
    `buildSuggestedSquad` por um solver de programação linear (abordagem
    usada pela FPL Review e pela maioria das ferramentas open-source da
    comunidade), para uma equipa genuinamente ótima dentro do orçamento.
-5. **Preditor de mudanças de preço e monitor de notícias/lesões.**
+   A mesma técnica pode também tornar o Shadow Team persistente no
+   backend (Vercel KV/Upstash Redis, plano gratuito) em vez de só no
+   browser, para funcionar entre dispositivos.
+3. **Preditor de mudanças de preço e monitor de notícias/lesões.**
 
 ## Deploy (Vercel, plano gratuito)
 

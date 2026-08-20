@@ -209,7 +209,17 @@ export function buildSuggestedSquad(
     }
   }
 
-  // Starting XI: best-scoring valid formation (min 3 DEF, 2 MID, 1 FWD, 1 GK).
+  return { squad, starters: pickBestXI(squad), totalCost: Math.round(spent * 10) / 10 };
+}
+
+/**
+ * Picks the best-scoring valid starting XI out of an arbitrary 15-player
+ * squad (min 3 DEF, 2 MID, 1 FWD, always exactly 1 GK) — shared by the
+ * auto-suggested squad and the Shadow Team simulator, so both apply the
+ * exact same "who should actually start" logic to whatever 15 players
+ * they're given.
+ */
+export function pickBestXI(squad: ScoredPlayer[]): ScoredPlayer[] {
   const byPos = (id: number) =>
     squad.filter((p) => p.element.element_type === id).sort((a, b) => b.score - a.score);
   const gk = byPos(1).slice(0, 1);
@@ -222,9 +232,7 @@ export function buildSuggestedSquad(
     .sort((a, b) => b.score - a.score)
     .slice(0, 11 - chosen.size);
 
-  const starters = [...gk, ...def, ...mid, ...fwd, ...remaining];
-
-  return { squad, starters, totalCost: Math.round(spent * 10) / 10 };
+  return [...gk, ...def, ...mid, ...fwd, ...remaining];
 }
 
 export function pickCaptain(starters: ScoredPlayer[]): {

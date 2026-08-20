@@ -1,4 +1,4 @@
-import { getBootstrap, getFixtures } from "@/lib/fpl-client";
+import { getBootstrap, getFixtures, getLeagueStandings } from "@/lib/fpl-client";
 import { buildFixtureTicker } from "@/lib/fdr";
 import {
   buildScoredPlayers,
@@ -7,10 +7,12 @@ import {
   findDifferentials,
 } from "@/lib/recommend";
 import { PLAYBOOK, RULES_2026_27 } from "@/lib/strategy";
+import { DEFAULT_TEAM_ID, DEFAULT_LEAGUE_ID } from "@/lib/constants";
 import CountdownTimer from "@/components/CountdownTimer";
 import FixtureTicker from "@/components/FixtureTicker";
 import PlayerTable from "@/components/PlayerTable";
 import MyTeamPanel from "@/components/MyTeamPanel";
+import ShadowTeamPanel from "@/components/ShadowTeamPanel";
 
 // Rendered per-request (not at build time): this sandbox's build
 // environment has no route to the FPL API to prerender against, and in
@@ -73,6 +75,31 @@ export default async function Home() {
   const isPreseason = scored[0]?.isPreseason ?? true;
   const bench = squad.filter((p) => !starters.includes(p));
 
+  // League standings are optional — the endpoint can fail (a league that
+  // genuinely does need an authenticated session) or simply have no
+  // results yet before the season's first gameweek is scored, so this is
+  // fetched separately and degrades to a friendly message rather than
+  // taking the whole page down.
+  let leagueName: string | null = null;
+  let leagueResults: {
+    id: number;
+    entry: number;
+    entry_name: string;
+    player_name: string;
+    rank: number;
+    total: number;
+  }[] = [];
+  let leagueError: string | null = null;
+  try {
+    const league = await getLeagueStandings(DEFAULT_LEAGUE_ID);
+    leagueName = league.league.name;
+    leagueResults = league.standings.results;
+  } catch {
+    leagueError =
+      "Não foi possível carregar esta liga — se for uma liga privada pode precisar de sessão autenticada.";
+  }
+  const myTeamIdNum = Number(DEFAULT_TEAM_ID);
+
   return (
     <div className="min-h-full bg-bg text-text">
       {/* Status bar */}
@@ -106,6 +133,8 @@ export default async function Home() {
         <nav className="mx-auto max-w-6xl px-4 md:px-6 pb-4 flex flex-wrap gap-x-5 gap-y-1 text-sm text-text-muted">
           {[
             ["my-team", "A Minha Equipa"],
+            ["my-league", "A Minha Liga"],
+            ["shadow-team", "Shadow Team"],
             ["squad", "Equipa Sugerida"],
             ["fixtures", "Calendário"],
             ["picks", "Melhores Escolhas"],
@@ -134,6 +163,69 @@ export default async function Home() {
 
         <Section id="my-team" title="A Minha Equipa" eyebrow="Ligado ao teu Team ID">
           <MyTeamPanel scored={scored} eventId={fromEvent} />
+        </Section>
+
+        <Section
+          id="my-league"
+          title={leagueName ?? "A Minha Liga"}
+          eyebrow={`Liga privada #${DEFAULT_LEAGUE_ID}`}
+        >
+          {leagueError && <p className="text-sm text-danger">{leagueError}</p>}
+          {!leagueError && leagueResults.length === 0 && (
+            <p className="text-sm text-text-muted">
+              Ainda sem classificação nesta liga — a FPL só calcula rankings
+              depois da primeira jornada fechar. Fica aqui como referência
+              até lá.
+            </p>
+          )}
+          {leagueResults.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-sm min-w-[480px]">
+                <thead>
+                  <tr className="text-left text-text-muted uppercase text-xs tracking-wide">
+                    <th className="py-2 pr-3 font-medium">#</th>
+                    <th className="py-2 pr-3 font-medium">Gestor</th>
+                    <th className="py-2 pr-3 font-medium">Equipa</th>
+                    <th className="py-2 font-medium text-right">Pontos</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leagueResults.slice(0, 20).map((r) => (
+                    <tr
+                      key={r.id}
+                      className={`border-t border-border ${
+                        r.entry === myTeamIdNum
+                          ? "bg-[color-mix(in_srgb,var(--accent)_10%,var(--surface))]"
+                          : ""
+                      }`}
+                    >
+                      <td className="py-2 pr-3 font-mono tabular">{r.rank}</td>
+                      <td className="py-2 pr-3">{r.player_name}</td>
+                      <td className="py-2 pr-3 text-text-muted">
+                        {r.entry_name}
+                        {r.entry === myTeamIdNum && (
+                          <span className="ml-2 rounded bg-accent text-accent-contrast px-1.5 py-0.5 text-[10px] font-semibold uppercase">
+                            tu
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 font-mono tabular text-right font-semibold">
+                        {r.total}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Section>
+
+        <Section
+          id="shadow-team"
+          title="Shadow Team"
+          eyebrow="Sandbox — testa antes de aplicar a sério"
+        >
+          <ShadowTeamPanel scored={scored} suggestedElementIds={squad.map((p) => p.element.id)} />
         </Section>
 
         <Section
@@ -238,6 +330,9 @@ export default async function Home() {
                 <li>✓ Sugestão de equipa e capitão dentro do orçamento e regras</li>
                 <li>✓ Diferenciais e melhores escolhas por posição</li>
                 <li>✓ Playbook e cheat sheet de regras 2026/27</li>
+                <li>✓ A Minha Equipa (Team ID real ligado)</li>
+                <li>✓ A Minha Liga (classificação, quando a FPL a publicar)</li>
+                <li>✓ Shadow Team — sandbox para testar transferências antes de aplicar</li>
               </ul>
             </div>
             <div>
@@ -245,9 +340,6 @@ export default async function Home() {
                 A caminho
               </h3>
               <ul className="flex flex-col gap-1.5 text-text-muted">
-                <li>→ A Minha Equipa (ligar o teu Team ID real)</li>
-                <li>→ As Minhas Ligas (comparação com rivais)</li>
-                <li>→ Shadow Team — sandbox para testar transferências antes de aplicar</li>
                 <li>→ Login FPL + execução automática de transferências (autopilot com trilhos de segurança)</li>
                 <li>→ Otimizador real (programação linear) em vez da heurística gananciosa</li>
                 <li>→ Preditor de mudanças de preço e monitor de notícias/lesões</li>
