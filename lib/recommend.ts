@@ -1,5 +1,6 @@
 import type { FplBootstrap, FplElement, FplTeam } from "./types";
 import { averageDifficulty, buildFixtureTicker } from "./fdr";
+import { buildFixtureExpectations, windowExpectation } from "./matchmodel";
 
 export interface ScoredPlayer {
   element: FplElement;
@@ -10,11 +11,16 @@ export interface ScoredPlayer {
   formNum: number;
   fixtureAvgDifficulty: number;
   nextOpponents: string; // e.g. "BOU (H), MCI (A), ..."
+  expectedGoalsFor: number; // team's avg expected goals over the fixture window
+  cleanSheetProbability: number; // team's avg clean-sheet probability over the window
   score: number;
   isDifferential: boolean;
   isPreseason: boolean;
   reasons: string[];
 }
+
+const ATTACKING_POSITIONS = new Set([3, 4]); // MID, FWD
+const DEFENSIVE_POSITIONS = new Set([1, 2]); // GK, DEF
 
 const POSITION_SHORT: Record<number, string> = {
   1: "GK",
@@ -29,18 +35,29 @@ const POSITION_SHORT: Record<number, string> = {
  * black box — designed to match the patterns the research turned up
  * from elite managers: weight underlying quality (price as the market's
  * own valuation, ownership, points-per-game) together with near-term
- * fixture ease, and don't overreact to a single gameweek's form.
+ * fixture context, and don't overreact to a single gameweek's form.
+ *
+ * Fixture context comes from lib/matchmodel.ts, not FPL's single 1-5
+ * difficulty digit: every team's attack/defence strength ratings are run
+ * through a Poisson goal-expectancy model, giving each player a signal
+ * specific to their own team's role in that fixture — defenders/keepers
+ * are weighted by their team's clean-sheet probability, midfielders/
+ * forwards by their team's expected goals-for — instead of every player
+ * on a team getting the same generic "easy/hard calendar" bump.
  *
  * Before a ball has been kicked this season (preseason / GW1), in-season
  * form and points are meaningless (everyone is 0), so the weights shift
  * towards price and ownership — the market's pre-season consensus on
- * quality — and fixtures. Once games have been played, form/points-per-
- * game take over as the primary signal.
+ * quality — and fixture context. Once games have been played, form/
+ * points-per-game take over as the primary signal.
  *
- * A real multi-gameweek expected-points model (Monte Carlo xMins, xG-
- * based) is the phase-2 upgrade path noted in the README — this is the
- * honest v1 baseline. Builds the fixture ticker once, then scores every
- * player against it — this is what the dashboard calls directly.
+ * A full xG-differential model built from this season's actual results
+ * (once enough of it exists to calibrate one), and simulating outcomes
+ * against specific rivals rather than in the abstract, are the next
+ * upgrades noted in the README — this is the honest v1.1 baseline.
+ * Builds the fixture ticker and match-model expectations once, then
+ * scores every player against them — this is what the dashboard calls
+ * directly.
  */
 export function buildScoredPlayers(
   bootstrap: FplBootstrap,
@@ -50,6 +67,7 @@ export function buildScoredPlayers(
 ): ScoredPlayer[] {
   const teamById = new Map(bootstrap.teams.map((t) => [t.id, t]));
   const ticker = buildFixtureTicker(bootstrap.teams, fixtures, fromEvent, fixtureWindow);
+  const expectationsByTeam = buildFixtureExpectations(bootstrap.teams, fixtures);
   const currentEvent = bootstrap.events.find((e) => e.is_current);
   const isPreseason = !currentEvent;
 
@@ -72,8 +90,12 @@ export function buildScoredPlayers(
       .map((f) => `${f.opponentShort} (${f.isHome ? "C" : "F"})`)
       .join(", ");
 
-    // Fixture ease score: 5 (hardest) -> 0, 1 (easiest) -> 4.
-    const fixtureEase = 5 - fixtureAvgDifficulty;
+    const window = windowExpectation(
+      expectationsByTeam.get(team.id),
+      fromEvent,
+      fixtureWindow
+    );
+    const { avgGoalsFor: expectedGoalsFor, avgCleanSheetProbability: cleanSheetProbability } = window;
 
     // Availability penalty: doubtful/injured players get scored down hard
     // even if their underlying numbers are great — a great player who
@@ -85,28 +107,47 @@ export function buildScoredPlayers(
 
     let raw: number;
     const reasons: string[] = [];
+    const isDefensive = DEFENSIVE_POSITIONS.has(el.element_type);
+    const isAttacking = ATTACKING_POSITIONS.has(el.element_type);
 
     if (isPreseason) {
       // Price is the market's own pre-season valuation of quality;
       // ownership is the collective wisdom of everyone else who has
-      // already looked at press-conference/preseason signals.
+      // already looked at press-conference/preseason signals. Weights
+      // below are tuned so the fixture-context term contributes roughly
+      // the same magnitude the old single-digit FDR bump used to — see
+      // lib/matchmodel.ts for how these probabilities/goals are derived.
       raw =
         priceM * 1.6 +
         Math.log10(ownershipPct + 1) * 6 +
-        fixtureEase * 1.3 +
+        (isDefensive ? cleanSheetProbability * 10 : 0) +
+        (isAttacking ? expectedGoalsFor * 2 : 0) +
         ictNum * 0.02;
-      if (fixtureEase >= 3) reasons.push(`calendário favorável nas próximas ${fixtureWindow} jornadas`);
       if (ownershipPct >= 25) reasons.push("escolha consensual do mercado (template)");
       if (ownershipPct < 10 && priceM >= 6) reasons.push("possível diferencial de qualidade");
     } else {
       raw =
         formNum * 2.2 +
         ppg * 1.4 +
-        fixtureEase * 1.1 +
+        (isDefensive ? cleanSheetProbability * 8 : 0) +
+        (isAttacking ? expectedGoalsFor * 1.6 : 0) +
         ictNum * 0.015 +
         Math.log10(ownershipPct + 1) * 1.5;
       if (formNum >= 5) reasons.push("em grande forma recente");
-      if (fixtureEase >= 3) reasons.push("sequência de jogos fácil");
+    }
+
+    if (isDefensive && cleanSheetProbability >= 0.35) {
+      reasons.push(
+        `boa probabilidade de clean sheet nas próximas ${fixtureWindow} jornadas (~${Math.round(cleanSheetProbability * 100)}%)`
+      );
+    }
+    if (isAttacking && expectedGoalsFor >= 1.6) {
+      reasons.push(
+        `equipa com golos esperados altos nas próximas ${fixtureWindow} jornadas (~${expectedGoalsFor.toFixed(2)}/jogo)`
+      );
+    }
+    if (window.fixtureCount === 0) {
+      reasons.push("sem jogos previstos na janela considerada (semana em branco?)");
     }
 
     raw *= availability;
@@ -126,6 +167,8 @@ export function buildScoredPlayers(
       formNum,
       fixtureAvgDifficulty,
       nextOpponents,
+      expectedGoalsFor: Math.round(expectedGoalsFor * 100) / 100,
+      cleanSheetProbability: Math.round(cleanSheetProbability * 1000) / 1000,
       score: Math.round(raw * 100) / 100,
       isDifferential: ownershipPct < 10,
       isPreseason,

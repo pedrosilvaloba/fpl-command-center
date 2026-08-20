@@ -39,6 +39,7 @@ lib/
   fpl-client.ts   Cliente HTTP server-side para a API da FPL (com cache)
   fdr.ts          Construção do fixture ticker / dificuldade de calendário
   recommend.ts    Motor de pontuação, onze ideal, capitão e heurística de recurso
+  matchmodel.ts   Modelo de golos esperados por equipa/jogo (Poisson) e clean sheets
   optimizer.ts    Otimizador real (programação linear) da equipa sugerida
   pricewatch.ts   Preditor de mudanças de preço e monitor de notícias/lesões
   strategy.ts     Playbook e regras 2026/27 (conteúdo da investigação)
@@ -52,11 +53,22 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
-## O que já funciona (v1.4)
+## O que já funciona (v1.5)
 
 - Dados 100% reais e ao vivo — preço, forma, posse, pontos, calendário —
   vindos diretamente da API oficial, sem qualquer valor inventado ou
   copiado deste chat.
+- **Modelo de golos esperados por equipa** — a base de toda a pontuação
+  deixou de ser um único dígito de dificuldade de calendário (1 a 5,
+  igual para todos os jogadores da mesma equipa). Usa as próprias
+  classificações de força de ataque/defesa (casa/fora) que a FPL já
+  publica, através de um modelo de Poisson (a mesma família usada pela
+  maioria dos modelos públicos de previsão de futebol), para calcular,
+  jogo a jogo, golos esperados e probabilidade de clean sheet reais.
+  Defesas/guarda-redes são agora pontuados pela probabilidade de clean
+  sheet do seu jogo específico; médios/avançados pelos golos esperados da
+  própria equipa nesse jogo — não pelo mesmo número genérico de calendário
+  que todos os colegas de equipa recebiam antes. Ver `lib/matchmodel.ts`.
 - **A Minha Equipa** — introduz o teu Team ID (guardado neste browser, com
   o teu por omissão) e vês o teu plantel real, capitão, banco, valor e
   rank, com sugestões de transferência calculadas contra o teu plantel
@@ -87,9 +99,25 @@ components/
 - Diferenciais (jogadores com posse < 10%) e melhores escolhas por posição.
 - Playbook de estratégia e cheat sheet de regras, com fontes citadas.
 
-## Roadmap (próxima iteração)
+## Roadmap (próximas iterações)
 
-1. **Login FPL + autopilot de transferências** — o único item que falta.
+1. **Simulação contra os rivais da liga (Camada 2)** — em vez de otimizar
+   só para maximizar os teus pontos esperados, a FPL deixa consultar o
+   plantel de qualquer gestor pelo Team ID — incluindo os da Haal of Fame.
+   A ideia: simular semana a semana o teu resultado provável contra cada
+   rival específico, e recomendar a jogada que maximiza a probabilidade de
+   os ultrapassares ou de manteres distância — não a jogada genericamente
+   "melhor". Se estás atrás, a jogada certa aumenta variância
+   (diferenciais); se estás à frente, reduz variância (template). É a
+   próxima peça a construir.
+2. **Aprendizagem entre estratégias (Camada 3)** — usar a Shadow Team para
+   correr várias estratégias em paralelo (template, diferenciais
+   agressivos, só calendário, só modelo de golos esperados) e, à medida
+   que jornadas reais vão sendo jogadas, medir qual delas está mesmo a
+   funcionar esta época e inclinar a recomendação principal para essa.
+   Só começa a fazer sentido depois de haver resultados reais — a própria
+   época dita esta ordem.
+3. **Login FPL + autopilot de transferências** — o autopilot em si.
    Decidiste avançar com automação total (credenciais guardadas, execução
    automática). Isto usa um fluxo de login não-oficial
    (`users.premierleague.com/accounts/login/`) que a Premier League pode
@@ -109,9 +137,13 @@ components/
      grátis podem ser automáticas.
    - Um interruptor geral (armar/desarmar) e um registo de auditoria de
      cada ação automática, com a razão por trás da decisão.
-   - Ainda por decidir contigo: como te chega o pedido de aprovação (email?
-     notificação? só quando abres a app?) e o que a app faz se não
-     conseguires responder antes do deadline.
+   - Decidido: o pedido de aprovação aparece dentro da app e é acompanhado
+     de uma notificação por email. Se não responderes antes do deadline, a
+     app **não faz nada** — a transferência/chip pendente simplesmente não
+     se aplica, em vez de agir sozinha sem a tua confirmação.
+   - Ainda falta: construir isto de facto. Fica depois das Camadas 2 e 3
+     acima — é o item de maior risco (credenciais reais), por isso o
+     desenho já fechado não significa pressa em escrever o código.
 
 ## Deploy (Vercel, plano gratuito)
 
