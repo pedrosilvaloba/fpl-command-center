@@ -68,6 +68,7 @@ export interface FplElement {
   transfers_out_event: number;
   cost_change_event: number;
   cost_change_start: number;
+  news_added: string | null;
 }
 
 export interface FplBootstrap {

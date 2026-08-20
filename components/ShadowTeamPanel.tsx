@@ -33,6 +33,8 @@ function saveShadowIds(ids: number[]) {
   }
 }
 
+type SyncMode = "checking" | "synced" | "local-only";
+
 export default function ShadowTeamPanel({
   scored,
   suggestedElementIds,
@@ -42,22 +44,75 @@ export default function ShadowTeamPanel({
 }) {
   const [ids, setIds] = useState<number[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [syncMode, setSyncMode] = useState<SyncMode>("checking");
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [posFilter, setPosFilter] = useState<number | null>(null);
 
   useEffect(() => {
-    // Reading the saved shadow squad from localStorage on mount — an
-    // external-system sync, not derived state (see the same pattern, with
-    // the same rationale, in MyTeamPanel).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setIds(loadShadowIds());
-    setLoaded(true);
+    // On mount: try the backend (Upstash Redis, when connected) first, so
+    // the same Shadow Team shows up on any device. If the backend isn't
+    // configured yet, or has nothing saved yet but this browser does
+    // (pre-existing localStorage-only squad from before the backend
+    // existed), fall back to / migrate the local copy instead of losing
+    // it. This is a genuine external-system sync on mount, not derived
+    // state — see the same rationale in MyTeamPanel.
+    let cancelled = false;
+    const localIds = loadShadowIds();
+
+    fetch("/api/shadow-team")
+      .then((r) => r.json())
+      .then((data: { configured: boolean; ids: number[] | null }) => {
+        if (cancelled) return;
+        if (!data.configured) {
+          setIds(localIds);
+          setSyncMode("local-only");
+          return;
+        }
+        if (Array.isArray(data.ids)) {
+          setIds(data.ids);
+          saveShadowIds(data.ids);
+        } else if (localIds.length > 0) {
+          // Backend configured but empty, and this browser has an older
+          // local-only squad — migrate it up once.
+          setIds(localIds);
+          fetch("/api/shadow-team", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: localIds }),
+          }).catch(() => {});
+        }
+        setSyncMode("synced");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setIds(localIds);
+        setSyncMode("local-only");
+      })
+      .finally(() => {
+        if (!cancelled) setLoaded(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
-    if (!loaded) return; // don't overwrite storage with [] before the load above runs
-    saveShadowIds(ids);
-  }, [ids, loaded]);
+    if (!loaded) return; // don't overwrite storage before the load above runs
+    saveShadowIds(ids); // always keep a local write-through copy
+    if (syncMode !== "synced") return;
+    fetch("/api/shadow-team", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    })
+      .then((r) => r.json())
+      .then((data: { ok?: boolean }) => {
+        setSyncError(data.ok ? null : "Não foi possível sincronizar agora — guardado neste browser.");
+      })
+      .catch(() => setSyncError("Não foi possível sincronizar agora — guardado neste browser."));
+  }, [ids, loaded, syncMode]);
 
   const byId = useMemo(() => new Map(scored.map((p) => [p.element.id, p])), [scored]);
   const squad = useMemo(
@@ -112,13 +167,20 @@ export default function ShadowTeamPanel({
     setIds([]);
   }
 
-  const candidates = useMemo(() => {
+  const CANDIDATE_DISPLAY_CAP = 200;
+  const matchingCandidates = useMemo(() => {
     const q = query.trim().toLowerCase();
     return scored
       .filter((p) => (posFilter ? p.element.element_type === posFilter : true))
-      .filter((p) => (q ? p.element.web_name.toLowerCase().includes(q) : true))
-      .slice(0, 40);
+      .filter((p) => (q ? p.element.web_name.toLowerCase().includes(q) : true));
   }, [scored, query, posFilter]);
+  // The full pool (~600+ jogadores elegíveis) já vem ordenado por pontuação,
+  // por isso mostrar sem filtro traz sempre os melhores primeiro — mas sem
+  // um teto qualquer lista sem pesquisa ficaria com centenas de linhas.
+  // 200 dá margem generosa (muito acima do que uma posição alguma vez tem)
+  // sem pesar o browser; a pesquisa por nome não é afetada por este teto
+  // porque filtra antes de cortar.
+  const candidates = matchingCandidates.slice(0, CANDIDATE_DISPLAY_CAP);
 
   return (
     <div className="flex flex-col gap-5">
@@ -243,6 +305,13 @@ export default function ShadowTeamPanel({
               <option value="4">FWD</option>
             </select>
           </div>
+          <p className="text-xs text-text-muted mb-2">
+            {matchingCandidates.length === 0
+              ? "Nenhum jogador encontrado."
+              : matchingCandidates.length > candidates.length
+              ? `A mostrar os ${candidates.length} melhores de ${matchingCandidates.length} — usa a pesquisa para encontrar outro.`
+              : `${matchingCandidates.length} jogador${matchingCandidates.length === 1 ? "" : "es"} — ordenados por pontuação.`}
+          </p>
           <div className="rounded-lg border border-border divide-y divide-border max-h-96 overflow-y-auto">
             {candidates.map((p) => {
               const blocked = canAdd(p);
@@ -281,8 +350,13 @@ export default function ShadowTeamPanel({
       </div>
 
       <p className="text-xs text-text-muted opacity-70">
-        Guardado só neste browser. Isto não mexe na tua equipa real — é só
-        para testares ideias antes de decidires uma transferência a sério.
+        {syncMode === "synced"
+          ? syncError ?? "Sincronizado entre dispositivos."
+          : syncMode === "local-only"
+          ? "Guardado só neste browser (liga a integração Upstash Redis na Vercel para sincronizar entre dispositivos)."
+          : "A verificar sincronização…"}{" "}
+        Isto não mexe na tua equipa real — é só para testares ideias antes de
+        decidires uma transferência a sério.
       </p>
     </div>
   );
