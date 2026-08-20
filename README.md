@@ -42,13 +42,17 @@ components/
   CountdownTimer.tsx  Contagem decrescente até ao deadline (client)
   FixtureTicker.tsx   Tabela de calendário com chips de dificuldade
   PlayerTable.tsx     Tabela reutilizável de jogadores pontuados
+  MyTeamPanel.tsx     A Minha Equipa — liga um Team ID real (client)
 ```
 
-## O que já funciona (v1)
+## O que já funciona (v1 + v1.1)
 
 - Dados 100% reais e ao vivo — preço, forma, posse, pontos, calendário —
   vindos diretamente da API oficial, sem qualquer valor inventado ou
   copiado deste chat.
+- **A Minha Equipa** — introduz o teu Team ID (guardado neste browser) e vês
+  o teu plantel real, capitão, banco, valor e rank, com sugestões de
+  transferência calculadas contra o teu plantel verdadeiro (não genéricas).
 - Fixture ticker (próximas 5 jornadas) com a dificuldade oficial da FPL.
 - Sugestão de equipa (15 jogadores, £100m, 2-5-5-3, máx. 3 por clube) e de
   onze inicial + capitão/vice, através de uma heurística transparente
@@ -61,15 +65,13 @@ components/
 
 Em ordem de prioridade, a validar em conjunto antes de cada etapa:
 
-1. **A Minha Equipa** — ligar o teu Team ID real (`/api/fpl/entry/[id]`
-   já existe) para mostrar o teu plantel, valor e histórico verdadeiros.
-2. **As Minhas Ligas** — comparação com rivais nas tuas ligas privadas
-   (precisa de sessão autenticada da FPL — ver ponto 4).
-3. **Shadow Team** — um plantel paralelo, guardado no backend (não só no
+1. **As Minhas Ligas** — comparação com rivais nas tuas ligas privadas
+   (precisa de sessão autenticada da FPL — ver ponto 3).
+2. **Shadow Team** — um plantel paralelo, guardado no backend (não só no
    browser), para simulares transferências/capitães/chips sem tocar na
    equipa real. Precisa de uma camada de persistência (Vercel KV/Upstash
    Redis, plano gratuito).
-4. **Login FPL + autopilot de transferências** — decidiste avançar com
+3. **Login FPL + autopilot de transferências** — decidiste avançar com
    automação total (credenciais guardadas, execução automática). Isto usa
    um fluxo de login não-oficial (`users.premierleague.com/accounts/login/`)
    que a Premier League pode alterar sem aviso. Antes de implementar:
@@ -85,11 +87,11 @@ Em ordem de prioridade, a validar em conjunto antes de cada etapa:
    - Um interruptor geral (armar/desarmar) e um registo de auditoria de
      cada ação automática, com a razão por trás da decisão.
    - Vamos falar sobre isto em detalhe antes de mexer em credenciais reais.
-5. **Otimizador real** — substituir a heurística gananciosa em
+4. **Otimizador real** — substituir a heurística gananciosa em
    `buildSuggestedSquad` por um solver de programação linear (abordagem
    usada pela FPL Review e pela maioria das ferramentas open-source da
    comunidade), para uma equipa genuinamente ótima dentro do orçamento.
-6. **Preditor de mudanças de preço e monitor de notícias/lesões.**
+5. **Preditor de mudanças de preço e monitor de notícias/lesões.**
 
 ## Deploy (Vercel, plano gratuito)
 

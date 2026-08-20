@@ -235,6 +235,66 @@ export function pickCaptain(starters: ScoredPlayer[]): {
   return { captain: ranked[0], viceCaptain: ranked[1] };
 }
 
+export interface TransferSuggestion {
+  out: ScoredPlayer;
+  in: ScoredPlayer;
+  scoreGain: number;
+  priceDeltaM: number; // positive = the incoming player costs more
+}
+
+/**
+ * Compares an owned squad against the full scored player pool and
+ * proposes swaps: for each position, pairs the worst-scoring owned
+ * player against the best-scoring unowned alternative. This is a
+ * starting point for a decision, not an instruction to execute blindly —
+ * it ignores the price-for-price affordability of the swap (shown as
+ * priceDeltaM so the manager can judge fit against their own bank) and
+ * doesn't yet account for how many free transfers are available or
+ * whether a hit would be needed. That planning layer belongs to the
+ * automation engine, once it exists.
+ */
+export function suggestTransfers(
+  ownedElementIds: number[],
+  scored: ScoredPlayer[],
+  perPosition = 2
+): TransferSuggestion[] {
+  const owned = new Set(ownedElementIds);
+  const suggestions: TransferSuggestion[] = [];
+
+  for (const posId of [1, 2, 3, 4]) {
+    const ownedInPos = scored
+      .filter((p) => p.element.element_type === posId && owned.has(p.element.id))
+      .sort((a, b) => a.score - b.score); // worst first
+
+    const bestUnowned = scored
+      .filter((p) => p.element.element_type === posId && !owned.has(p.element.id))
+      .sort((a, b) => b.score - a.score); // best first
+
+    let inIdx = 0;
+    for (const worst of ownedInPos.slice(0, perPosition)) {
+      // Skip incoming candidates already used in another suggestion this position.
+      while (
+        inIdx < bestUnowned.length &&
+        suggestions.some((s) => s.in.element.id === bestUnowned[inIdx].element.id)
+      ) {
+        inIdx++;
+      }
+      const candidate = bestUnowned[inIdx];
+      if (!candidate) continue;
+      const scoreGain = candidate.score - worst.score;
+      if (scoreGain <= 0) continue; // don't suggest sideways/downgrade swaps
+      suggestions.push({
+        out: worst,
+        in: candidate,
+        scoreGain: Math.round(scoreGain * 100) / 100,
+        priceDeltaM: Math.round((candidate.priceM - worst.priceM) * 10) / 10,
+      });
+    }
+  }
+
+  return suggestions.sort((a, b) => b.scoreGain - a.scoreGain);
+}
+
 export function findDifferentials(
   scored: ScoredPlayer[],
   maxOwnership = 10,

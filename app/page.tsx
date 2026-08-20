@@ -10,6 +10,7 @@ import { PLAYBOOK, RULES_2026_27 } from "@/lib/strategy";
 import CountdownTimer from "@/components/CountdownTimer";
 import FixtureTicker from "@/components/FixtureTicker";
 import PlayerTable from "@/components/PlayerTable";
+import MyTeamPanel from "@/components/MyTeamPanel";
 
 // Rendered per-request (not at build time): this sandbox's build
 // environment has no route to the FPL API to prerender against, and in
@@ -104,6 +105,7 @@ export default async function Home() {
         </div>
         <nav className="mx-auto max-w-6xl px-4 md:px-6 pb-4 flex flex-wrap gap-x-5 gap-y-1 text-sm text-text-muted">
           {[
+            ["my-team", "A Minha Equipa"],
             ["squad", "Equipa Sugerida"],
             ["fixtures", "Calendário"],
             ["picks", "Melhores Escolhas"],
@@ -130,9 +132,13 @@ export default async function Home() {
           </div>
         )}
 
+        <Section id="my-team" title="A Minha Equipa" eyebrow="Ligado ao teu Team ID">
+          <MyTeamPanel scored={scored} eventId={fromEvent} />
+        </Section>
+
         <Section
           id="squad"
-          eyebrow={`Sugestão automática · £${totalCost.toFixed(1)}m de £100.0m`}
+          eyebrow={`Sugestão automática (genérica) · £${totalCost.toFixed(1)}m de £100.0m`}
           title="Equipa Sugerida para o Deadline"
         >
           <p className="text-sm text-text-muted mb-4">
