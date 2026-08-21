@@ -34,6 +34,13 @@ export default function FixtureTicker({
    * team is running on the same neutral baseline (see lib/matchmodel.ts). */
   strengthsUsable?: boolean;
 }) {
+  // How many upcoming fixtures the market actually informs. When this is
+  // non-zero, missing FPL ratings no longer matter — odds are the better
+  // source anyway — so the warning about them would be misleading.
+  const marketCoverage = Object.values(ticker)
+    .flat()
+    .filter((f) => f.source === "market" || f.source === "market-ratings").length;
+
   const rows = teams
     .map((t) => ({ team: t, fixtures: ticker[t.id] ?? [] }))
     // Sort by attacking upside first (the more commonly-scanned "who has
@@ -43,16 +50,22 @@ export default function FixtureTicker({
 
   return (
     <div className="overflow-x-auto">
-      {!strengthsUsable && (
+      {!strengthsUsable && marketCoverage === 0 && (
         <div className="mb-4 rounded-lg border border-[color-mix(in_srgb,var(--warn)_40%,var(--border))] bg-[color-mix(in_srgb,var(--warn)_10%,var(--surface))] px-4 py-3 text-sm text-warn">
           <strong>A FPL ainda não publicou as forças das equipas.</strong> Os
-          campos de força de ataque/defesa vêm todos a zero da API oficial
-          neste momento, por isso o modelo não consegue distinguir uma equipa
-          da outra e está a tratar todas como equipas médias. Os números
-          abaixo são um valor de referência (vantagem caseira e pouco mais),
-          não uma previsão real jogo a jogo — vão passar a diferenciar
-          equipas assim que a FPL preencher esses dados, normalmente nos
-          primeiros dias da época.
+          campos de força de ataque/defesa vêm todos a zero da API oficial, e
+          também não há odds a cobrir estes jogos, por isso o modelo está a
+          tratar todas as equipas como médias. Os números abaixo não
+          distinguem adversários e não devem ser usados para decidir.
+        </div>
+      )}
+      {!strengthsUsable && marketCoverage > 0 && (
+        <div className="mb-4 rounded-lg border border-border bg-surface-2 px-4 py-3 text-sm text-text-muted">
+          A FPL ainda não publicou as forças das equipas (vêm todas a zero da
+          API oficial), mas isso deixou de ser um problema: {marketCoverage} destes
+          jogos estão a ser avaliados a partir de <strong>odds de mercado</strong>,
+          que são uma fonte melhor. Passa o rato por cima de cada jogo para
+          veres de onde veio o número.
         </div>
       )}
       <table className="w-full border-collapse text-sm min-w-[680px]">
