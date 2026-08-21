@@ -22,3 +22,23 @@ export function getRedis(): Redis | null {
   client = new Redis({ url, token });
   return client;
 }
+
+/**
+ * Is persistent storage actually connected?
+ *
+ * Three separate features depend on this and every one of them degraded
+ * SILENTLY when it was absent: the Shadow Team fell back to browser-only
+ * storage, the model-accuracy panel recorded nothing, and — most
+ * damagingly — the weekly tactical-research layer could pass every check
+ * it had (authentication, name resolution, validation) and then fail at
+ * the final write with nobody ever seeing the error. The dashboard showed
+ * "no active notes", which reads as "the research found nothing" rather
+ * than "this feature cannot store anything at all".
+ *
+ * That is the same class of failure as the odds key being absent: an
+ * optional integration missing, and an interface that looks fine. Callers
+ * should use this to say so out loud instead of rendering an empty state.
+ */
+export function isStorageConfigured(): boolean {
+  return getRedis() !== null;
+}

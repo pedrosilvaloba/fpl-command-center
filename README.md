@@ -65,7 +65,7 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
-## O que já funciona (v1.14)
+## O que já funciona (v1.15)
 
 - Dados 100% reais e ao vivo — preço, forma, posse, pontos, calendário —
   vindos diretamente da API oficial, sem qualquer valor inventado ou
@@ -462,7 +462,13 @@ Ou, mais simples: importa o repositório diretamente em
 que é uma app Next.js. Não precisa de nenhuma variável de ambiente para
 funcionar — o passo abaixo é opcional.
 
-### Passo opcional: sincronizar a Shadow Team entre dispositivos (e ligar o Painel de Precisão do Modelo)
+### Passo NECESSÁRIO: ligar o Upstash Redis
+
+Deixou de ser opcional. Sem ele três funcionalidades não funcionam — e,
+ate à v1.15, nenhuma delas o dizia: a Shadow Team ficava só no browser, o
+Painel de Precisão não registava nada, e a investigação semanal fazia a
+pesquisa toda e falhava silenciosamente na gravação das notas táticas. A
+app passa a avisar em vermelho quando isto não está ligado.
 
 Sem isto a Shadow Team continua a funcionar normalmente, só que guardada
 apenas no browser onde a usaste, e o Painel de Precisão do Modelo fica

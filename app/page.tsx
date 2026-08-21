@@ -20,6 +20,7 @@ import {
   getAccuracyHistory,
 } from "@/lib/accuracy";
 import { loadActiveInsights } from "@/lib/managerinsights";
+import { isStorageConfigured } from "@/lib/kv";
 import { PLAYBOOK, RULES_2026_27 } from "@/lib/strategy";
 import { DEFAULT_TEAM_ID, DEFAULT_LEAGUE_ID } from "@/lib/constants";
 import CountdownTimer from "@/components/CountdownTimer";
@@ -101,6 +102,11 @@ export default async function Home() {
   // different variables.
   const oddsMatches = oddsResult.status === "ok" ? oddsResult.matches : null;
   const oddsProblem = oddsResult.status === "ok" ? null : oddsResult.message;
+  // Persistent storage gates three features at once (see lib/kv.ts). When
+  // it is missing they all degrade silently, which is exactly how the
+  // tactical-research layer spent weeks looking functional while being
+  // structurally unable to save anything.
+  const storageConfigured = isStorageConfigured();
 
   const currentEventForPicks = bootstrap.events.find((e) => e.is_current);
   const picksEvent = currentEventForPicks?.id ?? Math.max(1, fromEvent - 1);
@@ -285,6 +291,21 @@ export default async function Home() {
             própria FPL, que são grosseiros e por vezes vêm a zero. Sem elas,
             a Equipa Sugerida apoia-se numa leitura de calendário muito mais
             fraca. Ver &quot;Deploy&quot; no README.
+          </div>
+        )}
+
+        {!storageConfigured && (
+          <div className="rounded-lg border border-[color-mix(in_srgb,var(--danger)_45%,var(--border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--surface))] px-4 py-3 text-sm text-danger">
+            <strong className="block mb-1">
+              O armazenamento persistente não está ligado.
+            </strong>
+            A integração Upstash Redis não está configurada neste projeto da
+            Vercel. Sem ela três coisas não funcionam, e nenhuma delas o
+            diria por si: a Shadow Team fica guardada só neste browser, o
+            Painel de Precisão do Modelo não regista nada, e a{" "}
+            <strong>investigação semanal não consegue gravar as notas
+            táticas</strong> — faz a pesquisa toda e falha na gravação. Ver
+            &quot;Deploy&quot; no README.
           </div>
         )}
 
@@ -668,7 +689,15 @@ export default async function Home() {
           title="Notas Táticas Ativas"
           eyebrow="Camada qualitativa — padrões de gestão e identidade de equipa"
         >
-          {activeInsights.length === 0 ? (
+          {!storageConfigured ? (
+            <p className="text-sm text-danger">
+              Esta secção não pode funcionar sem a integração Upstash Redis,
+              que não está ligada neste projeto. Não é que a investigação
+              não tenha encontrado nada — é que não existe onde guardar o
+              que ela encontrar. Liga o Redis (ver &quot;Deploy&quot; no
+              README) e a investigação semanal passa a poder escrever aqui.
+            </p>
+          ) : activeInsights.length === 0 ? (
             <p className="text-sm text-text-muted">
               Nenhuma nota ativa neste momento. Esta secção mostra ajustes
               qualitativos que nenhum dado da FPL ou das odds consegue captar
