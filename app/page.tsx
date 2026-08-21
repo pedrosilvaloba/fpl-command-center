@@ -12,7 +12,7 @@ import {
 import { computeDynamicTeamFactors } from "@/lib/teamrating";
 import { buildOptimalSquad } from "@/lib/optimizer";
 import { buildPriceWatch, buildNewsWatch } from "@/lib/pricewatch";
-import { getOddsImpliedProbabilities } from "@/lib/oddsapi";
+import { getOddsStatus } from "@/lib/oddsapi";
 import { findScheduleAnomalies } from "@/lib/schedule";
 import {
   snapshotIfMissing,
@@ -66,7 +66,7 @@ function Section({
 }
 
 export default async function Home() {
-  const [bootstrap, fixtures, oddsMatches, activeInsights] = await Promise.all([
+  const [bootstrap, fixtures, oddsResult, activeInsights] = await Promise.all([
     getBootstrap(),
     // Full season (past + future), not just upcoming — the dynamic team-
     // rating model (lib/teamrating.ts) needs finished fixtures' actual
@@ -80,7 +80,7 @@ export default async function Home() {
     // this Promise.all because getOddsImpliedProbabilities never
     // rejects (see lib/oddsapi.ts), so it can't take the whole page
     // down; it only ever resolves to real data or null.
-    getOddsImpliedProbabilities(),
+    getOddsStatus(),
     // Static (hand-curated) + dynamic (weekly-research, Redis-backed)
     // qualitative adjustments — see lib/managerinsights.ts. Never throws
     // and degrades to just the static list without Redis configured.
@@ -99,6 +99,9 @@ export default async function Home() {
   // to the picks fetch asked for the one gameweek FPL will not return, all
   // week, every week. These are two different questions and now use two
   // different variables.
+  const oddsMatches = oddsResult.status === "ok" ? oddsResult.matches : null;
+  const oddsProblem = oddsResult.status === "ok" ? null : oddsResult.message;
+
   const currentEventForPicks = bootstrap.events.find((e) => e.is_current);
   const picksEvent = currentEventForPicks?.id ?? Math.max(1, fromEvent - 1);
 
@@ -116,6 +119,13 @@ export default async function Home() {
     teamFactorsForDisplay
   );
   const ticker = buildModelTicker(bootstrap.teams, expectationsByTeamForDisplay, fromEvent, 5);
+  // Which data source actually drove each team's upcoming fixtures — so
+  // the page can show what the numbers rest on instead of presenting a
+  // neutral placeholder as if it were a real forecast.
+  const sourceCounts = new Map<string, number>();
+  for (const rows of Object.values(ticker)) {
+    for (const r of rows) sourceCounts.set(r.source, (sourceCounts.get(r.source) ?? 0) + 1);
+  }
   // FPL sometimes leaves its team strength ratings at zero (confirmed live
   // on the 2026/27 GW1 deadline day). The model falls back to neutral
   // league-average teams in that case, which is the honest thing to do —
@@ -123,7 +133,7 @@ export default async function Home() {
   // as a placeholder rather than shown as a real per-fixture forecast.
   const strengthsUsable = teamStrengthsUsable(bootstrap.teams);
   const scored = buildScoredPlayers(bootstrap, fixtures, fromEvent, 5, oddsMatches, activeInsights);
-  const oddsActive = Array.isArray(oddsMatches) && oddsMatches.length > 0;
+  const oddsActive = oddsResult.status === "ok";
   const { squad, starters, totalCost, method: squadMethod } = buildOptimalSquad(scored, 100);
   const { captain, viceCaptain } = pickCaptain(starters);
   const differentials = findDifferentials(scored, 10, 8);
@@ -264,13 +274,40 @@ export default async function Home() {
       </header>
 
       <main className="mx-auto max-w-6xl px-4 md:px-6 py-8 flex flex-col gap-10">
+        {oddsProblem && (
+          <div className="rounded-lg border border-[color-mix(in_srgb,var(--danger)_45%,var(--border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--surface))] px-4 py-3 text-sm text-danger">
+            <strong className="block mb-1">
+              As odds de mercado não estão a ser usadas.
+            </strong>
+            {oddsProblem}{" "}
+            As odds são a fonte mais forte que esta app tem para avaliar
+            dificuldade de calendário — bastante melhor do que os ratings da
+            própria FPL, que são grosseiros e por vezes vêm a zero. Sem elas,
+            a Equipa Sugerida apoia-se numa leitura de calendário muito mais
+            fraca. Ver &quot;Deploy&quot; no README.
+          </div>
+        )}
+
+        {sourceCounts.get("neutral") ? (
+          <div className="rounded-lg border border-[color-mix(in_srgb,var(--danger)_45%,var(--border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--surface))] px-4 py-3 text-sm text-danger">
+            <strong className="block mb-1">
+              O modelo de calendário está sem dados.
+            </strong>
+            {sourceCounts.get("neutral")} jogos das próximas jornadas não têm
+            odds, nem resultados desta época, nem ratings utilizáveis da FPL —
+            estão a ser tratados como jogos entre equipas médias. Os números
+            de ataque/defesa desses jogos não distinguem adversários e não
+            devem ser usados para decidir.
+          </div>
+        ) : null}
+
         {isPreseason && (
           <div className="rounded-lg border border-[color-mix(in_srgb,var(--warn)_40%,var(--border))] bg-[color-mix(in_srgb,var(--warn)_10%,var(--surface))] px-4 py-3 text-sm text-warn">
             Época ainda não começou (ou está entre jornadas) — os dados de
             forma/pontos ainda não existem, por isso as pontuações abaixo
-            pesam mais o preço, a posse e o calendário. Assim que a jornada
-            atual tiver jogos concluídos, o motor passa a priorizar forma
-            recente e pontos por jogo automaticamente.
+            apoiam-se na estimativa da própria FPL e no calendário. Assim que
+            houver jogos concluídos, o motor passa a usar o seu próprio modelo
+            de pontos esperados automaticamente.
           </div>
         )}
 

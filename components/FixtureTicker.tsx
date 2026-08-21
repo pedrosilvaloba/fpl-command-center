@@ -1,6 +1,7 @@
 import type { FplTeam } from "@/lib/types";
 import type { ModelFixtureRow } from "@/lib/matchmodel";
 import { avgExpectedGoalsFor, avgCleanSheetProbability } from "@/lib/matchmodel";
+import { SOURCE_LABEL } from "@/lib/oddsmodel";
 
 // Thresholds reused from lib/recommend.ts's own "boa probabilidade de
 // clean sheet" (>=0.35) and "golos esperados altos" (>=1.6) cues, so the
@@ -95,7 +96,7 @@ export default function FixtureTicker({
                       <span
                         key={i}
                         className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-mono tabular ${attackClasses(f.expectedGoalsFor)}`}
-                        title={`GW${f.event} · ${f.expectedGoalsFor.toFixed(2)}xG · ${Math.round(f.cleanSheetProbability * 100)}% clean sheet${f.marketAdjusted ? " · ajustado com odds" : ""}`}
+                        title={`GW${f.event} · ${f.expectedGoalsFor.toFixed(2)}xG · ${Math.round(f.cleanSheetProbability * 100)}% clean sheet · fonte: ${SOURCE_LABEL[f.source]}`}
                       >
                         {f.opponentShort}
                         {f.isHome ? "" : "*"}
@@ -110,7 +111,10 @@ export default function FixtureTicker({
         </tbody>
       </table>
       <p className="mt-2 text-xs text-text-muted">
-        * fora de casa. {oddsActive && <>° ajustado com odds de mercado. </>}
+        * fora de casa. {oddsActive && <>° derivado de odds de mercado. </>}
+        Passa o rato por cima de cada jogo para veres a fonte dos números
+        (odds do próprio jogo, força derivada das odds, resultados desta
+        época, ratings da FPL, ou valor neutro).{" "}
         Números do próprio modelo desta app (Poisson sobre a força de
         ataque/defesa de cada equipa, corrigido pelos resultados reais
         desta época{oddsActive ? " e por odds de mercado" : ""}) — já não é

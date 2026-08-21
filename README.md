@@ -44,6 +44,7 @@ lib/
   oddsapi.ts      Cliente da The Odds API — probabilidades de mercado (opcional)
   schedule.ts     Deteção de jornadas duplas e em branco por equipa
   playerthreat.ts Ameaça de golo/assistência individual, fiabilidade de utilização (incl. padrão de substituição cedo), bolas paradas, contribuição defensiva
+  oddsmodel.ts    Inverte odds em golos esperados e deriva forças de equipa a partir do mercado
   expectedpoints.ts Modelo de pontos esperados — minutos, golos, assistências, clean sheets, bónus, contribuição defensiva
   managerinsights.ts Ajustes qualitativos/táticos — lista permanente manual + camada dinâmica auto-aplicada (resolução de nomes, validação, expiração, limite)
   teamrating.ts   Rating de equipa dinâmico (Elo + taxa de golos), calibrado com os resultados reais desta época
@@ -64,7 +65,7 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
-## O que já funciona (v1.12)
+## O que já funciona (v1.14)
 
 - Dados 100% reais e ao vivo — preço, forma, posse, pontos, calendário —
   vindos diretamente da API oficial, sem qualquer valor inventado ou
@@ -274,6 +275,39 @@ components/
        uma nota específica antes da expiração natural, se alguma vez
        discordar de uma — a rede de segurança para "automático não é
        irreversível".
+- **As odds passam a ser a fonte PRIMÁRIA da dificuldade (v1.14).** Até
+  aqui a dificuldade de calendário vinha dos ratings `strength_*` da FPL, e
+  as odds eram só uma correção por cima. Duas coisas tornam isso a ordem
+  errada: os ratings da FPL são grosseiros, opacos e às vezes simplesmente
+  não existem (confirmado ao vivo a 2026-08-21 — as 20 equipas com todos os
+  campos a **0**, o que colapsava cada jogo para 0.00 golos esperados e
+  100% de clean sheet); e a correção antiga era matematicamente incapaz de
+  exprimir o que mais importa, porque escalava os dois números em sentidos
+  opostos e deixava o **produto** inalterado — ou seja, dizia quem ganha e
+  não dizia nada sobre quantos golos se marcam, que é precisamente o que
+  determina os clean sheets. Agora existe uma hierarquia explícita, e cada
+  jogo mostra de onde vieram os seus números (passa o rato por cima):
+  1. **odds do próprio jogo** — as probabilidades do mercado são invertidas
+     nos golos esperados que as reproduzem, usando o mercado de resultado
+     (1X2) **e o de mais/menos 2.5 golos**, que passou a ser pedido. É isto
+     que recupera o total, e não só o equilíbrio entre as equipas.
+  2. **força derivada das odds** — os bookmakers raramente publicam linhas
+     a cinco jornadas de distância, por isso as forças de cada equipa são
+     estimadas a partir dos jogos que o mercado JÁ avaliou, e usadas para
+     projetar os que ainda não tem. É assim que se deixa de depender da
+     FPL mesmo para jogos distantes.
+  3. **resultados desta época** — o Elo e as taxas de golos de
+     `lib/teamrating.ts`, que estavam a ser calculados e nunca usados.
+  4. **ratings da FPL** — só se existirem mesmo e não forem zero.
+  5. **valor neutro** — e nesse caso a app **diz-te em letras vermelhas**
+     que está sem dados, em vez de mostrar números que parecem reais.
+- **Diagnóstico das odds (v1.14).** `getOddsStatus` deixou de devolver
+  `null` para tudo. Distingue agora "chave não configurada", "chave
+  rejeitada (401)", "quota esgotada (429)" e "sem jogos abertos", e mostra
+  a razão exata no topo do dashboard. Isto existe porque a chave nunca
+  esteve configurada em produção e nada o dizia — a fonte de dados mais
+  valiosa da app esteve silenciosamente ausente enquanto o modelo de
+  calendário funcionava sem informação nenhuma.
 - **Reescrita do motor em pontos esperados (v1.12).** Uma auditoria
   independente concluiu que a pontuação anterior — uma soma ponderada com
   multiplicadores escolhidos à mão — tinha três problemas que nenhuma

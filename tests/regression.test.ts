@@ -16,6 +16,7 @@ import {
   poissonQuantile,
   windowExpectation,
   buildFixtureExpectations,
+  matchOutcomeProbabilities,
   teamStrengthsUsable,
 } from "../lib/matchmodel";
 import type { FixtureExpectation } from "../lib/matchmodel";
@@ -29,6 +30,13 @@ import {
 } from "../lib/recommend";
 import { computeMinutesModel, computePlayerRates } from "../lib/expectedpoints";
 import { validateInsightInput, resolveInsightTarget } from "../lib/managerinsights";
+import {
+  expectedGoalsFromMarket,
+  totalGoalsFromOverProb,
+  overTwoPointFiveProbability,
+  deriveTeamRatingsFromMarket,
+} from "../lib/oddsmodel";
+import type { OddsMatch } from "../lib/oddsapi";
 import {
   check,
   report,
@@ -98,14 +106,14 @@ function testLateSeasonWindow() {
     exp.push({
       fixtureId: gw, event: gw, opponentTeamId: 2, isHome: true,
       expectedGoalsFor: 1.5, expectedGoalsAgainst: 1.2,
-      cleanSheetProbability: 0.3, marketAdjusted: false,
+      cleanSheetProbability: 0.3, marketAdjusted: false, source: "fpl" as const,
     });
   }
   // genuine double in GW36
   exp.push({
     fixtureId: 999, event: 36, opponentTeamId: 3, isHome: false,
     expectedGoalsFor: 1.4, expectedGoalsAgainst: 1.3,
-    cleanSheetProbability: 0.28, marketAdjusted: false,
+    cleanSheetProbability: 0.28, marketAdjusted: false, source: "fpl" as const,
   });
 
   const w = windowExpectation(exp, 36, 5, 38);
@@ -483,9 +491,101 @@ function testMissingTeamStrengths() {
   );
 }
 
+// ---------------------------------------------------------------------
+// Odds como fonte primária — a inversão do mercado tem de ser fiel
+// ---------------------------------------------------------------------
+function testMarketInversion() {
+  // Ida e volta: um total conhecido -> P(over 2.5) -> total recuperado.
+  for (const total of [1.8, 2.5, 3.2, 4.0]) {
+    const p = overTwoPointFiveProbability(total / 2, total / 2);
+    const back = totalGoalsFromOverProb(p);
+    check(
+      `total de golos recuperado do mercado (${total})`,
+      Math.abs(back - total) < 0.05,
+      `esperado ${total}, obtido ${back.toFixed(3)}`
+    );
+  }
+
+  const mk = (over: number | null, home: number, draw: number, away: number): OddsMatch => ({
+    homeTeam: "Arsenal", awayTeam: "Coventry",
+    homeWinProb: home, drawProb: draw, awayWinProb: away,
+    overProb: over, commenceTime: "",
+  });
+
+  // Favorito forte em casa, jogo com muitos golos esperados.
+  const strong = expectedGoalsFromMarket(mk(0.62, 0.72, 0.18, 0.10));
+  check("favorito forte tem mais golos esperados que o adversário", strong.xgHome > strong.xgAway);
+  check("total do mercado é usado quando existe", strong.totalFromMarket);
+
+  // A inversão tem de REPRODUZIR a probabilidade que lhe foi dada.
+  const { pHome } = matchOutcomeProbabilities(strong.xgHome, strong.xgAway);
+  check(
+    "inversão reproduz a probabilidade de vitória do mercado",
+    Math.abs(pHome - 0.72) < 0.02,
+    `mercado 0.72, modelo ${pHome.toFixed(3)}`
+  );
+
+  // Jogo equilibrado -> golos esperados aproximadamente simétricos.
+  const even = expectedGoalsFromMarket(mk(0.5, 0.40, 0.26, 0.34));
+  check("jogo equilibrado dá golos esperados próximos", Math.abs(even.xgHome - even.xgAway) < 0.5);
+
+  // Sem mercado de totais continua a funcionar, mas assinala-o.
+  const noTotals = expectedGoalsFromMarket(mk(null, 0.6, 0.22, 0.18));
+  check("sem mercado de totais ainda produz números", noTotals.xgHome > 0 && noTotals.xgAway > 0);
+  check("sem mercado de totais é assinalado", !noTotals.totalFromMarket);
+
+  // Um jogo com MUITOS golos tem de dar clean sheets menos prováveis que
+  // um jogo fechado — era exatamente isto que o "tilt" antigo não conseguia
+  // exprimir, porque preservava o produto dos dois números.
+  const highScoring = expectedGoalsFromMarket(mk(0.78, 0.45, 0.25, 0.30));
+  const lowScoring = expectedGoalsFromMarket(mk(0.30, 0.45, 0.25, 0.30));
+  check(
+    "mercado de muitos golos produz total maior que um de poucos golos",
+    highScoring.xgHome + highScoring.xgAway > lowScoring.xgHome + lowScoring.xgAway,
+    `alto=${(highScoring.xgHome + highScoring.xgAway).toFixed(2)} baixo=${(lowScoring.xgHome + lowScoring.xgAway).toFixed(2)}`
+  );
+}
+
+function testMarketDerivedRatings() {
+  const teams = Array.from({ length: 4 }, (_, i) => makeTeam(i + 1, `T${i + 1}`));
+  // T1 é forte (esmaga toda a gente), T4 é fraco.
+  const matches: OddsMatch[] = [
+    { homeTeam: "T1", awayTeam: "T4", homeWinProb: 0.80, drawProb: 0.13, awayWinProb: 0.07, overProb: 0.65, commenceTime: "" },
+    { homeTeam: "T1", awayTeam: "T3", homeWinProb: 0.72, drawProb: 0.18, awayWinProb: 0.10, overProb: 0.60, commenceTime: "" },
+    { homeTeam: "T2", awayTeam: "T4", homeWinProb: 0.68, drawProb: 0.20, awayWinProb: 0.12, overProb: 0.58, commenceTime: "" },
+  ];
+  const resolve = (n: string) => {
+    const t = teams.find((x) => x.short_name === n);
+    return t ? t.id : null;
+  };
+  const ratings = deriveTeamRatingsFromMarket(teams, matches, resolve);
+
+  const strong = ratings.get(1)!;
+  const weak = ratings.get(4)!;
+  check("equipa forte tem ataque acima da equipa fraca", strong.attack > weak.attack,
+    `forte=${strong.attack.toFixed(2)} fraca=${weak.attack.toFixed(2)}`);
+  check("equipa forte sofre menos que a fraca (defesa menor é melhor)", strong.defence < weak.defence,
+    `forte=${strong.defence.toFixed(2)} fraca=${weak.defence.toFixed(2)}`);
+  check("amostra é contabilizada", strong.sample === 2 && weak.sample === 2);
+
+  // Equipa sem qualquer jogo no mercado fica neutra, não inventada.
+  const unseen = deriveTeamRatingsFromMarket(teams, [], resolve).get(1)!;
+  check("sem mercado a equipa fica neutra", unseen.attack === 1 && unseen.defence === 1 && unseen.sample === 0);
+
+  // Nome que não resolve não pode contaminar outra equipa.
+  const bogus = deriveTeamRatingsFromMarket(
+    teams,
+    [{ homeTeam: "Equipa Inexistente", awayTeam: "T1", homeWinProb: 0.9, drawProb: 0.05, awayWinProb: 0.05, overProb: 0.5, commenceTime: "" }],
+    resolve
+  );
+  check("jogo com equipa não resolvida é ignorado por completo", (bogus.get(1)?.sample ?? 0) === 0);
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testDefenceInversion();
 testMissingTeamStrengths();
+testMarketInversion();
+testMarketDerivedRatings();
 testPoissonQuantile();
 testLateSeasonWindow();
 testExpectedPointsScale();

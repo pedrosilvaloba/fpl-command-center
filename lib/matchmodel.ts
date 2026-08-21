@@ -1,5 +1,11 @@
 import type { FplFixture, FplTeam } from "./types";
 import type { OddsMatch } from "./oddsapi";
+import {
+  expectedGoalsFromMarket,
+  deriveTeamRatingsFromMarket,
+  type FixtureSource,
+  type MarketTeamRating,
+} from "./oddsmodel";
 import { matchOddsTeam } from "./oddsapi";
 import type { TeamFactor } from "./teamrating";
 
@@ -12,6 +18,10 @@ export interface FixtureExpectation {
   expectedGoalsAgainst: number;
   cleanSheetProbability: number; // P(this team concedes 0 in this fixture)
   marketAdjusted: boolean; // true when betting-market odds nudged this fixture's numbers
+  /** Where these numbers actually came from — see lib/oddsmodel.ts.
+   * Surfaced in the UI so a neutral placeholder is never mistaken for a
+   * real per-fixture forecast. */
+  source: FixtureSource;
 }
 
 // Long-run Premier League average goals per match by venue — a stable,
@@ -204,32 +214,15 @@ export function buildFixtureExpectations(
 
   // FPL does not always publish its team strength ratings. Confirmed
   // against the live API on 2026-08-21, hours before the GW1 deadline:
-  // every team had `strength: null` and all four strength_* fields at 0.
-  //
-  // The arithmetic below divides a team's rating by the league average of
-  // that rating, so all-zero input produced `0 / 0`, guarded to `0 / 1`,
-  // and the whole model collapsed silently: every fixture came out at
-  // exactly 0.00 expected goals, and clean-sheet probability — which is
-  // exp(-expectedGoalsAgainst) — came out at exp(0) = 100% for all twenty
-  // teams. That is what the Calendário was showing.
-  //
-  // It looked like plausible output rather than an obvious failure, which
-  // is why it survived: the panel only started displaying these numbers in
-  // v1.10 (before that it showed FPL's own 1-5 digit, which hid it).
-  //
-  // The honest fallback is a NEUTRAL factor of 1: with no information
-  // about relative team strength, every team is treated as league-average
-  // and the model degrades to its base rates (1.5 home / 1.2 away) instead
-  // of to zero. Callers can detect this state with `teamStrengthsUsable`
-  // and tell the user the numbers are un-differentiated rather than
-  // presenting them as a real read on each fixture.
-  const ratingsUsable =
+  // every team had `strength: null` and all four strength_* fields at 0,
+  // which made the old arithmetic collapse every fixture to exactly 0.00
+  // expected goals and 100% clean-sheet probability. These ratings are now
+  // only ONE rung of a hierarchy (see below) rather than its foundation.
+  const fplRatingsUsable =
     avgAttackHome > 0 && avgAttackAway > 0 && avgDefenceHome > 0 && avgDefenceAway > 0;
 
-  /** Team rating relative to the league, or a neutral 1 when the rating
-   * is missing, zero or otherwise unusable. */
   const ratio = (value: number | undefined, avg: number): number => {
-    if (!ratingsUsable) return 1;
+    if (!fplRatingsUsable) return 1;
     if (!Number.isFinite(value) || (value ?? 0) <= 0) return 1;
     return (value as number) / avg;
   };
@@ -246,6 +239,24 @@ export function buildFixtureExpectations(
     return oddsNameCache.get(team.id) ?? null;
   };
 
+  // Reverse lookup: odds-provider name -> FPL team id. Exact matches only
+  // (matchOddsTeam refuses to guess), because attributing one club's
+  // market to another would be worse than having no market at all.
+  const teamIdByOddsName = new Map<string, number>();
+  for (const team of teams) {
+    const name = oddsNameFor(team);
+    if (name) teamIdByOddsName.set(name, team.id);
+  }
+
+  // Team ratings inferred from whichever fixtures the market HAS priced.
+  // This is what lets fixtures the bookmakers have not reached yet still
+  // be projected from market information rather than from FPL's ratings.
+  const marketRatings: Map<number, MarketTeamRating> | null =
+    oddsMatches && oddsMatches.length > 0
+      ? deriveTeamRatingsFromMarket(teams, oddsMatches, (n) => teamIdByOddsName.get(n) ?? null)
+      : null;
+  const hasMarketRatings = (id: number) => (marketRatings?.get(id)?.sample ?? 0) > 0;
+
   const byTeam = new Map<number, FixtureExpectation[]>();
   const push = (teamId: number, exp: FixtureExpectation) => {
     if (!byTeam.has(teamId)) byTeam.set(teamId, []);
@@ -259,32 +270,65 @@ export function buildFixtureExpectations(
 
     const homeDynamic = teamFactors?.get(home.id);
     const awayDynamic = teamFactors?.get(away.id);
+    const resultsInformed =
+      (homeDynamic?.finishedMatches ?? 0) > 0 || (awayDynamic?.finishedMatches ?? 0) > 0;
 
-    const attackFactorHome =
-      ratio(home.strength_attack_home, avgAttackHome) * (homeDynamic?.attackFactor ?? 1);
-    const defenceFactorAway =
-      ratio(away.strength_defence_away, avgDefenceAway) * (awayDynamic?.defenceFactor ?? 1);
-    let xgHome = (BASE_HOME_GOALS * attackFactorHome) / (defenceFactorAway || 1);
-
-    const attackFactorAway =
-      ratio(away.strength_attack_away, avgAttackAway) * (awayDynamic?.attackFactor ?? 1);
-    const defenceFactorHome =
-      ratio(home.strength_defence_home, avgDefenceHome) * (homeDynamic?.defenceFactor ?? 1);
-    let xgAway = (BASE_AWAY_GOALS * attackFactorAway) / (defenceFactorHome || 1);
-
+    let xgHome: number;
+    let xgAway: number;
+    let source: FixtureSource;
     let marketAdjusted = false;
-    if (oddsMatches) {
-      const homeOddsName = oddsNameFor(home);
-      const awayOddsName = oddsNameFor(away);
-      const market = homeOddsName && awayOddsName
+
+    // ---- rung 1: the market priced THIS fixture -------------------------
+    const homeOddsName = oddsNameFor(home);
+    const awayOddsName = oddsNameFor(away);
+    const market =
+      oddsMatches && homeOddsName && awayOddsName
         ? oddsMatches.find((m) => m.homeTeam === homeOddsName && m.awayTeam === awayOddsName)
         : undefined;
-      if (market) {
-        const tilted = applyMarketTilt(xgHome, xgAway, market.homeWinProb, market.awayWinProb);
-        xgHome = tilted.xgHome;
-        xgAway = tilted.xgAway;
-        marketAdjusted = true;
-      }
+
+    if (market) {
+      const derived = expectedGoalsFromMarket(market);
+      xgHome = derived.xgHome;
+      xgAway = derived.xgAway;
+      source = "market";
+      marketAdjusted = true;
+    } else if (marketRatings && hasMarketRatings(home.id) && hasMarketRatings(away.id)) {
+      // ---- rung 2: no line for this fixture, but the market has told us
+      // how strong both these teams are elsewhere.
+      const h = marketRatings.get(home.id)!;
+      const a = marketRatings.get(away.id)!;
+      xgHome = BASE_HOME_GOALS * h.attack * a.defence;
+      xgAway = BASE_AWAY_GOALS * a.attack * h.defence;
+      source = "market-ratings";
+      marketAdjusted = true;
+    } else if (resultsInformed) {
+      // ---- rung 3: this season's actual results (lib/teamrating.ts).
+      xgHome =
+        (BASE_HOME_GOALS * (homeDynamic?.attackFactor ?? 1)) /
+        (awayDynamic?.defenceFactor || 1);
+      xgAway =
+        (BASE_AWAY_GOALS * (awayDynamic?.attackFactor ?? 1)) /
+        (homeDynamic?.defenceFactor || 1);
+      source = "results";
+    } else if (fplRatingsUsable) {
+      // ---- rung 4: FPL's own published ratings.
+      const attackFactorHome =
+        ratio(home.strength_attack_home, avgAttackHome) * (homeDynamic?.attackFactor ?? 1);
+      const defenceFactorAway =
+        ratio(away.strength_defence_away, avgDefenceAway) * (awayDynamic?.defenceFactor ?? 1);
+      xgHome = (BASE_HOME_GOALS * attackFactorHome) / (defenceFactorAway || 1);
+
+      const attackFactorAway =
+        ratio(away.strength_attack_away, avgAttackAway) * (awayDynamic?.attackFactor ?? 1);
+      const defenceFactorHome =
+        ratio(home.strength_defence_home, avgDefenceHome) * (homeDynamic?.defenceFactor ?? 1);
+      xgAway = (BASE_AWAY_GOALS * attackFactorAway) / (defenceFactorHome || 1);
+      source = "fpl";
+    } else {
+      // ---- rung 5: nothing at all. Home advantage and nothing else.
+      xgHome = BASE_HOME_GOALS;
+      xgAway = BASE_AWAY_GOALS;
+      source = "neutral";
     }
 
     push(home.id, {
@@ -296,6 +340,7 @@ export function buildFixtureExpectations(
       expectedGoalsAgainst: Math.round(xgAway * 100) / 100,
       cleanSheetProbability: Math.round(poissonZeroProb(xgAway) * 1000) / 1000,
       marketAdjusted,
+      source,
     });
     push(away.id, {
       fixtureId: f.id,
@@ -306,6 +351,7 @@ export function buildFixtureExpectations(
       expectedGoalsAgainst: Math.round(xgHome * 100) / 100,
       cleanSheetProbability: Math.round(poissonZeroProb(xgHome) * 1000) / 1000,
       marketAdjusted,
+      source,
     });
   }
 
@@ -415,6 +461,7 @@ export interface ModelFixtureRow {
   event: number | null;
   opponentShort: string;
   isHome: boolean;
+  source: FixtureSource;
   expectedGoalsFor: number;
   cleanSheetProbability: number;
   marketAdjusted: boolean;
@@ -455,6 +502,7 @@ export function buildModelTicker(
           expectedGoalsFor: e.expectedGoalsFor,
           cleanSheetProbability: e.cleanSheetProbability,
           marketAdjusted: e.marketAdjusted,
+          source: e.source,
         };
       });
     result[team.id] = rows;
