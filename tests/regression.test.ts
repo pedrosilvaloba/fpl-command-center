@@ -675,6 +675,112 @@ function testRedisCredentialNames() {
   for (const k of keys) if (saved[k] !== undefined) process.env[k] = saved[k]!;
 }
 
+// ---------------------------------------------------------------------
+// PRÉ-ÉPOCA — a pontuação não pode ser só a ordenação da própria FPL
+// ---------------------------------------------------------------------
+function testPreseasonDifferentiation() {
+  const { bootstrap } = makeBootstrap({ teamCount: 4, gameweeks: 1, currentEvent: null });
+  // Calendário construído à mão: a T1 tem um jogo fácil na jornada 1 e
+  // jogos difíceis depois; a T3 tem exatamente o perfil inverso.
+  // Rotação completa: cada equipa joga exatamente uma vez por jornada, e
+  // com adversários diferentes, para os calendários serem genuinamente
+  // distintos sem criar jornadas duplas acidentais.
+  const fixtures = [
+    makeFixture({ id: 1, event: 1, team_h: 1, team_a: 2 }),
+    makeFixture({ id: 2, event: 1, team_h: 3, team_a: 4 }),
+    makeFixture({ id: 3, event: 2, team_h: 1, team_a: 3 }),
+    makeFixture({ id: 4, event: 2, team_h: 2, team_a: 4 }),
+    makeFixture({ id: 5, event: 3, team_h: 1, team_a: 4 }),
+    makeFixture({ id: 6, event: 3, team_h: 2, team_a: 3 }),
+    makeFixture({ id: 7, event: 4, team_h: 2, team_a: 1 }),
+    makeFixture({ id: 8, event: 4, team_h: 4, team_a: 3 }),
+    makeFixture({ id: 9, event: 5, team_h: 3, team_a: 1 }),
+    makeFixture({ id: 10, event: 5, team_h: 4, team_a: 2 }),
+  ];
+
+  bootstrap.elements = bootstrap.elements.map((el) =>
+    makeElement({
+      ...el, minutes: 0, starts: 0, goals_scored: 0, assists: 0, bonus: 0,
+      expected_goals_per_90: "0", expected_assists_per_90: "0", ep_next: "4.0",
+      penalties_order: null,
+    })
+  );
+
+  // O mercado avalia só a jornada 1: T1 esmaga a T2 (muitos golos), e a
+  // T3 tem um jogo fechado. Isso dá forças derivadas do mercado que depois
+  // projetam as jornadas seguintes.
+  const odds: OddsMatch[] = [
+    { homeTeam: "T1", awayTeam: "T2", homeWinProb: 0.82, drawProb: 0.12, awayWinProb: 0.06, overProb: 0.75, commenceTime: "" },
+  ];
+
+  const scored = buildScoredPlayers(bootstrap, fixtures, 1, 5, odds, []);
+  check("pré-época é detetada", scored[0]?.isPreseason === true);
+
+  const distinct = new Set(scored.map((p) => p.expectedPoints.toFixed(3)));
+  check(
+    "com o mesmo ep_next, o calendário passa a diferenciar jogadores",
+    distinct.size > 1,
+    `${distinct.size} pontuações distintas entre ${scored.length} jogadores`
+  );
+
+  // A jornada 1 tem de continuar a ser exatamente o número da FPL — é aí
+  // que a FPL é a melhor fonte e não a queremos corrigir.
+  const plain = scored.find((p) => !p.element.penalties_order);
+  check(
+    "jornada 1 continua a ser exatamente o ep_next da FPL",
+    !!plain && Math.abs(plain.expectedPointsNext - 4.0) < 1e-6,
+    `obtido ${plain?.expectedPointsNext}`
+  );
+
+  // E o efeito tem de ser limitado: nunca mais do que o número de jogos
+  // vezes o ep_next, com a folga do limite por jogo.
+  // Cada equipa joga exatamente 5 vezes, e cada jogo está limitado a 1.6x
+  // o valor da jornada 1, por isso o teto é ep_next * 5 * 1.6.
+  const maxSeen = Math.max(...scored.map((p) => p.expectedPoints));
+  check(
+    "o ajuste de calendário está limitado e não explode",
+    maxSeen <= 4.0 * 5 * 1.6 + 1e-6,
+    `máximo observado ${maxSeen}`
+  );
+  const minSeen = Math.min(...scored.map((p) => p.expectedPoints));
+  check(
+    "e também tem um piso — um calendário mau não zera o jogador",
+    minSeen >= 4.0 * 5 * 0.55 - 1e-6,
+    `mínimo observado ${minSeen}`
+  );
+}
+
+function testPreseasonSetPieces() {
+  const { bootstrap, fixtures } = makeBootstrap({
+    teamCount: 4, gameweeks: 6, currentEvent: null,
+  });
+  bootstrap.elements = bootstrap.elements.map((el, i) =>
+    makeElement({
+      ...el, minutes: 0, starts: 0, ep_next: "4.0",
+      penalties_order: i === 0 ? 1 : null,
+    })
+  );
+  const scored = buildScoredPlayers(bootstrap, fixtures, 1, 5, null, []);
+  const taker = scored.find((p) => p.element.penalties_order === 1)!;
+  const other = scored.find(
+    (p) => !p.element.penalties_order && p.element.element_type === taker.element.element_type
+  )!;
+  check(
+    "marcador de penáltis pontua acima de um colega igual em pré-época",
+    taker.expectedPoints > other.expectedPoints,
+    `penáltis=${taker.expectedPoints} outro=${other.expectedPoints}`
+  );
+  check(
+    "e o utilizador percebe porquê",
+    taker.reasons.some((r) => r.includes("grandes penalidades"))
+  );
+  check(
+    "o acréscimo é modesto, não uma reordenação da liga",
+    taker.expectedPoints / other.expectedPoints < 1.2,
+    `rácio ${(taker.expectedPoints / other.expectedPoints).toFixed(3)}`
+  );
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testDefenceInversion();
 testMissingTeamStrengths();
@@ -682,6 +788,8 @@ testMarketInversion();
 testMarketDerivedRatings();
 testPartialMarketCoverage();
 testRedisCredentialNames();
+testPreseasonDifferentiation();
+testPreseasonSetPieces();
 testPoissonQuantile();
 testLateSeasonWindow();
 testExpectedPointsScale();

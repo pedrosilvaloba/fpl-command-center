@@ -281,11 +281,73 @@ export function buildScoredPlayers(
     // as one more additive term is what stops it double-counting form,
     // fixtures and minutes, all of which it already contains.
     const trust = isPreseason ? 0 : modelTrust(minutesPlayed);
-    const epNextWindow = epNext * window.fixtureCount;
-    const epNextSingle = epNext * Math.min(1, nextWindow.fixtureCount);
 
-    let expectedPoints = modelWindowPoints.total * trust + epNextWindow * (1 - trust);
-    let expectedPointsNext = modelNextPoints * trust + epNextSingle * (1 - trust);
+    let expectedPoints: number;
+    let expectedPointsNext: number;
+
+    if (isPreseason) {
+      // PRESEASON.
+      //
+      // With no minutes played, every per-player rate this model needs
+      // (xG/90, xA/90, bonus/90, defensive actions) is legitimately zero,
+      // so our structural model has nothing player-specific to say and
+      // FPL's own `ep_next` is the only real per-player estimate that
+      // exists. Deferring to it entirely was therefore the right instinct
+      // — but it was implemented as `trust = 0`, which threw away TWO
+      // things our model does know before a ball is kicked, and that was
+      // enough to make the suggested squad a straight copy of FPL's own
+      // ranking no matter what else got built:
+      //
+      //   1. `ep_next` is a NEXT-GAMEWEEK number. Multiplying it by the
+      //      fixture count assumed gameweeks 2-5 would be exactly like
+      //      gameweek 1, so a kind run and a brutal run scored the same.
+      //      The market-derived fixture model knows the difference.
+      //   2. Set-piece duty is a ROLE, known before kickoff. FPL's early
+      //      -season `ep_next` is famously slow to reflect a newly
+      //      appointed penalty taker.
+      //
+      // So: keep `ep_next` as the per-player base (it is the better
+      // information, and re-deriving it would double-count), and modulate
+      // it only by what it demonstrably does not contain. Gameweek 1 is
+      // left exactly equal to `ep_next` — full deference where FPL is
+      // strongest — while later gameweeks scale by how much better or
+      // worse they look than gameweek 1.
+      const inWindow = (expectationsByTeam.get(team.id) ?? []).filter(
+        (e) => e.event !== null && e.event >= fromEvent && e.event < fromEvent + fixtureWindow
+      );
+      // Quality of a fixture for THIS position: defenders and keepers live
+      // on clean sheets, attackers on their team's goals.
+      const qualityOf = (e: { cleanSheetProbability: number; expectedGoalsFor: number }) =>
+        isDefensive ? e.cleanSheetProbability : e.expectedGoalsFor;
+
+      const first = inWindow[0];
+      const baseQuality = first ? qualityOf(first) : 0;
+      let windowMultiplier = window.fixtureCount;
+      if (first && baseQuality > 0.01) {
+        windowMultiplier = inWindow.reduce((sum, e) => {
+          // Clamped per fixture so one extreme match cannot dominate the
+          // run, and so a missing/degenerate value degrades to "same as
+          // gameweek 1" rather than to zero.
+          const ratio = qualityOf(e) / baseQuality;
+          return sum + Math.min(1.6, Math.max(0.55, Number.isFinite(ratio) ? ratio : 1));
+        }, 0);
+      }
+
+      // Set-piece duty: a genuine, knowable-now differentiator. Kept small
+      // — this nudges players apart, it does not reorder the league.
+      const penOrder = el.penalties_order ?? null;
+      const setPieceAdj = penOrder === 1 ? 1.12 : penOrder === 2 ? 1.03 : 1;
+      if (penOrder === 1) reasons.push("marcador de grandes penalidades designado");
+
+      expectedPoints = epNext * windowMultiplier * setPieceAdj;
+      // Gameweek 1 is FPL's own number, untouched apart from set-piece duty.
+      expectedPointsNext = epNext * setPieceAdj;
+    } else {
+      const epNextWindow = epNext * window.fixtureCount;
+      const epNextSingle = epNext * Math.min(1, nextWindow.fixtureCount);
+      expectedPoints = modelWindowPoints.total * trust + epNextWindow * (1 - trust);
+      expectedPointsNext = modelNextPoints * trust + epNextSingle * (1 - trust);
+    }
 
     // Individual goal involvement, kept for display and the risk profile.
     const individualExpectedGI =
