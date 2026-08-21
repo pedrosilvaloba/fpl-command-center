@@ -58,7 +58,7 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
-## O que já funciona (v1.9)
+## O que já funciona (v1.10)
 
 - Dados 100% reais e ao vivo — preço, forma, posse, pontos, calendário —
   vindos diretamente da API oficial, sem qualquer valor inventado ou
@@ -162,6 +162,51 @@ components/
     Jogadores com amostra ainda pequena recebem uma nota a dizê-lo.
   Ver os comentários junto a `ATTACK_MULTIPLIER` em `lib/recommend.ts`
   para as contas completas por trás desta correção.
+- **Revisão a sério (v1.10) — três coisas verificadas ao vivo contra a
+  API real, não assumidas.** Depois de v1.9, continuava tudo igual — com
+  razão a insistir para se confirmar mesmo o que se passava. Desta vez
+  fez-se uma verificação direta contra a API real da FPL (não assumida a
+  partir de documentação) para três perguntas concretas:
+  1. **Os nomes dos campos de xG/xA estão certos?** Confirmado ao vivo:
+     sim, todos os 12 campos usados por `lib/playerthreat.ts` (incluindo
+     `expected_goal_involvements_per_90`, `starts`, `penalties_order`)
+     existem exatamente como assumido — não era um problema de nomes de
+     campos errados.
+  2. **Porque é que a nota "ameaça de golo" nunca aparece e a Equipa
+     Sugerida não muda um único jogador, mesmo depois da correção de
+     calibração?** A causa real, também confirmada ao vivo: **a época
+     2026/27 ainda não começou** — o deadline da Jornada 1 é hoje,
+     2026-08-21, ainda a horas de distância no momento desta verificação.
+     Nenhum jogador tem minutos, golos, assistências ou golos esperados
+     reais esta época (estão todos a zero, sem exceção) — não porque o
+     código esteja errado, mas porque literalmente ainda não se jogou
+     nenhum jogo. Toda a diferenciação individual (ponto 1 da v1.8, a
+     correção de peso da v1.9) está corretamente desativada em pré-época
+     por desenho — e vai ativar-se sozinha assim que a Jornada 1
+     terminar, sem precisar de mais nenhuma alteração. Isto não é um
+     "seria bom ter mais dados" — é uma impossibilidade genuína: não há
+     forma de nenhum modelo saber hoje qual jogador do Arsenal vai
+     render mais esta época sem ter visto um único jogo. Dito isto, havia
+     uma coisa real a melhorar: a FPL publica o seu próprio campo
+     `ep_next` ("pontos esperados na próxima jornada"), calculado pela
+     própria FPL e disponível mesmo antes de a época começar (ao
+     contrário de forma/golos esperados, que precisam de jogos reais) —
+     nunca tinha sido usado. Passa agora a ser o critério principal para
+     diferenciar jogadores da mesma equipa em pré-época, com peso
+     elevado precisamente por ser o único sinal individual genuíno
+     disponível agora. Ver `epNext` em `lib/recommend.ts`.
+  3. **O Calendário continua preso ao dígito 1-5 da FPL, apesar de toda
+     a integração de odds/modelo de golos esperados?** Sim, isso era um
+     bug de programação real, não de modelo — a secção "Calendário" tinha
+     ficado ligada a `lib/fdr.ts` (o dígito antigo da FPL) desde o início
+     do projeto, nunca foi atualizada para usar o modelo de golos
+     esperados construído mais tarde. Corrigido: agora mostra os números
+     reais do próprio modelo (ataque = golos esperados/jogo, defesa =
+     probabilidade de clean sheet, separados em vez de misturados num só
+     número, e assinalados quando ajustados por odds de mercado) — o que
+     se vê nesta secção é agora exatamente o que alimenta a pontuação,
+     não um número FPL paralelo e desatualizado. Ver `buildModelTicker`
+     em `lib/matchmodel.ts`.
 - **A Minha Equipa** — introduz o teu Team ID (guardado neste browser, com
   o teu por omissão) e vês o teu plantel real, capitão, banco, valor e
   rank, com sugestões de transferência calculadas contra o teu plantel
@@ -188,7 +233,8 @@ components/
 - **Monitor de Notícias/Lesões** — lista todos os jogadores com uma nota
   ativa (lesão, dúvida, suspensão), ordenados por posse para os mais
   relevantes aparecerem primeiro, com destaque para notícias das últimas 48h.
-- Fixture ticker (próximas 5 jornadas) com a dificuldade oficial da FPL.
+- Fixture ticker (próximas 5 jornadas) com golos esperados/clean sheet do
+  próprio modelo (não o dígito 1-5 da FPL — ver ponto 3 da v1.10 acima).
 - Diferenciais (jogadores com posse < 10%) e melhores escolhas por posição.
 - Playbook de estratégia e cheat sheet de regras, com fontes citadas.
 
@@ -303,12 +349,14 @@ Para incluir odds de mercado no modelo de golos esperados:
 - A API da FPL é pública mas **não-oficial e não documentada** pela
   Premier League — pode mudar sem aviso. O código foi escrito para falhar
   de forma controlada (erros claros) em vez de rebentar silenciosamente.
-- O "Calendário" (Fixture Ticker) continua a mostrar o dígito 1-5 oficial
-  da FPL, conhecido por ser algo grosseiro (baseado em posição na liga) —
-  é só para leitura rápida. A pontuação a sério já não depende dele: usa
-  o modelo de golos esperados de `lib/matchmodel.ts`, agora também
-  corrigido pelo rating de equipa dinâmico de `lib/teamrating.ts` (Elo +
-  taxa de golos, calibrado com os resultados reais desta época).
+- O "Calendário" (Fixture Ticker) mostrou o dígito 1-5 oficial da FPL até
+  à v1.9 por um esquecimento real de programação — nunca tinha sido
+  atualizado para usar o modelo de golos esperados construído mais tarde
+  no projeto. Corrigido na v1.10: mostra agora os números do próprio
+  modelo de `lib/matchmodel.ts` (golos esperados + probabilidade de clean
+  sheet, separados), corrigido pelo rating de equipa dinâmico de
+  `lib/teamrating.ts` (Elo + taxa de golos, calibrado com os resultados
+  reais desta época) e por odds de mercado quando disponíveis.
 - O otimizador encontra a equipa matematicamente ótima *para a pontuação
   do motor v1* — continua tão bom (ou limitado) quanto essa pontuação. Por
   performance, resolve sobre um conjunto reduzido de candidatos por posição
@@ -335,16 +383,16 @@ Para incluir odds de mercado no modelo de golos esperados:
   pena rever esses números, porque deixam de estar calibrados para o total
   esperado numa janela de outro tamanho.
 - Os campos de xG/xA individual, `starts` e ordem de bolas paradas
-  (`lib/playerthreat.ts`) foram adicionados a partir da documentação
-  pública da comunidade open-source da FPL sobre a API — este ambiente
-  não consegue chamar a API ao vivo para confirmar os nomes exatos dos
-  campos antes de publicar. Cada leitura é feita de forma defensiva (campo
-  em falta ou renomeado → contribui 0/nulo, nunca rebenta a página), mas
-  vale a pena confirmar visualmente na app depois deste deploy — por
-  exemplo, um marcador de grandes penalidades conhecido deve mostrar a
-  nota "marcador de grandes penalidades" nas razões da pontuação. Se
-  achares que os números de ameaça de golo individual não fazem sentido
-  para algum jogador, é o primeiro sítio a verificar.
+  (`lib/playerthreat.ts`) foram inicialmente adicionados a partir de
+  documentação pública da comunidade open-source da FPL, e depois
+  **confirmados numa consulta direta à API ao vivo em 2026-08-21** — os
+  nomes dos campos estão certos. Cada leitura continua a ser feita de
+  forma defensiva (campo em falta ou renomeado → contribui 0/nulo, nunca
+  rebenta a página) como proteção para o resto da época, caso a FPL algum
+  dia mude isto sem aviso — mas não é a explicação de nada que pareça
+  "não estar a funcionar" agora. Antes da Jornada 1 terminar, os valores
+  destes campos são legitimamente 0 para toda a gente (ninguém jogou
+  ainda) — isso é o comportamento correto, não um sinal de bug.
 - Os multiplicadores novos (`ATTACK_MULTIPLIER`, `DEF_ATTACK_UPSIDE_MULTIPLIER`,
   `DC_WEIGHT` em `lib/recommend.ts`) são uma primeira calibração, não um
   ótimo validado — é exatamente para isto que serve o novo Painel de

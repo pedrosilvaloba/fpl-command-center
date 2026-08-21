@@ -172,6 +172,12 @@ export function buildScoredPlayers(
     const formNum = parseFloat(el.form) || 0;
     const ppg = parseFloat(el.points_per_game) || 0;
     const ictNum = parseFloat(el.ict_index) || 0;
+    // FPL's own predicted points for the next gameweek — exists even
+    // before a ball is kicked (unlike everything else per-player this
+    // formula uses), so it's the one genuine individual signal available
+    // to break ties between team-mates in the preseason branch below,
+    // where individualExpectedGI is necessarily 0 (see its comment).
+    const epNext = parseFloat(el.ep_next ?? "") || 0;
 
     const teamFixtures = ticker[team.id] ?? [];
     const fixtureAvgDifficulty = averageDifficulty(teamFixtures);
@@ -236,25 +242,38 @@ export function buildScoredPlayers(
     if (isPreseason) {
       // Price is the market's own pre-season valuation of quality;
       // ownership is the collective wisdom of everyone else who has
-      // already looked at press-conference/preseason signals. No
-      // underlying-stats history exists yet this early, so
-      // individualExpectedGI is 0 and the team-level window total is
-      // used instead, same as before — multipliers below are calibrated
-      // for the default 5-gameweek window (see lib/matchmodel.ts for how
-      // these numbers are derived; re-tune if fixtureWindow changes
-      // materially from 5).
+      // already looked at press-conference/preseason signals. Neither
+      // one, though, can tell team-mates apart from each other — two
+      // players on the same team, similarly priced/owned, are otherwise
+      // a coin flip here. `epNext` (FPL's OWN predicted points for the
+      // next gameweek) is the one real individual signal that exists
+      // this early — presumably informed by FPL's own read on expected
+      // lineups/team news — so it's weighted heavily here specifically
+      // to break that tie. individualExpectedGI is still 0 this early
+      // (see its own comment above) and the team-level window total is
+      // used for the fixture-context term instead, same as before —
+      // multipliers below are calibrated for the default 5-gameweek
+      // window (see lib/matchmodel.ts for how these numbers are derived;
+      // re-tune if fixtureWindow changes materially from 5).
       raw =
         priceM * 1.6 +
+        epNext * 4.0 +
         Math.log10(ownershipPct + 1) * 6 +
         (isDefensive ? totalCleanSheetProbability * 2 : 0) +
         (isAttacking ? window.totalGoalsFor * ATTACK_MULTIPLIER_PRESEASON : 0) +
         ictNum * 0.02;
       if (ownershipPct >= 25) reasons.push("escolha consensual do mercado (template)");
       if (ownershipPct < 10 && priceM >= 6) reasons.push("possível diferencial de qualidade");
+      if (epNext >= 4) {
+        reasons.push(
+          `a própria FPL prevê uma pontuação alta para a próxima jornada (~${epNext.toFixed(1)}pts)`
+        );
+      }
     } else {
       raw =
         formNum * 1.0 * formTrust +
         ppg * 1.4 +
+        epNext * 1.5 +
         (isDefensive ? totalCleanSheetProbability * 1.6 : 0) +
         (isAttacking ? individualExpectedGI * ATTACK_MULTIPLIER : 0) +
         (isDefensive && el.element_type === 2

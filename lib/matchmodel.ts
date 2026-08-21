@@ -322,3 +322,64 @@ export function windowExpectation(
     anyMarketAdjusted: inWindow.some((e) => e.marketAdjusted),
   };
 }
+
+export interface ModelFixtureRow {
+  event: number | null;
+  opponentShort: string;
+  isHome: boolean;
+  expectedGoalsFor: number;
+  cleanSheetProbability: number;
+  marketAdjusted: boolean;
+}
+
+/**
+ * The Fixture Ticker (Calendário) panel used to show FPL's own 1-5
+ * difficulty digit — the same coarse, opaque number this whole file
+ * exists to move the SCORING away from. That left a confusing split: the
+ * numbers actually driving recommendations were these real per-fixture
+ * expected-goals/clean-sheet figures (optionally sharpened by market
+ * odds and this season's own results), but the one section a manager
+ * would naturally check for "is this a good run of fixtures" still only
+ * showed the old crude digit. This builds the SAME shape the old ticker
+ * did (per team, next N fixtures) but sourced from the real model
+ * instead — one real number for attacking upside, one for defensive
+ * solidity, shown separately rather than folded into a single score,
+ * since a fixture can genuinely be great for one and poor for the other.
+ */
+export function buildModelTicker(
+  teams: FplTeam[],
+  expectationsByTeam: Map<number, FixtureExpectation[]>,
+  fromEvent: number,
+  count = 5
+): Record<number, ModelFixtureRow[]> {
+  const teamById = new Map(teams.map((t) => [t.id, t]));
+  const result: Record<number, ModelFixtureRow[]> = {};
+  for (const team of teams) {
+    const rows = (expectationsByTeam.get(team.id) ?? [])
+      .filter((e) => e.event !== null && e.event >= fromEvent)
+      .slice(0, count)
+      .map((e): ModelFixtureRow => {
+        const opponent = teamById.get(e.opponentTeamId);
+        return {
+          event: e.event,
+          opponentShort: opponent?.short_name ?? "???",
+          isHome: e.isHome,
+          expectedGoalsFor: e.expectedGoalsFor,
+          cleanSheetProbability: e.cleanSheetProbability,
+          marketAdjusted: e.marketAdjusted,
+        };
+      });
+    result[team.id] = rows;
+  }
+  return result;
+}
+
+export function avgExpectedGoalsFor(rows: ModelFixtureRow[]): number {
+  if (rows.length === 0) return 0;
+  return rows.reduce((s, r) => s + r.expectedGoalsFor, 0) / rows.length;
+}
+
+export function avgCleanSheetProbability(rows: ModelFixtureRow[]): number {
+  if (rows.length === 0) return 0;
+  return rows.reduce((s, r) => s + r.cleanSheetProbability, 0) / rows.length;
+}

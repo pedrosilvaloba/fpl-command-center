@@ -69,13 +69,21 @@ export interface FplElement {
   cost_change_event: number;
   cost_change_start: number;
   news_added: string | null;
+  // FPL's own predicted points for the next/current gameweek — a real,
+  // continuously-updated signal FPL themselves publish per player,
+  // available even before a single ball has been kicked (unlike form/
+  // xG, which need actual minutes played to exist). Confirmed present
+  // via a live fetch of the real API (see lib/recommend.ts's preseason
+  // branch for why this specifically matters before the season starts).
+  ep_next?: string;
+  ep_this?: string;
   // Individual underlying-performance and role signals — all already
   // present in the real FPL bootstrap payload, previously fetched but
   // never used by the scoring engine (see lib/playerthreat.ts for why
-  // that mattered). Field names/shapes follow the FPL API as documented
-  // by the wider open-source FPL community; this sandbox can't reach the
-  // live API to verify them directly, so every read of these fields is
-  // done defensively (missing/renamed -> 0/null, never a crash).
+  // that mattered). Field names verified against a live fetch of the
+  // real API on 2026-08-21 (this sandbox otherwise can't reach it
+  // directly) — every read is still done defensively (missing/renamed ->
+  // 0/null, never a crash) in case FPL changes them later in the season.
   starts?: number;
   expected_goals?: string;
   expected_assists?: string;

@@ -1,10 +1,11 @@
 import { getBootstrap, getFixtures, getLeagueStandings } from "@/lib/fpl-client";
-import { buildFixtureTicker } from "@/lib/fdr";
 import {
   buildScoredPlayers,
   pickCaptain,
   findDifferentials,
 } from "@/lib/recommend";
+import { buildFixtureExpectations, buildModelTicker } from "@/lib/matchmodel";
+import { computeDynamicTeamFactors } from "@/lib/teamrating";
 import { buildOptimalSquad } from "@/lib/optimizer";
 import { buildPriceWatch, buildNewsWatch } from "@/lib/pricewatch";
 import { getOddsImpliedProbabilities } from "@/lib/oddsapi";
@@ -83,7 +84,20 @@ export default async function Home() {
     bootstrap.events[0];
   const fromEvent = nextEvent?.id ?? 1;
 
-  const ticker = buildFixtureTicker(bootstrap.teams, fixtures, fromEvent, 5);
+  // The Calendário panel used to show FPL's own crude 1-5 difficulty
+  // digit — recomputed here (cheaply — a season is a few hundred
+  // fixtures) straight from the same real model (Poisson + this
+  // season's own results + market odds) that actually drives scoring,
+  // so what a manager sees when checking "who has good fixtures" matches
+  // what the recommendations are actually built on. See lib/matchmodel.ts.
+  const teamFactorsForDisplay = computeDynamicTeamFactors(bootstrap.teams, fixtures);
+  const expectationsByTeamForDisplay = buildFixtureExpectations(
+    bootstrap.teams,
+    fixtures,
+    oddsMatches,
+    teamFactorsForDisplay
+  );
+  const ticker = buildModelTicker(bootstrap.teams, expectationsByTeamForDisplay, fromEvent, 5);
   const scored = buildScoredPlayers(bootstrap, fixtures, fromEvent, 5, oddsMatches);
   const oddsActive = Array.isArray(oddsMatches) && oddsMatches.length > 0;
   const { squad, starters, totalCost, method: squadMethod } = buildOptimalSquad(scored, 100);
@@ -336,8 +350,12 @@ export default async function Home() {
           </div>
         </Section>
 
-        <Section id="fixtures" title="Calendário — Próximas 5 Jornadas" eyebrow="Fixture Ticker">
-          <FixtureTicker teams={bootstrap.teams} ticker={ticker} />
+        <Section
+          id="fixtures"
+          title="Calendário — Próximas 5 Jornadas"
+          eyebrow="Modelo próprio, não o dígito 1-5 da FPL"
+        >
+          <FixtureTicker teams={bootstrap.teams} ticker={ticker} oddsActive={oddsActive} />
         </Section>
 
         <Section
