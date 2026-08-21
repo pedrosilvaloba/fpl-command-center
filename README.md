@@ -47,6 +47,8 @@ lib/
   oddsmodel.ts    Inverte odds em golos esperados e deriva forças de equipa a partir do mercado
   correlation.ts  Risco de correlação — variância de empilhar jogadores do mesmo clube
   rankvalue.ts    Valor de ranking — desconta a posse, porque a FPL é um jogo de ranking
+  rivals.ts       CAMADA 2 — simulação Monte Carlo contra os plantéis reais dos rivais da liga; produz a postura de variância (beta) que o otimizador usa
+  strategylearning.ts CAMADA 3 — calibração aprendida por posição (previsto vs. real) e torneio de cinco estratégias de ranking avaliadas semanalmente
   expectedpoints.ts Modelo de pontos esperados — minutos, golos, assistências, clean sheets, bónus, contribuição defensiva
   managerinsights.ts Ajustes qualitativos/táticos — lista permanente manual + camada dinâmica auto-aplicada (resolução de nomes, validação, expiração, limite)
   teamrating.ts   Rating de equipa dinâmico (Elo + taxa de golos), calibrado com os resultados reais desta época
@@ -61,11 +63,59 @@ tests/
   regression.test.ts Suite de regressão — um teste por defeito encontrado na auditoria
 components/
   CountdownTimer.tsx  Contagem decrescente até ao deadline (client)
-  FixtureTicker.tsx   Tabela de calendário com chips de dificuldade
-  PlayerTable.tsx     Tabela reutilizável de jogadores pontuados
+  FixtureTicker.tsx   Calendário — cartões em telemóvel, tabela em ecrã grande
+  PlayerTable.tsx     Lista reutilizável de jogadores — cartões em telemóvel, tabela em ecrã grande
+  PitchView.tsx       O onze desenhado no relvado, ao estilo da FPL, com banco e distintivos
+  ClubKit.tsx         Camisola de cada clube em SVG (a API da FPL não publica cores)
+  LeagueSimPanel.tsx  Camada 2 — postura, probabilidades por rival e sobreposição de plantéis
+  StrategyPanel.tsx   Camada 3 — torneio de estratégias e calibração aprendida
   MyTeamPanel.tsx     A Minha Equipa — liga um Team ID real (client)
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
+
+## Novo na v1.25
+
+- **Camada 2 — simulação contra os rivais reais da liga (`lib/rivals.ts`).**
+  A app deixa de otimizar em abstrato. Vai buscar o plantel público de cada
+  gestor da Haal of Fame pelo Team ID e corre 4000 jornadas simuladas **ao
+  nível do jogador**: em cada simulação sorteia-se um resultado por jogador
+  (um clean sheet por clube, um número de golos por avançado, um resultado de
+  bónus) e só depois se soma o onze de cada gestor sobre esses mesmos
+  sorteios. Sortear por jogador e não por gestor é o ponto todo — faz com que
+  dois gestores que partilham o Haaland subam e desçam juntos automaticamente,
+  que é a correlação que decide ligas privadas.
+
+  Daí sai uma probabilidade de acabar à frente de cada rival e, dessa, um
+  único número — `beta` — que entra **diretamente no objetivo do otimizador**:
+  `pontos esperados × (1 − beta × posse)`. Beta positivo desconta jogadores
+  muito possuídos (perseguir: precisas de divergir); beta negativo prefere-os
+  (proteger: uma vantagem sobrevive melhor quando te moves com o pelotão);
+  beta zero é pontos esperados puros. O gerador de números aleatórios é
+  semeado pela jornada, por isso os números não mudam a cada refresh.
+
+- **Camada 3 — aprendizagem entre estratégias (`lib/strategylearning.ts`).**
+  Duas coisas diferentes, deliberadamente não misturadas. **Calibração:**
+  compara, por posição, o que o motor previu com os pontos reais, e corrige as
+  previsões futuras dessa posição — encolhido por tamanho de amostra e travado
+  a ±25%. **Torneio:** cinco formas de escolher jogadores (modelo puro,
+  template, diferencial, só calendário, só forma) correm em paralelo todas as
+  semanas, cada uma a montar a mesma forma de equipa (1-3-4-2) para que a
+  comparação seja entre estratégias e não entre posições. Quando há evidência
+  suficiente (≥4 jornadas), a vencedora inclina o `beta` da Camada 2 em no
+  máximo ±0.15 — uma correção sobre a situação da liga, nunca um substituto.
+
+  As previsões guardadas para medição são as do modelo **não calibrado**, de
+  propósito: medir a calibração contra previsões já calibradas mediria a
+  própria correção, convergiria para "sem viés" e desfazia-se sozinha.
+
+- **Remodelação gráfica completa.** Paleta da Premier League (roxo #37003C,
+  verde #00FF87, ciano #04F5FF, magenta #E90052), tipografia mais próxima da
+  PremierSans, cabeçalho fixo com a régua de três cores da PL e uma faixa de
+  decisão com os quatro números que interessam antes de mais nada. O onze
+  passou a ser desenhado **no relvado** em vez de duas tabelas de nomes. Todas
+  as tabelas passam a cartões abaixo dos 640px — a app deixou de ter scroll
+  horizontal em telemóvel, e o `viewport` em falta (que fazia o Safari móvel
+  renderizar a 980px e encolher) foi corrigido.
 
 ## O que já funciona (v1.24)
 
@@ -394,22 +444,17 @@ components/
 
 ## Roadmap (próximas iterações)
 
-1. **Simulação contra os rivais da liga (Camada 2)** — em vez de otimizar
-   só para maximizar os teus pontos esperados, a FPL deixa consultar o
-   plantel de qualquer gestor pelo Team ID — incluindo os da Haal of Fame.
-   A ideia: simular semana a semana o teu resultado provável contra cada
-   rival específico, e recomendar a jogada que maximiza a probabilidade de
-   os ultrapassares ou de manteres distância — não a jogada genericamente
-   "melhor". Se estás atrás, a jogada certa aumenta variância
-   (diferenciais); se estás à frente, reduz variância (template). É a
-   próxima peça a construir.
-2. **Aprendizagem entre estratégias (Camada 3)** — usar a Shadow Team para
-   correr várias estratégias em paralelo (template, diferenciais
-   agressivos, só calendário, só modelo de golos esperados) e, à medida
-   que jornadas reais vão sendo jogadas, medir qual delas está mesmo a
-   funcionar esta época e inclinar a recomendação principal para essa.
-   Só começa a fazer sentido depois de haver resultados reais — a própria
-   época dita esta ordem.
+1. **Planeamento de transferências com hits** — a maior fuga de pontos que
+   ainda existe. Agora que a pontuação está em pontos reais (e não em
+   unidades arbitrárias), um -4 pode finalmente ser comparado com o ganho
+   esperado da transferência: passa a ser uma pergunta aritmética em vez de
+   uma questão de gosto. Precisa também de olhar para a frente mais do que
+   uma jornada, para não pagar um hit por um ganho que se evaporava na
+   jornada seguinte.
+2. **Valor esperado de cada chip** — a deteção de duplas/brancas já existe e
+   o simulador da Camada 2 já sabe produzir distribuições, não só médias.
+   Falta juntá-los: quanto vale, em pontos e em probabilidade de subir na
+   liga, gastar o Bench Boost nesta dupla em vez de esperar pela próxima.
 3. **Login FPL + autopilot de transferências** — o autopilot em si.
    Decidiste avançar com automação total (credenciais guardadas, execução
    automática). Isto usa um fluxo de login não-oficial
@@ -434,8 +479,9 @@ components/
      de uma notificação por email. Se não responderes antes do deadline, a
      app **não faz nada** — a transferência/chip pendente simplesmente não
      se aplica, em vez de agir sozinha sem a tua confirmação.
-   - Ainda falta: construir isto de facto. Fica depois das Camadas 2 e 3
-     acima — é o item de maior risco (credenciais reais), por isso o
+   - Ainda falta: construir isto de facto. As Camadas 2 e 3, que estavam à
+     frente dele nesta lista, ficaram feitas na v1.25 — mas continua a ser o
+     item de maior risco de todo o projeto (credenciais reais), por isso o
      desenho já fechado não significa pressa em escrever o código.
 
 ## Deploy (Vercel, plano gratuito)

@@ -689,13 +689,27 @@ export function pickBestXIChecked(squad: ScoredPlayer[]): {
  * Returns `undefined` for either slot when the XI is too short to fill it,
  * rather than claiming a `ScoredPlayer` that isn't there.
  */
-export function pickCaptain(starters: ScoredPlayer[]): {
+export function pickCaptain(
+  starters: ScoredPlayer[],
+  /**
+   * Variance posture from lib/rivals.ts. The armband is the highest-variance
+   * decision available in a gameweek — it doubles one player's outcome — so
+   * it is exactly where chasing or protecting should show up first. A
+   * manager sixty points behind who captains the same 70%-owned premium as
+   * everybody else has quietly decided not to catch up. `beta = 0` leaves
+   * the choice as pure expected points.
+   */
+  beta = 0
+): {
   captain: ScoredPlayer | undefined;
   viceCaptain: ScoredPlayer | undefined;
 } {
-  const ranked = [...starters].sort(
-    (a, b) => b.expectedPointsNext - a.expectedPointsNext
-  );
+  const value = (p: ScoredPlayer) =>
+    beta
+      ? p.expectedPointsNext *
+        (1 - beta * Math.min(1, Math.max(0, p.ownershipPct / 100)))
+      : p.expectedPointsNext;
+  const ranked = [...starters].sort((a, b) => value(b) - value(a));
   return { captain: ranked[0], viceCaptain: ranked[1] };
 }
 

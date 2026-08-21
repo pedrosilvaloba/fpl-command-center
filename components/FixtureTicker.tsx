@@ -49,7 +49,7 @@ export default function FixtureTicker({
     .sort((a, b) => avgExpectedGoalsFor(b.fixtures) - avgExpectedGoalsFor(a.fixtures));
 
   return (
-    <div className="overflow-x-auto">
+    <div className="scroll-x">
       {!strengthsUsable && marketCoverage === 0 && (
         <div className="mb-4 rounded-lg border border-[color-mix(in_srgb,var(--warn)_40%,var(--border))] bg-[color-mix(in_srgb,var(--warn)_10%,var(--surface))] px-4 py-3 text-sm text-warn">
           <strong>A FPL ainda não publicou as forças das equipas.</strong> Os
@@ -68,7 +68,51 @@ export default function FixtureTicker({
           veres de onde veio o número.
         </div>
       )}
-      <table className="w-full border-collapse text-sm min-w-[680px]">
+      {/* --- phone: one card per team, no sideways scroll ---------------- */}
+      <ul className="flex flex-col gap-2 sm:hidden">
+        {rows.map(({ team, fixtures }) => {
+          const xg = avgExpectedGoalsFor(fixtures);
+          const cs = avgCleanSheetProbability(fixtures);
+          return (
+            <li
+              key={team.id}
+              className="rounded-lg border border-border bg-surface-2 p-3"
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="font-display text-base tracking-wide">
+                  {team.short_name}
+                </span>
+                <span className="flex items-center gap-3 text-xs">
+                  <span
+                    className={`inline-flex items-center rounded px-1.5 py-0.5 font-mono tabular ${attackClasses(xg)}`}
+                  >
+                    {xg.toFixed(2)} xG
+                  </span>
+                  <span className={`font-mono tabular ${defenceClasses(cs)}`}>
+                    {Math.round(cs * 100)}% CS
+                  </span>
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {fixtures.length === 0 && (
+                  <span className="text-xs text-text-muted">sem jogos agendados</span>
+                )}
+                {fixtures.map((f, i) => (
+                  <span
+                    key={i}
+                    className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-mono tabular ${attackClasses(f.expectedGoalsFor)}`}
+                  >
+                    {f.opponentShort}
+                    {f.isHome ? "" : "*"}
+                  </span>
+                ))}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      <table className="hidden w-full border-collapse text-sm sm:table">
         <thead>
           <tr className="text-left text-text-muted uppercase text-xs tracking-wide">
             <th className="py-2 pr-3 font-medium">Equipa</th>

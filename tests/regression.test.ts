@@ -33,7 +33,15 @@ import {
   computePlayerRates,
   expectedPointsForFixture,
 } from "../lib/expectedpoints";
-import { buildOptimalSquad } from "../lib/optimizer";
+import { buildOptimalSquad, strategicValue } from "../lib/optimizer";
+import { simulateLeague, applyLearningTilt, type RivalSquad } from "../lib/rivals";
+import {
+  buildLearningState,
+  applyCalibration,
+  selectForStrategy,
+  STRATEGIES,
+  type StrategyEventResult,
+} from "../lib/strategylearning";
 import { computeSquadRisk, computeTeamExposures } from "../lib/correlation";
 import { computeRankValue, computeSquadRankProfile } from "../lib/rankvalue";
 import {
@@ -1105,7 +1113,438 @@ function testBpsAndSaves() {
   check("jogadores de campo não recebem pontos de defesas", outfield.saves === 0);
 }
 
+// ---------------------------------------------------------------------
+// Camada 2 — simulação contra os rivais reais da liga
+// ---------------------------------------------------------------------
+
+/** A scored player good enough to simulate, with the fields the draw uses. */
+function mkSim(
+  id: number,
+  opts: {
+    teamId?: number;
+    type?: number;
+    own?: number;
+    epNext?: number;
+    price?: number;
+    cs?: number;
+  } = {}
+): ScoredPlayer {
+  const type = opts.type ?? 3;
+  const epNext = opts.epNext ?? 4;
+  const own = opts.own ?? 10;
+  const positions: Record<number, string> = { 1: "GK", 2: "DEF", 3: "MID", 4: "FWD" };
+  return {
+    element: makeElement({
+      id,
+      element_type: type,
+      selected_by_percent: String(own),
+    }),
+    team: makeTeam(opts.teamId ?? 1),
+    positionShort: positions[type],
+    priceM: opts.price ?? 6,
+    ownershipPct: own,
+    formNum: 3,
+    fixtureAvgDifficulty: 3,
+    nextOpponents: "",
+    expectedGoalsFor: 1.5,
+    cleanSheetProbability: opts.cs ?? 0.3,
+    individualExpectedGI: 0.4,
+    ceilingGI: 1,
+    floorGI: 0,
+    expectedPoints: epNext * 5,
+    expectedPointsNext: epNext,
+    breakdown: {
+      appearance: 2 * 5,
+      goals: (epNext - 2) * 0.5 * 5,
+      assists: (epNext - 2) * 0.25 * 5,
+      cleanSheet: type <= 2 ? 1.2 * 5 : 0,
+      concededPenalty: type <= 2 ? -0.4 * 5 : 0,
+      defensiveContribution: 0,
+      bonus: 0.4 * 5,
+      saves: 0,
+      total: epNext * 5,
+    },
+    score: epNext * 5,
+    isDifferential: own < 10,
+    isPreseason: false,
+    reasons: [],
+  } as ScoredPlayer;
+}
+
+function mkSquad(
+  entry: number,
+  rank: number,
+  total: number,
+  ids: number[],
+  isMe = false
+): RivalSquad {
+  return {
+    entry,
+    entryName: `Equipa ${entry}`,
+    playerName: `Gestor ${entry}`,
+    rank,
+    totalPoints: total,
+    xi: ids,
+    captainId: ids[0] ?? null,
+    isMe,
+  };
+}
+
+function testLeagueSimulation() {
+  // Two disjoint but equally strong elevens, plus a third that overlaps mine
+  // almost entirely. Different clubs so the clean-sheet draws are separate.
+  const pool: ScoredPlayer[] = [];
+  for (let i = 1; i <= 33; i++) {
+    pool.push(mkSim(i, { teamId: ((i - 1) % 8) + 1, epNext: 4.5 }));
+  }
+  const mine = Array.from({ length: 11 }, (_, i) => i + 1);
+  const theirs = Array.from({ length: 11 }, (_, i) => i + 12);
+  const twin = [...mine.slice(0, 10), 23];
+
+  const squads = [
+    mkSquad(1, 1, 200, mine, true),
+    mkSquad(2, 2, 198, theirs),
+    mkSquad(3, 3, 195, twin),
+  ];
+  const out = simulateLeague(squads, pool, {
+    currentEvent: 20,
+    squadsFromEvent: 19,
+    runs: 3000,
+  });
+
+  check("a simulação corre com plantéis reais", out.available && out.me !== null);
+  check(
+    "todas as probabilidades ficam entre 0 e 1",
+    out.rivals.every(
+      (r) =>
+        r.pWinGameweek >= 0 &&
+        r.pWinGameweek <= 1 &&
+        r.pAheadAtSeasonEnd >= 0 &&
+        r.pAheadAtSeasonEnd <= 1
+    )
+  );
+
+  const disjoint = out.rivals.find((r) => r.entry === 2)!;
+  const overlapping = out.rivals.find((r) => r.entry === 3)!;
+  check(
+    "sobreposição de plantéis é contada corretamente",
+    disjoint.overlap === 0 && overlapping.overlap === 10,
+    `disjunto ${disjoint.overlap}, quase-igual ${overlapping.overlap}`
+  );
+  // The whole point of drawing per player rather than per manager: a rival
+  // who owns ten of my eleven must move with me, so the spread of the
+  // difference between us is far smaller than against a disjoint squad.
+  check(
+    "quem partilha o plantel comigo tem resultado muito mais colado ao meu",
+    Math.abs(overlapping.pWinGameweek - 0.5) > Math.abs(disjoint.pWinGameweek - 0.5),
+    `sobreposto ${overlapping.pWinGameweek} vs disjunto ${disjoint.pWinGameweek}`
+  );
+  check(
+    "onzes equivalentes e independentes dão perto de uma moeda ao ar",
+    Math.abs(disjoint.pWinGameweek - 0.5) < 0.12,
+    `${disjoint.pWinGameweek}`
+  );
+
+  // Determinism: the same gameweek must always produce the same numbers, or
+  // the panel jitters on every refresh and nobody trusts it.
+  const again = simulateLeague(squads, pool, {
+    currentEvent: 20,
+    squadsFromEvent: 19,
+    runs: 3000,
+  });
+  check(
+    "a simulação é determinística dentro da mesma jornada",
+    JSON.stringify(again.rivals) === JSON.stringify(out.rivals)
+  );
+}
+
+function testPostureFollowsLeaguePosition() {
+  const pool: ScoredPlayer[] = [];
+  for (let i = 1; i <= 33; i++) {
+    pool.push(mkSim(i, { teamId: ((i - 1) % 8) + 1, epNext: 4.5 }));
+  }
+  const mine = Array.from({ length: 11 }, (_, i) => i + 1);
+  const theirs = Array.from({ length: 11 }, (_, i) => i + 12);
+
+  const behind = simulateLeague(
+    [mkSquad(1, 2, 900, mine, true), mkSquad(2, 1, 1100, theirs)],
+    pool,
+    { currentEvent: 34, squadsFromEvent: 33, runs: 2000 }
+  );
+  const ahead = simulateLeague(
+    [mkSquad(1, 1, 1100, mine, true), mkSquad(2, 2, 900, theirs)],
+    pool,
+    { currentEvent: 34, squadsFromEvent: 33, runs: 2000 }
+  );
+  const level = simulateLeague(
+    [mkSquad(1, 1, 1000, mine, true), mkSquad(2, 2, 999, theirs)],
+    pool,
+    { currentEvent: 34, squadsFromEvent: 33, runs: 2000 }
+  );
+
+  check(
+    "muito atrás com pouco tempo -> o modelo procura variância (beta positivo)",
+    behind.posture.beta > 0.25 && behind.posture.label === "atacar",
+    `beta ${behind.posture.beta}`
+  );
+  check(
+    "muito à frente -> o modelo suprime variância (beta negativo)",
+    ahead.posture.beta < -0.25 && ahead.posture.label === "proteger",
+    `beta ${ahead.posture.beta}`
+  );
+  check(
+    "corrida equilibrada -> sem inclinação artificial",
+    Math.abs(level.posture.beta) < 0.25 && level.posture.label === "equilibrar",
+    `beta ${level.posture.beta}`
+  );
+  check(
+    "beta nunca sai do intervalo em que o valor estratégico é positivo",
+    [behind, ahead, level].every(
+      (o) => o.posture.beta >= -0.6 && o.posture.beta <= 0.9
+    )
+  );
+
+  // The tilt from Camada 3 rides on top, but can never push beta out of range.
+  const tilted = applyLearningTilt(behind.posture, 0.5, "motivo");
+  check(
+    "a inclinação da Camada 3 nunca empurra beta para fora do intervalo",
+    tilted.beta <= 0.9 && tilted.beta >= -0.6,
+    `${tilted.beta}`
+  );
+}
+
+function testPostureChangesTheSquad() {
+  // Three tiers at the SAME price, so budget cannot be what decides:
+  //   template  — most-owned, slightly worse
+  //   consensus — mid-owned, the best on pure expected points
+  //   punt      — barely owned, almost as good
+  // On expected points alone the middle tier wins outright. A model that
+  // ignores the league situation would therefore pick it in every scenario,
+  // which is exactly the blindness Camada 2 exists to remove.
+  const pool: ScoredPlayer[] = [];
+  let id = 1;
+  let club = 0;
+  for (const type of [1, 2, 3, 4]) {
+    for (const tier of [
+      { own: 60, epNext: 4.8 },
+      { own: 25, epNext: 5.0 },
+      { own: 3, epNext: 4.9 },
+    ]) {
+      for (let i = 0; i < 8; i++) {
+        pool.push(
+          mkSim(id++, {
+            teamId: (club++ % 20) + 1,
+            type,
+            own: tier.own,
+            epNext: tier.epNext,
+            price: 5.5,
+          })
+        );
+      }
+    }
+  }
+
+  const neutral = buildOptimalSquad(pool, 100, 0);
+  const chasing = buildOptimalSquad(pool, 100, 0.9);
+  const protecting = buildOptimalSquad(pool, 100, -0.6);
+
+  const avgOwn = (squad: ScoredPlayer[]) =>
+    squad.reduce((s, p) => s + p.ownershipPct, 0) / Math.max(1, squad.length);
+
+  check(
+    "a postura muda mesmo o onze — não é um painel decorativo",
+    JSON.stringify(chasing.starters.map((p) => p.element.id).sort()) !==
+      JSON.stringify(neutral.starters.map((p) => p.element.id).sort())
+  );
+  check(
+    "a perseguir, o onze tem menos posse média do que o neutro",
+    avgOwn(chasing.starters) < avgOwn(neutral.starters),
+    `perseguir ${avgOwn(chasing.starters).toFixed(1)}% vs neutro ${avgOwn(neutral.starters).toFixed(1)}%`
+  );
+  check(
+    "a proteger, o onze tem mais posse média do que o neutro",
+    avgOwn(protecting.starters) > avgOwn(neutral.starters),
+    `proteger ${avgOwn(protecting.starters).toFixed(1)}% vs neutro ${avgOwn(neutral.starters).toFixed(1)}%`
+  );
+  check(
+    "o valor estratégico nunca fica negativo em todo o intervalo de beta",
+    pool.every((p) =>
+      [-0.6, -0.3, 0, 0.45, 0.9].every((b) => strategicValue(p, b) > 0)
+    )
+  );
+  check(
+    "as três posturas produzem sempre plantéis legais de 15",
+    [neutral, chasing, protecting].every((r) => r.squad.length === 15 && r.feasible)
+  );
+}
+
+// ---------------------------------------------------------------------
+// Camada 3 — calibração e torneio de estratégias
+// ---------------------------------------------------------------------
+
+function mkResult(
+  event: number,
+  perStrategy: Record<string, number>,
+  calibration: { positionShort: string; predicted: number; actual: number }[] = []
+): StrategyEventResult {
+  return {
+    event,
+    settledAt: new Date(2026, 0, event).toISOString(),
+    perStrategy: Object.entries(perStrategy).map(([key, totalPoints]) => ({
+      key,
+      totalPoints,
+      picks: 10,
+      meanPoints: totalPoints / 10,
+    })),
+    calibration: calibration.map((c) => ({ ...c, samples: 10 })),
+  };
+}
+
+function testStrategyTournament() {
+  const shape = selectForStrategy(
+    STRATEGIES[0],
+    Array.from({ length: 60 }, (_, i) =>
+      mkSim(i + 1, { type: (i % 4) + 1, epNext: 3 + (i % 7) })
+    )
+  );
+  const counts_ = shape.reduce<Record<string, number>>((acc, p) => {
+    acc[p.positionShort] = (acc[p.positionShort] ?? 0) + 1;
+    return acc;
+  }, {});
+  check(
+    "todas as estratégias montam a MESMA forma de equipa (comparação justa)",
+    counts_.GK === 1 && counts_.DEF === 3 && counts_.MID === 4 && counts_.FWD === 2,
+    JSON.stringify(counts_)
+  );
+
+  // Six gameweeks where differentials clearly beat template.
+  const diffWins = Array.from({ length: 6 }, (_, i) =>
+    mkResult(i + 1, { modelo: 50, template: 40, diferencial: 62, calendario: 45, forma: 38 })
+  );
+  const state = buildLearningState(diffWins);
+  check(
+    "o torneio ordena as estratégias pelo que realmente pontuaram",
+    state.standings[0].key === "diferencial",
+    state.standings.map((s) => s.key).join(" > ")
+  );
+  check(
+    "a diferença face ao modelo puro é reportada com sinal",
+    state.standings.find((s) => s.key === "template")!.liftVsModel < 0 &&
+      state.standings.find((s) => s.key === "diferencial")!.liftVsModel > 0
+  );
+  check(
+    "quando os diferenciais estão a pagar, a postura é inclinada nesse sentido",
+    state.postureTilt > 0 && state.postureTiltReason !== null,
+    `tilt ${state.postureTilt}`
+  );
+  check(
+    "a inclinação do torneio está limitada a +-0.15",
+    Math.abs(state.postureTilt) <= 0.15,
+    `${state.postureTilt}`
+  );
+
+  // The mirror case must move the other way.
+  const tmplWins = Array.from({ length: 6 }, (_, i) =>
+    mkResult(i + 1, { modelo: 50, template: 62, diferencial: 40, calendario: 45, forma: 38 })
+  );
+  check(
+    "quando é o template a pagar, a inclinação vai ao contrário",
+    buildLearningState(tmplWins).postureTilt < 0
+  );
+
+  // Below the evidence threshold nothing may move at all.
+  const tooEarly = buildLearningState(diffWins.slice(0, 2));
+  check(
+    "com poucas jornadas o torneio não mexe na postura",
+    tooEarly.postureTilt === 0,
+    `${tooEarly.postureTilt}`
+  );
+
+  // A strategy whose picks all blanked has meanPoints 0 — recovering the
+  // pick count by dividing total by mean would have divided by zero here.
+  const withZero = buildLearningState([
+    mkResult(1, { modelo: 0, template: 20, diferencial: 10, calendario: 5, forma: 5 }),
+  ]);
+  check(
+    "uma estratégia que zerou não parte a agregação",
+    withZero.standings.every((s) => Number.isFinite(s.meanPoints))
+  );
+}
+
+function testCalibrationLearning() {
+  // Defenders consistently over-predicted, midfielders about right.
+  const results = Array.from({ length: 8 }, (_, i) =>
+    mkResult(
+      i + 1,
+      { modelo: 50, template: 48, diferencial: 47, calendario: 45, forma: 44 },
+      [
+        { positionShort: "DEF", predicted: 40, actual: 28 },
+        { positionShort: "MID", predicted: 50, actual: 50 },
+      ]
+    )
+  );
+  const state = buildLearningState(results);
+
+  check(
+    "uma posição sistematicamente sobrestimada é corrigida para baixo",
+    state.calibration.DEF < 1 && state.calibration.DEF >= 0.75,
+    `DEF ${state.calibration.DEF}`
+  );
+  check(
+    "uma posição sem viés fica praticamente intocada",
+    Math.abs(state.calibration.MID - 1) < 0.02,
+    `MID ${state.calibration.MID}`
+  );
+  check(
+    "a correção é explicada em texto, não aplicada em silêncio",
+    state.calibrationNotes.some((n) => n.startsWith("DEF"))
+  );
+
+  // An absurd single gameweek must not be allowed to move the model far.
+  const wild = buildLearningState([
+    mkResult(1, { modelo: 50 }, [{ positionShort: "FWD", predicted: 40, actual: 400 }]),
+  ]);
+  check(
+    "um resultado absurdo é encolhido pela amostra e travado pelo teto",
+    wild.calibration.FWD <= 1.25,
+    `${wild.calibration.FWD}`
+  );
+  check(
+    "com uma só jornada a correção é muito menor do que o desvio bruto",
+    wild.calibration.FWD < 1.26 && wild.calibration.FWD > 1,
+    `${wild.calibration.FWD}`
+  );
+
+  // And the correction must actually reach the players.
+  const players = [mkSim(1, { type: 2, epNext: 4 }), mkSim(2, { type: 3, epNext: 4 })];
+  const calibrated = applyCalibration(players, { DEF: 0.8 });
+  const def = calibrated.find((p) => p.positionShort === "DEF")!;
+  const mid = calibrated.find((p) => p.positionShort === "MID")!;
+  check(
+    "a calibração aprendida é mesmo aplicada aos pontos esperados",
+    Math.abs(def.expectedPointsNext - 3.2) < 0.01 && mid.expectedPointsNext === 4,
+    `DEF ${def.expectedPointsNext}, MID ${mid.expectedPointsNext}`
+  );
+  check(
+    "o score continua alinhado com os pontos esperados depois de calibrar",
+    def.score === def.expectedPoints
+  );
+  check(
+    "e aparece nas razões do jogador, não em silêncio",
+    def.reasons.some((r) => r.includes("calibração aprendida"))
+  );
+  check(
+    "sem calibração conhecida, os jogadores passam intactos",
+    applyCalibration(players, {})[0] === players[0]
+  );
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
+testLeagueSimulation();
+testPostureFollowsLeaguePosition();
+testPostureChangesTheSquad();
+testStrategyTournament();
+testCalibrationLearning();
 testDefenceInversion();
 testMissingTeamStrengths();
 testMarketInversion();

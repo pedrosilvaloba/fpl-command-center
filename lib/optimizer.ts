@@ -62,15 +62,40 @@ const BENCH_WEIGHT = 0.12;
 const FREE_DEFENSIVE_STACK = 2; // up to two is not penalised at all
 const STACK_PENALTY_POINTS = 1.5; // charged per starter beyond that
 
+/**
+ * The strategic value of a player, given a variance posture.
+ *
+ * `beta` comes from lib/rivals.ts — the Monte Carlo simulation against the
+ * real managers in the league — and is the single place where "am I chasing
+ * or defending?" enters the optimizer:
+ *
+ *   beta > 0  chase.   Widely-owned players are discounted, because points
+ *                      your rivals also score do not close a gap.
+ *   beta = 0  neutral. Pure expected points.
+ *   beta < 0  protect. Widely-owned players are PREFERRED, because moving
+ *                      with the field is how a lead survives a bad week.
+ *
+ * The factor stays strictly positive for every value beta can take
+ * (-0.6 to +0.9 after clamping), so no player is ever assigned a negative
+ * value and pushed out of contention by arithmetic rather than by merit.
+ */
+export function strategicValue(p: ScoredPlayer, beta: number): number {
+  if (!beta) return p.expectedPoints;
+  const ownershipShare = Math.min(1, Math.max(0, p.ownershipPct / 100));
+  return p.expectedPoints * (1 - beta * ownershipShare);
+}
+
 export interface OptimalSquadResult {
   squad: ScoredPlayer[];
   starters: ScoredPlayer[];
   totalCost: number;
   feasible: boolean;
   method: "otimizador" | "heurística (otimizador indisponível)";
+  /** The posture the squad was actually built under. */
+  beta: number;
 }
 
-function buildCandidatePool(scored: ScoredPlayer[]): ScoredPlayer[] {
+function buildCandidatePool(scored: ScoredPlayer[], beta: number): ScoredPlayer[] {
   const pool = new Map<number, ScoredPlayer>();
   for (const posId of [1, 2, 3, 4]) {
     const inPos = scored.filter((p) => p.element.element_type === posId);
@@ -80,7 +105,17 @@ function buildCandidatePool(scored: ScoredPlayer[]): ScoredPlayer[] {
     const byPrice = [...inPos]
       .sort((a, b) => a.priceM - b.priceM)
       .slice(0, CHEAPEST_ENABLERS_PER_POSITION);
-    for (const p of [...byScore, ...byPrice]) pool.set(p.element.id, p);
+    // With a non-zero posture the objective is no longer expected points, so
+    // a pool built only on expected points would quietly exclude exactly the
+    // players the posture exists to find — a low-owned differential when
+    // chasing, or a template premium when protecting. The pool is therefore
+    // the union of both rankings, never one at the expense of the other.
+    const byStrategic = beta
+      ? [...inPos]
+          .sort((a, b) => strategicValue(b, beta) - strategicValue(a, beta))
+          .slice(0, TOP_BY_SCORE_PER_POSITION)
+      : [];
+    for (const p of [...byScore, ...byStrategic, ...byPrice]) pool.set(p.element.id, p);
   }
   return [...pool.values()];
 }
@@ -100,10 +135,11 @@ function buildCandidatePool(scored: ScoredPlayer[]): ScoredPlayer[] {
  */
 export function buildOptimalSquad(
   scored: ScoredPlayer[],
-  budgetM = 100
+  budgetM = 100,
+  beta = 0
 ): OptimalSquadResult {
   try {
-    const pool = buildCandidatePool(scored);
+    const pool = buildCandidatePool(scored, beta);
     const clubIds = Array.from(new Set(pool.map((p) => p.team.id)));
 
     // Two binary decisions per player:
@@ -141,8 +177,9 @@ export function buildOptimalSquad(
 
       // Squad membership carries only the bench share of the player's
       // value; being picked for the eleven adds the rest.
+      const value = strategicValue(p, beta);
       variables[squadVar] = {
-        score: p.expectedPoints * BENCH_WEIGHT,
+        score: value * BENCH_WEIGHT,
         cost: p.priceM,
         [POS_KEY[p.element.element_type]]: 1,
         [`club_${p.team.id}`]: 1,
@@ -151,7 +188,7 @@ export function buildOptimalSquad(
       const isCleanSheetDependent =
         p.element.element_type === 1 || p.element.element_type === 2;
       variables[xiVar] = {
-        score: p.expectedPoints * (1 - BENCH_WEIGHT),
+        score: value * (1 - BENCH_WEIGHT),
         xi: 1,
         [`xi_${POS_KEY[p.element.element_type]}`]: 1,
         [`link_${p.element.id}`]: 1,
@@ -218,6 +255,7 @@ export function buildOptimalSquad(
       totalCost,
       feasible: true,
       method: "otimizador",
+      beta,
     };
   } catch {
     // The fallback heuristic can genuinely fail to fill a squad when the
@@ -232,6 +270,7 @@ export function buildOptimalSquad(
       totalCost: fallback.totalCost,
       feasible: isValidSquad(fallback.squad, budgetM),
       method: "heurística (otimizador indisponível)",
+      beta,
     };
   }
 }

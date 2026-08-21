@@ -1,74 +1,146 @@
 @import "tailwindcss";
 
-/* ---- Design tokens ------------------------------------------------- */
-/* Palette grounded in the pitch + scoreboard, not the FPL brand purple:
-   a deep, sophisticated green as the working accent, a muted armband-gold
-   for captaincy/premium highlights, and separate semantic colors for
-   fixture difficulty so they never collide with the accent hue. */
+/* ==========================================================================
+   FPL Command Center — design tokens
+   ==========================================================================
+   The palette is the Premier League's own, not an invented one:
+
+     Purple  #37003C   the PL/FPL primary. Headers, chrome, dark surfaces.
+     Green   #00FF87   the FPL accent. Positive numbers, captaincy, CTAs.
+     Cyan    #04F5FF   the secondary accent. Differentials, "special" states.
+     Pink    #E90052   the PL alert colour. Danger, injuries, falling prices.
+
+   Two practical constraints shape how they are used:
+
+   1. #00FF87 and #04F5FF are electric. They are legible as TEXT only on a
+      dark ground, and as BACKGROUND only with dark text on top. So each has
+      two tokens: the vivid brand value for surfaces/chips, and a darkened
+      variant that passes contrast as text on white. Never use the vivid one
+      for body text in light mode.
+
+   2. The page must work in both themes without either looking like an
+      afterthought. Light mode is a white-card layout on a faintly
+      purple-tinted grey; dark mode is the same layout on deep aubergine.
+      Every colour is defined on bare :root first, then overridden — so no
+      token exists only inside a media query.
+   ========================================================================== */
 
 :root {
-  --bg: #f5f7f3;
+  /* Brand constants — identical in both themes. They ARE the brand. */
+  --brand: #37003c;
+  --brand-2: #22002a;
+  --brand-green: #00ff87;
+  --brand-cyan: #04f5ff;
+  --brand-pink: #e90052;
+
+  /* Light theme */
+  --bg: #f3f0f5;
   --surface: #ffffff;
-  --surface-2: #eaf0e7;
-  --border: #d7e0d4;
-  --text: #10241c;
-  --text-muted: #4b5a52;
+  --surface-2: #f7f4f9;
+  --surface-3: #efe9f2;
+  --border: #e3dae8;
+  --border-strong: #cfc0d6;
+  --text: #1f0026;
+  --text-muted: #6a5872;
+  --text-on-brand: #ffffff;
 
-  --accent: #1e8a4c;
-  --accent-contrast: #ffffff;
-  --gold: #a06a1e;
-  --danger: #a83a34;
-  --warn: #a3701a;
-  --success: #1e8a4c;
+  --accent: #00875a; /* readable green for text on light surfaces */
+  --accent-vivid: #00ff87; /* brand green, for chips/fills only */
+  --accent-contrast: #14002a; /* text placed ON accent-vivid */
+  --cyan: #067a8c;
+  --cyan-vivid: #04f5ff;
+  --gold: #9a6b00;
+  --danger: #c8004a;
+  --warn: #a35d00;
+  --success: #00875a;
 
-  --font-display: "Oswald", "Arial Narrow", sans-serif;
-  --font-body: "Public Sans", ui-sans-serif, system-ui, sans-serif;
+  /* Pitch (see components/PitchView.tsx) */
+  --pitch-1: #0b6b3a;
+  --pitch-2: #0f8547;
+  --pitch-line: rgba(255, 255, 255, 0.32);
+
+  --font-display: "Archivo", "Oswald", "Arial Narrow", sans-serif;
+  --font-body: "Barlow", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  --shadow-card: 0 1px 2px rgba(31, 0, 38, 0.06), 0 4px 16px rgba(31, 0, 38, 0.05);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0e1512;
-    --surface: #16201b;
-    --surface-2: #1e2b23;
-    --border: #2a3a31;
-    --text: #eaf2ec;
-    --text-muted: #9fb3a6;
+    --bg: #150019;
+    --surface: #230a2a;
+    --surface-2: #2c0f34;
+    --surface-3: #371542;
+    --border: #3d1c47;
+    --border-strong: #552b62;
+    --text: #f7f0f9;
+    --text-muted: #b79fc1;
+    --text-on-brand: #ffffff;
 
-    --accent: #3fbe73;
-    --accent-contrast: #06120c;
-    --gold: #e0b25a;
-    --danger: #e2685f;
-    --warn: #e0a23f;
-    --success: #3fbe73;
+    --accent: #00ff87;
+    --accent-vivid: #00ff87;
+    --accent-contrast: #14002a;
+    --cyan: #04f5ff;
+    --cyan-vivid: #04f5ff;
+    --gold: #f0b429;
+    --danger: #ff4d84;
+    --warn: #ffb454;
+    --success: #00ff87;
+
+    --pitch-1: #08512c;
+    --pitch-2: #0b6b3a;
+    --pitch-line: rgba(255, 255, 255, 0.24);
+
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.28);
   }
 }
 
 :root[data-theme="dark"] {
-  --bg: #0e1512;
-  --surface: #16201b;
-  --surface-2: #1e2b23;
-  --border: #2a3a31;
-  --text: #eaf2ec;
-  --text-muted: #9fb3a6;
+  --bg: #150019;
+  --surface: #230a2a;
+  --surface-2: #2c0f34;
+  --surface-3: #371542;
+  --border: #3d1c47;
+  --border-strong: #552b62;
+  --text: #f7f0f9;
+  --text-muted: #b79fc1;
+  --text-on-brand: #ffffff;
 
-  --accent: #3fbe73;
-  --accent-contrast: #06120c;
-  --gold: #e0b25a;
-  --danger: #e2685f;
-  --warn: #e0a23f;
-  --success: #3fbe73;
+  --accent: #00ff87;
+  --accent-vivid: #00ff87;
+  --accent-contrast: #14002a;
+  --cyan: #04f5ff;
+  --cyan-vivid: #04f5ff;
+  --gold: #f0b429;
+  --danger: #ff4d84;
+  --warn: #ffb454;
+  --success: #00ff87;
+
+  --pitch-1: #08512c;
+  --pitch-2: #0b6b3a;
+  --pitch-line: rgba(255, 255, 255, 0.24);
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.28);
 }
 
 @theme inline {
   --color-bg: var(--bg);
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-text: var(--text);
   --color-text-muted: var(--text-muted);
+  --color-text-on-brand: var(--text-on-brand);
+  --color-brand: var(--brand);
+  --color-brand-2: var(--brand-2);
   --color-accent: var(--accent);
+  --color-accent-vivid: var(--accent-vivid);
   --color-accent-contrast: var(--accent-contrast);
+  --color-cyan: var(--cyan);
+  --color-cyan-vivid: var(--cyan-vivid);
   --color-gold: var(--gold);
   --color-danger: var(--danger);
   --color-warn: var(--warn);
@@ -80,16 +152,22 @@
 
 html {
   color-scheme: light dark;
+  /* Anchor links land under the sticky header rather than behind it. */
+  scroll-behavior: smooth;
 }
 
 body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-body);
+  /* iOS Safari: stop the page from bouncing horizontally when a table
+     inside a scroll container is dragged. */
+  overflow-x: hidden;
 }
 
 .font-display {
   font-family: var(--font-display);
+  letter-spacing: -0.01em;
 }
 
 .font-mono {
@@ -102,6 +180,77 @@ body {
 }
 
 ::selection {
-  background: var(--accent);
+  background: var(--brand-green);
   color: var(--accent-contrast);
+}
+
+/* --- Brand chrome --------------------------------------------------- */
+
+.brand-bar {
+  background: linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%);
+  color: var(--text-on-brand);
+}
+
+/* The three-stripe rule under the header — the PL's own device. */
+.brand-rule {
+  height: 3px;
+  background: linear-gradient(
+    90deg,
+    var(--brand-green) 0%,
+    var(--brand-green) 33.33%,
+    var(--brand-cyan) 33.33%,
+    var(--brand-cyan) 66.66%,
+    var(--brand-pink) 66.66%,
+    var(--brand-pink) 100%
+  );
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-card);
+}
+
+/* Horizontal pill navigation. Scrolls on narrow screens instead of
+   wrapping into a five-line block of links. */
+.pill-scroller {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+}
+
+.pill-scroller::-webkit-scrollbar {
+  display: none;
+}
+
+.pill {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+  padding: 0.4rem 0.8rem;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.pill:hover,
+.pill:focus-visible {
+  color: var(--brand);
+  background: var(--brand-green);
+  border-color: var(--brand-green);
+}
+
+/* Any wide block (table, ticker) scrolls inside itself. The page body
+   never scrolls sideways. */
+.scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
