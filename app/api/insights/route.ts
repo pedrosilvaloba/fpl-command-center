@@ -5,6 +5,8 @@ import {
   saveDynamicInsights,
   deleteDynamicInsight,
   resolveInsightTarget,
+  recordResearchRun,
+  getLastResearchRun,
   type NewInsightInput,
   type RejectedInsight,
 } from "@/lib/managerinsights";
@@ -29,8 +31,14 @@ function isAuthorized(req: NextRequest): boolean {
 }
 
 export async function GET() {
-  const insights = await loadActiveInsights();
-  return NextResponse.json({ insights });
+  // `lastRun` is what makes it possible to tell "the research ran and
+  // found nothing" apart from "the research never ran" — see
+  // ResearchRun in lib/managerinsights.ts.
+  const [insights, lastRun] = await Promise.all([
+    loadActiveInsights(),
+    getLastResearchRun(),
+  ]);
+  return NextResponse.json({ insights, lastRun });
 }
 
 export async function POST(req: NextRequest) {
@@ -40,11 +48,30 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => null);
   const rawInputs = body?.insights;
-  if (!Array.isArray(rawInputs) || rawInputs.length === 0) {
+  const note = typeof body?.note === "string" ? body.note.slice(0, 1000) : null;
+
+  if (!Array.isArray(rawInputs)) {
     return NextResponse.json(
-      { error: "corpo inválido — esperado { insights: [...] } com pelo menos 1 entrada" },
+      { error: "corpo inválido — esperado { insights: [...] }" },
       { status: 400 }
     );
+  }
+
+  // An EMPTY array is a legitimate, informative outcome: the research ran
+  // and honestly concluded there was nothing solid enough to submit. That
+  // used to be a 400, which pushed the research toward either inventing
+  // weak findings or leaving no trace at all — and "no trace" is
+  // indistinguishable from "never ran".
+  if (rawInputs.length === 0) {
+    await recordResearchRun({
+      at: new Date().toISOString(),
+      acceptedCount: 0,
+      rejectedCount: 0,
+      acceptedLabels: [],
+      rejectedReasons: [],
+      note: note ?? "A investigação correu e não encontrou nada suficientemente sustentado para submeter.",
+    });
+    return NextResponse.json({ accepted: [], rejected: [], acceptedCount: 0, rejectedCount: 0, recorded: true });
   }
   if (rawInputs.length > 20) {
     return NextResponse.json(
@@ -118,11 +145,22 @@ export async function POST(req: NextRequest) {
   if (!result.ok) {
     return NextResponse.json({ error: result.error ?? "falha desconhecida", rejected }, { status: 502 });
   }
+  const allRejected = [...rejected, ...result.rejected];
+  await recordResearchRun({
+    at: new Date().toISOString(),
+    acceptedCount: result.accepted.length,
+    rejectedCount: allRejected.length,
+    acceptedLabels: result.accepted.map((a) => a.label),
+    rejectedReasons: allRejected.map((r) => `${r.input.label}: ${r.reason}`),
+    note,
+  });
+
   return NextResponse.json({
     accepted: result.accepted,
-    rejected: [...rejected, ...result.rejected],
+    rejected: allRejected,
     acceptedCount: result.accepted.length,
-    rejectedCount: rejected.length + result.rejected.length,
+    rejectedCount: allRejected.length,
+    recorded: true,
   });
 }
 

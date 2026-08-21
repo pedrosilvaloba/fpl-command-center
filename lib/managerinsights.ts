@@ -103,6 +103,7 @@ export function formatInsightReason(insight: ManagerInsight): string {
   return `${insight.reason} (${tag}, ${insight.addedDate})`;
 }
 
+const RESEARCH_RUN_KEY = "fpl-command-center:insights:lastrun";
 const DYNAMIC_INDEX_KEY = "fpl-command-center:insights:dynamic:index";
 const DYNAMIC_ENTRY_KEY = (key: string) => `fpl-command-center:insights:dynamic:entry:${key}`;
 
@@ -420,5 +421,51 @@ export async function deleteDynamicInsight(key: string): Promise<{ ok: boolean; 
     return { ok: true };
   } catch {
     return { ok: false, error: "Falha a apagar no Redis." };
+  }
+}
+
+
+/**
+ * A record of the most recent weekly-research run.
+ *
+ * The research runs in a separate, unattended session and reports back by
+ * push notification and email. Twice in a row those notifications never
+ * arrived, and there was no way to tell from the outside whether the run
+ * had failed, succeeded silently, or never started at all — the only
+ * observable state was "no notes", which is equally consistent with "the
+ * research found nothing worth submitting" and "the research never ran".
+ *
+ * Making the run leave a trace in the app itself removes that ambiguity
+ * permanently, and does not depend on any notification channel working.
+ */
+export interface ResearchRun {
+  at: string; // ISO timestamp
+  acceptedCount: number;
+  rejectedCount: number;
+  acceptedLabels: string[];
+  rejectedReasons: string[];
+  /** Free-text note from the research session — used above all to record
+   * "I searched and found nothing solid enough to submit", which is a
+   * legitimate and informative outcome, not a failure. */
+  note: string | null;
+}
+
+export async function recordResearchRun(run: ResearchRun): Promise<void> {
+  const redis = getRedis();
+  if (!redis) return;
+  try {
+    await redis.set(RESEARCH_RUN_KEY, run);
+  } catch {
+    // Best-effort: never let bookkeeping fail the actual submission.
+  }
+}
+
+export async function getLastResearchRun(): Promise<ResearchRun | null> {
+  const redis = getRedis();
+  if (!redis) return null;
+  try {
+    return (await redis.get<ResearchRun>(RESEARCH_RUN_KEY)) ?? null;
+  } catch {
+    return null;
   }
 }

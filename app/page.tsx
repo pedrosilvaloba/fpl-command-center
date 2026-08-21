@@ -19,7 +19,7 @@ import {
   recordOutcomesForFinishedEvents,
   getAccuracyHistory,
 } from "@/lib/accuracy";
-import { loadActiveInsights } from "@/lib/managerinsights";
+import { loadActiveInsights, getLastResearchRun } from "@/lib/managerinsights";
 import { isStorageConfigured } from "@/lib/kv";
 import { PLAYBOOK, RULES_2026_27 } from "@/lib/strategy";
 import { DEFAULT_TEAM_ID, DEFAULT_LEAGUE_ID } from "@/lib/constants";
@@ -107,6 +107,11 @@ export default async function Home() {
   // tactical-research layer spent weeks looking functional while being
   // structurally unable to save anything.
   const storageConfigured = isStorageConfigured();
+  // When the weekly research last ran, and what it did. Without this the
+  // only observable state was "no notes", which is equally consistent with
+  // "found nothing" and "never ran" — and the notification channel that was
+  // supposed to tell us apart proved unreliable.
+  const lastResearchRun = await getLastResearchRun();
 
   const currentEventForPicks = bootstrap.events.find((e) => e.is_current);
   const picksEvent = currentEventForPicks?.id ?? Math.max(1, fromEvent - 1);
@@ -699,6 +704,33 @@ export default async function Home() {
             </p>
           ) : activeInsights.length === 0 ? (
             <p className="text-sm text-text-muted">
+              {lastResearchRun ? (
+                <>
+                  <strong className="text-text">
+                    Nenhuma nota ativa. A investigação correu em{" "}
+                    {new Date(lastResearchRun.at).toLocaleString("pt-PT", {
+                      timeZone: "Europe/Lisbon",
+                      dateStyle: "short",
+                      timeStyle: "short",
+                    })}
+                    .
+                  </strong>{" "}
+                  {lastResearchRun.note ??
+                    `${lastResearchRun.acceptedCount} aceites, ${lastResearchRun.rejectedCount} rejeitadas.`}{" "}
+                  {lastResearchRun.rejectedReasons.length > 0 && (
+                    <>Rejeitadas: {lastResearchRun.rejectedReasons.join(" · ")}.</>
+                  )}{" "}
+                </>
+              ) : (
+                <>
+                  <strong className="text-text">
+                    A investigação semanal ainda nunca registou uma execução
+                    aqui.
+                  </strong>{" "}
+                  Se já devia ter corrido, é sinal de que falhou antes de
+                  chegar a escrever — e não de que não encontrou nada.{" "}
+                </>
+              )}
               Nenhuma nota ativa neste momento. Esta secção mostra ajustes
               qualitativos que nenhum dado da FPL ou das odds consegue captar
               sozinho — por exemplo, um treinador que substitui sistematicamente
@@ -714,6 +746,18 @@ export default async function Home() {
             </p>
           ) : (
             <div className="overflow-x-auto">
+              {lastResearchRun && (
+                <p className="text-xs text-text-muted mb-3">
+                  Última investigação:{" "}
+                  {new Date(lastResearchRun.at).toLocaleString("pt-PT", {
+                    timeZone: "Europe/Lisbon",
+                    dateStyle: "short",
+                    timeStyle: "short",
+                  })}{" "}
+                  · {lastResearchRun.acceptedCount} aceites ·{" "}
+                  {lastResearchRun.rejectedCount} rejeitadas
+                </p>
+              )}
               <table className="w-full border-collapse text-sm min-w-[600px]">
                 <thead>
                   <tr className="text-left text-text-muted uppercase text-xs tracking-wide">
