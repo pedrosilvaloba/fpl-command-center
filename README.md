@@ -42,7 +42,8 @@ lib/
   matchmodel.ts   Modelo de golos esperados por equipa/jogo (Poisson) e clean sheets
   oddsapi.ts      Cliente da The Odds API — probabilidades de mercado (opcional)
   schedule.ts     Deteção de jornadas duplas e em branco por equipa
-  playerthreat.ts Ameaça de golo/assistência individual, fiabilidade de utilização, bolas paradas, contribuição defensiva
+  playerthreat.ts Ameaça de golo/assistência individual, fiabilidade de utilização (incl. padrão de substituição cedo), bolas paradas, contribuição defensiva
+  managerinsights.ts Tabela editorial de ajustes qualitativos/táticos (padrões de gestão, identidade de equipa) — alimentada pela investigação semanal, revista manualmente
   teamrating.ts   Rating de equipa dinâmico (Elo + taxa de golos), calibrado com os resultados reais desta época
   accuracy.ts     Compara previsões do modelo com pontos reais, jornada a jornada (opcional, precisa de Redis)
   optimizer.ts    Otimizador real (programação linear) da equipa sugerida
@@ -58,7 +59,7 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
-## O que já funciona (v1.10)
+## O que já funciona (v1.11)
 
 - Dados 100% reais e ao vivo — preço, forma, posse, pontos, calendário —
   vindos diretamente da API oficial, sem qualquer valor inventado ou
@@ -207,6 +208,47 @@ components/
      se vê nesta secção é agora exatamente o que alimenta a pontuação,
      não um número FPL paralelo e desatualizado. Ver `buildModelTicker`
      em `lib/matchmodel.ts`.
+- **Camada qualitativa/tática — o objetivo original do projeto (v1.11).**
+  A v1.10 corrigiu o que era mensurável a partir de dados (API da FPL +
+  odds). Mas há um tipo de sinal que nenhuma API dá: padrões de gestão
+  (ex: "o Arteta tira sempre o Rice aos 55min em jogos ganhos") e
+  identidade tática de equipa (ex: "o Man United sofre muito mas também
+  marca muito este ano"). Isto exige mesmo investigação — ler relatórios
+  de jogo, análise tática, notícias — não só processar números. Três
+  peças novas para isto:
+  1. **Correção concreta e imediata inspirada pelo exemplo do Rice** —
+     `lib/playerthreat.ts` só olhava para "quantos jogos começa" (`starts`),
+     nunca para "quanto tempo fica em campo quando começa". Um jogador
+     pode ser titular todas as semanas e ainda ser um ativo fraco em FPL
+     se for substituído sistematicamente antes dos 60min (o limiar da FPL
+     para os pontos de presença completos e para o bónus de contribuição
+     defensiva). Agora calcula-se `minutos/starts` como aproximação da
+     média de minutos por jogo como titular e, com pelo menos 3 titularidades
+     (para não reagir a uma substituição pontual), penaliza-se a fiabilidade
+     do jogador proporcionalmente — com nota explicativa própria. Isto é
+     inteiramente calculado a partir de dados que a app já tinha, sem
+     integração nova nenhuma. Ver `EARLY_SUB_MINUTES_THRESHOLD` em
+     `lib/playerthreat.ts`.
+  2. **`lib/managerinsights.ts` — a tabela editorial** onde entram os
+     padrões qualitativos que só investigação (humana ou de IA) consegue
+     encontrar, como os dois exemplos do Arteta/Rice e do Man United.
+     Cada entrada tem jogador/equipa, um fator de ajuste modesto (0.8-1.2,
+     propositadamente pequeno — isto afina o modelo quantitativo, não o
+     substitui), a razão e a fonte. Começa vazia (nada inventado só para
+     preencher) e alimenta diretamente a lista de razões de cada jogador
+     na Equipa Sugerida, exatamente como qualquer outro sinal do modelo —
+     nada de caixa-negra.
+  3. **Sessão de investigação semanal agendada** — uma tarefa agendada
+     (fora desta conversa, corre à parte todas as quintas de manhã) que
+     usa pesquisa web para investigar padrões de substituição e identidade
+     tática das equipas mais relevantes para FPL, e produz um briefing
+     em português com as descobertas mais sustentadas por fontes,
+     incluindo um fator de ajuste sugerido para cada uma. É só investigação
+     e redação — não edita código nem faz deploy sozinha. As sugestões
+     ficam para revisão manual antes de serem adicionadas a
+     `lib/managerinsights.ts`, mantendo o mesmo princípio de transparência
+     do resto do projeto: nada entra no modelo sem uma razão visível e
+     rastreável.
 - **A Minha Equipa** — introduz o teu Team ID (guardado neste browser, com
   o teu por omissão) e vês o teu plantel real, capitão, banco, valor e
   rank, com sugestões de transferência calculadas contra o teu plantel
@@ -393,6 +435,19 @@ Para incluir odds de mercado no modelo de golos esperados:
   "não estar a funcionar" agora. Antes da Jornada 1 terminar, os valores
   destes campos são legitimamente 0 para toda a gente (ninguém jogou
   ainda) — isso é o comportamento correto, não um sinal de bug.
+- A "média de minutos por titularidade" (`lib/playerthreat.ts`,
+  EARLY_SUB_MINUTES_THRESHOLD) é `minutos totais / starts` — uma
+  aproximação, não o valor exato de "minutos só enquanto foi titular",
+  porque a FPL não publica esse número separado dos minutos ganhos como
+  suplente. Para um jogador cujas aparições são quase todas como titular
+  (o caso comum) isto converge bem para a realidade; para um jogador com
+  muitas entradas como suplente, pode sobrestimar ligeiramente a média.
+  Só é aplicado com 3+ titularidades, precisamente para não reagir a
+  ruído de amostra pequena.
+- `lib/managerinsights.ts` começa **vazio** — nenhum padrão qualitativo
+  foi inventado só para ter conteúdo. Preenche-se com o tempo, através da
+  investigação semanal agendada + revisão manual (ver secção v1.11
+  acima). Até lá, este mecanismo existe mas não altera nenhuma pontuação.
 - Os multiplicadores novos (`ATTACK_MULTIPLIER`, `DEF_ATTACK_UPSIDE_MULTIPLIER`,
   `DC_WEIGHT` em `lib/recommend.ts`) são uma primeira calibração, não um
   ótimo validado — é exatamente para isto que serve o novo Painel de

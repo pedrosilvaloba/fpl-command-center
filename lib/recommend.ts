@@ -14,6 +14,7 @@ import {
   defensiveContributionFactor,
   teamFinishedFixtureCounts,
 } from "./playerthreat";
+import { getManagerInsights, formatInsightReason } from "./managerinsights";
 
 export interface ScoredPlayer {
   element: FplElement;
@@ -317,6 +318,21 @@ export function buildScoredPlayers(
     }
     if (window.anyMarketAdjusted) {
       reasons.push("ajustado com odds de mercado");
+    }
+
+    // Qualitative/tactical adjustments — the human+AI-researched layer on
+    // top of everything else in this formula (see lib/managerinsights.ts
+    // for what this is and isn't). Empty by default; applied identically
+    // in preseason and in-season since a manager's substitution habits or
+    // a team's tactical identity are just as real before a ball is kicked
+    // as after.
+    const insights = [
+      ...getManagerInsights("player", el.id),
+      ...getManagerInsights("team", team.id),
+    ];
+    for (const insight of insights) {
+      raw *= insight.factor;
+      reasons.push(formatInsightReason(insight));
     }
 
     raw *= availability;
