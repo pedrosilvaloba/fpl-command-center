@@ -133,11 +133,29 @@ export function computeDynamicTeamFactors(
       result.set(team.id, { elo: eloRating, attackFactor: 1, defenceFactor: 1, finishedMatches: 0 });
       continue;
     }
+    const leagueAvg = leagueAvgGoalsPerMatch || 1;
     const avgFor = (goalsFor.get(team.id) ?? 0) / n;
-    const avgAgainst = (goalsAgainst.get(team.id) ?? 0) / n;
-    const attackRate = avgFor / (leagueAvgGoalsPerMatch || 1);
+    const attackRate = avgFor / leagueAvg;
+
     // Higher = fewer goals conceded than a league-average defence.
-    const defenceRate = (leagueAvgGoalsPerMatch || 1) / (avgAgainst || leagueAvgGoalsPerMatch || 1);
+    //
+    // This used to read `leagueAvg / (avgAgainst || leagueAvg)`, which had
+    // a genuine inversion in it: a team that had conceded ZERO goals gave
+    // `avgAgainst === 0`, which is falsy in JavaScript, so the fallback
+    // meant for MISSING data fired and the best defence in the league was
+    // rated exactly average — and strictly worse than a team conceding one
+    // every other game. Since this factor divides the opponent's expected
+    // goals, that directly depressed the clean-sheet probability, and
+    // therefore the score, of every defender and keeper at the league's
+    // meanest defence — right when early clean sheets are what everyone is
+    // picking defenders on.
+    //
+    // Laplace-style shrinkage fixes both problems at once: zero conceded
+    // is now the BEST rate rather than a special case, and a small early
+    // sample is pulled gently toward the league average instead of
+    // producing an extreme rate off two matches.
+    const shrunkAgainst = ((goalsAgainst.get(team.id) ?? 0) + leagueAvg) / (n + 1);
+    const defenceRate = leagueAvg / shrunkAgainst;
 
     const trust = Math.min(1, n / TRUST_RAMP_MATCHES);
     const attackFactor = clamp(1 + (attackRate - 1) * trust, MIN_FACTOR, MAX_FACTOR);

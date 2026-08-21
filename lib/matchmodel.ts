@@ -37,13 +37,22 @@ function poissonPmf(k: number, lambda: number): number {
  * the mean. Used to flag boom/bust players for captaincy/differential
  * decisions, where two players who share an expected value can have
  * very different real risk profiles. */
-export function poissonQuantile(lambda: number, p: number, maxK = 12): number {
-  if (lambda <= 0) return 0;
+export function poissonQuantile(lambda: number, p: number, maxK = 40): number {
+  // NaN fails every comparison, so `lambda <= 0` alone let a non-finite
+  // lambda fall through the whole loop (cumulative stays NaN, the early
+  // return never fires) and silently return maxK — i.e. a corrupt input
+  // produced the model's maximum value rather than an obvious zero.
+  if (!Number.isFinite(lambda) || lambda <= 0) return 0;
   let cumulative = 0;
   for (let k = 0; k <= maxK; k++) {
     cumulative += poissonPmf(k, lambda);
     if (cumulative >= p) return k;
   }
+  // maxK raised from 12 to 40 so this bound is not reachable for any
+  // realistic lambda. At 12 the returned "85th percentile" for a high
+  // expectation was just the loop bound reported as a statistic, which
+  // also made ceiling-minus-floor SHRINK as expectation grew — turning the
+  // boom/bust flag off for exactly the highest-upside players.
   return maxK;
 }
 
@@ -261,8 +270,14 @@ export interface WindowExpectation {
   // playing twice genuinely offers roughly double the opportunity that
   // gameweek, not the same opportunity as everyone else.
   totalGoalsFor: number;
+  totalGoalsAgainst: number;
   totalCleanSheetProbability: number;
   fixtureCount: number;
+  /** How many gameweeks this window ACTUALLY covers. Near the end of the
+   * season fewer than `windowSize` gameweeks remain, so comparing the
+   * fixture count against a fixed 5 flagged every team as blank from
+   * GW35 onward — and could report a team with a genuine DOUBLE gameweek
+   * as having a blank instead. Clamped to the last gameweek that exists. */
   gameweeksInWindow: number;
   hasDoubleGameweek: boolean; // fixtureCount > gameweeksInWindow
   // fixtureCount < gameweeksInWindow (this team missing at least one GW).
@@ -281,6 +296,7 @@ const EMPTY_WINDOW: WindowExpectation = {
   avgGoalsAgainst: 0,
   avgCleanSheetProbability: 0,
   totalGoalsFor: 0,
+  totalGoalsAgainst: 0,
   totalCleanSheetProbability: 0,
   fixtureCount: 0,
   gameweeksInWindow: 0,
@@ -296,7 +312,12 @@ const EMPTY_WINDOW: WindowExpectation = {
 export function windowExpectation(
   expectations: FixtureExpectation[] | undefined,
   fromEvent: number,
-  windowSize: number
+  windowSize: number,
+  // The season's last gameweek, so the window can be clamped to the
+  // gameweeks that actually exist. Defaults to 38 (a standard Premier
+  // League season) rather than being required, so existing callers keep
+  // working — but pass the real value when you have it.
+  lastEvent = 38
 ): WindowExpectation {
   if (!expectations) return EMPTY_WINDOW;
   const inWindow = expectations.filter(
@@ -304,21 +325,28 @@ export function windowExpectation(
   );
   if (inWindow.length === 0) return EMPTY_WINDOW;
   const n = inWindow.length;
+  // Real gameweeks covered, never more than remain in the season.
+  const gameweeksInWindow = Math.max(
+    1,
+    Math.min(fromEvent + windowSize - 1, lastEvent) - fromEvent + 1
+  );
   const totalGoalsFor = inWindow.reduce((s, e) => s + e.expectedGoalsFor, 0);
+  const totalGoalsAgainst = inWindow.reduce((s, e) => s + e.expectedGoalsAgainst, 0);
   const totalCleanSheetProbability = inWindow.reduce(
     (s, e) => s + e.cleanSheetProbability,
     0
   );
   return {
     avgGoalsFor: totalGoalsFor / n,
-    avgGoalsAgainst: inWindow.reduce((s, e) => s + e.expectedGoalsAgainst, 0) / n,
+    avgGoalsAgainst: totalGoalsAgainst / n,
     avgCleanSheetProbability: totalCleanSheetProbability / n,
     totalGoalsFor,
+    totalGoalsAgainst,
     totalCleanSheetProbability,
     fixtureCount: n,
-    gameweeksInWindow: windowSize,
-    hasDoubleGameweek: n > windowSize,
-    hasBlankGameweek: n < windowSize,
+    gameweeksInWindow,
+    hasDoubleGameweek: n > gameweeksInWindow,
+    hasBlankGameweek: n < gameweeksInWindow,
     anyMarketAdjusted: inWindow.some((e) => e.marketAdjusted),
   };
 }

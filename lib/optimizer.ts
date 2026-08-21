@@ -1,6 +1,6 @@
 import solver from "javascript-lp-solver";
 import type { ScoredPlayer } from "./recommend";
-import { pickBestXI, buildSuggestedSquad } from "./recommend";
+import { pickBestXI, buildSuggestedSquad, isValidSquad } from "./recommend";
 
 const NEED: Record<number, number> = { 1: 2, 2: 5, 3: 5, 4: 3 };
 const POS_KEY: Record<number, string> = { 1: "gk", 2: "def", 3: "mid", 4: "fwd" };
@@ -19,6 +19,18 @@ const POS_KEY: Record<number, string> = { 1: "gk", 2: "def", 3: "mid", 4: "fwd" 
 const TOP_BY_SCORE_PER_POSITION = 45;
 const CHEAPEST_ENABLERS_PER_POSITION = 12;
 const SOLVE_TIMEOUT_MS = 6000;
+
+// Four of the fifteen players never start in a normal gameweek, so buying
+// them at full value is how a squad ends up with £8-10m stranded on a
+// bench it will never play. Weighting every player equally (as this did
+// until v1.11) told the solver a fifth defender was worth exactly as much
+// as a starting striker. There is no way to know in advance WHICH four
+// will be benched, so the objective discounts each player by the
+// probability-weighted value of a bench slot: with 4 of 15 slots on the
+// bench and bench points worth little, ~0.75 is the right shading, applied
+// to the cheapest tier where the benched players actually come from.
+const BENCH_DISCOUNT = 0.75;
+const BENCH_TIER_PRICE = 4.5;
 
 export interface OptimalSquadResult {
   squad: ScoredPlayer[];
@@ -71,8 +83,12 @@ export function buildOptimalSquad(
     for (const p of pool) {
       const varId = `p${p.element.id}`;
       byVarId.set(varId, p);
+      // Objective is now expected FPL points (see lib/expectedpoints.ts),
+      // shaded down for the cheap-enabler tier those bench slots come from.
+      const objective =
+        p.priceM <= BENCH_TIER_PRICE ? p.expectedPoints * BENCH_DISCOUNT : p.expectedPoints;
       variables[varId] = {
-        score: p.score,
+        score: objective,
         cost: p.priceM,
         [POS_KEY[p.element.element_type]]: 1,
         [`club_${p.team.id}`]: 1,
@@ -113,7 +129,7 @@ export function buildOptimalSquad(
       if (Math.round(Number(result[varId] ?? 0)) === 1) squad.push(player);
     }
 
-    if (!result.feasible || squad.length !== 15) {
+    if (!result.feasible || !isValidSquad(squad, budgetM)) {
       throw new Error("O otimizador não encontrou uma equipa viável de 15.");
     }
 
@@ -128,12 +144,17 @@ export function buildOptimalSquad(
       method: "otimizador",
     };
   } catch {
+    // The fallback heuristic can genuinely fail to fill a squad when the
+    // budget is tight. It used to report `feasible: true` regardless, and
+    // the page then told the user the squad respected 2-5-5-3 while
+    // showing eleven players and no forward. Report what actually
+    // happened instead, and let the UI say so.
     const fallback = buildSuggestedSquad(scored, budgetM);
     return {
       squad: fallback.squad,
       starters: fallback.starters,
       totalCost: fallback.totalCost,
-      feasible: true,
+      feasible: isValidSquad(fallback.squad, budgetM),
       method: "heurística (otimizador indisponível)",
     };
   }

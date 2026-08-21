@@ -113,7 +113,14 @@ export async function recordOutcomesForFinishedEvents(finishedEventIds: number[]
     const newlyRecorded: number[] = [];
     for (const event of pending) {
       const snapshot = await redis.get<Snapshot>(SNAPSHOT_KEY(event));
-      if (!snapshot || snapshot.picks.length === 0) continue;
+      if (!snapshot || snapshot.picks.length === 0) {
+        // Mark it processed anyway. This `continue` used to skip the index
+        // write, so any finished gameweek without a snapshot was re-fetched
+        // on EVERY page render, forever — by GW38 that is 37 sequential
+        // Redis round-trips added to every request, and it never self-healed.
+        newlyRecorded.push(event);
+        continue;
+      }
 
       const live = await getEventLive(event);
       const pointsById = new Map(live.elements.map((e) => [e.id, e.stats?.total_points ?? 0]));
@@ -122,23 +129,59 @@ export async function recordOutcomesForFinishedEvents(finishedEventIds: number[]
         ...p,
         actualPoints: pointsById.get(p.elementId) ?? 0,
       }));
-      const sortedByScore = [...withPoints].sort((a, b) => b.score - a.score);
-      const cut = Math.max(1, Math.floor(sortedByScore.length / 2));
-      const top = sortedByScore.slice(0, cut);
-      const rest = sortedByScore.slice(cut);
-      const avg = (arr: { actualPoints: number }[]) =>
-        arr.length ? arr.reduce((s, x) => s + x.actualPoints, 0) / arr.length : 0;
-      const topAvg = avg(top);
-      const restAvg = avg(rest);
+
+      // Compare WITHIN each position, never across them.
+      //
+      // This previously pooled all four positions into one list, sorted by
+      // score and split at the median. Because attacking scores were
+      // structurally several times larger than defensive ones, the top half
+      // was essentially "all the midfielders and forwards" and the bottom
+      // half "all the goalkeepers and defenders" — so the reported lift was
+      // just the average points difference between those groups. A model
+      // that ranked players completely at random inside each position would
+      // have produced the same number, which made the panel incapable of
+      // detecting whether any change to the model helped.
+      let weightedLift = 0;
+      let comparedTop = 0;
+      let comparedRest = 0;
+      let topPointsTotal = 0;
+      let restPointsTotal = 0;
+
+      const positions = Array.from(new Set(withPoints.map((p) => p.positionShort)));
+      for (const pos of positions) {
+        const inPos = withPoints
+          .filter((p) => p.positionShort === pos)
+          .sort((a, b) => b.score - a.score);
+        if (inPos.length < 2) continue;
+        const cut = Math.max(1, Math.floor(inPos.length / 2));
+        const top = inPos.slice(0, cut);
+        const rest = inPos.slice(cut);
+        if (rest.length === 0) continue;
+        const avg = (arr: { actualPoints: number }[]) =>
+          arr.reduce((s, x) => s + x.actualPoints, 0) / arr.length;
+        const topAvg = avg(top);
+        const restAvg = avg(rest);
+        weightedLift += (topAvg - restAvg) * inPos.length;
+        comparedTop += top.length;
+        comparedRest += rest.length;
+        topPointsTotal += topAvg * inPos.length;
+        restPointsTotal += restAvg * inPos.length;
+      }
+
+      const totalWeight = comparedTop + comparedRest;
+      if (totalWeight === 0) {
+        newlyRecorded.push(event);
+        continue;
+      }
 
       const result: AccuracyResult = {
         event,
         comparedAt: new Date().toISOString(),
-        topAvgPoints: Math.round(topAvg * 100) / 100,
-        restAvgPoints: Math.round(restAvg * 100) / 100,
-        topCount: top.length,
-        restCount: rest.length,
-        lift: Math.round((topAvg - restAvg) * 100) / 100,
+        topAvgPoints: Math.round((topPointsTotal / totalWeight) * 100) / 100,
+        restAvgPoints: Math.round((restPointsTotal / totalWeight) * 100) / 100,
+        topCount: comparedTop,
+        restCount: comparedRest,
+        lift: Math.round((weightedLift / totalWeight) * 100) / 100,
       };
       await redis.set(RESULT_KEY(event), result);
       newlyRecorded.push(event);

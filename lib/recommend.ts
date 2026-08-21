@@ -4,16 +4,18 @@ import {
   buildFixtureExpectations,
   windowExpectation,
   poissonQuantile,
-  BASE_HOME_GOALS,
-  BASE_AWAY_GOALS,
 } from "./matchmodel";
 import type { OddsMatch } from "./oddsapi";
 import { computeDynamicTeamFactors } from "./teamrating";
+import { teamFinishedFixtureCounts } from "./playerthreat";
 import {
-  computePlayerThreat,
-  defensiveContributionFactor,
-  teamFinishedFixtureCounts,
-} from "./playerthreat";
+  computeMinutesModel,
+  computePlayerRates,
+  expectedPointsForFixture,
+  scaleBreakdown,
+  modelTrust,
+  type ExpectedPointsBreakdown,
+} from "./expectedpoints";
 import { MANAGER_INSIGHTS, filterInsights, formatInsightReason } from "./managerinsights";
 import type { ManagerInsight } from "./managerinsights";
 
@@ -31,6 +33,23 @@ export interface ScoredPlayer {
   individualExpectedGI: number; // this player's own expected goal involvements over the window
   ceilingGI: number; // rough 85th-percentile outcome for individualExpectedGI
   floorGI: number; // rough 15th-percentile outcome for individualExpectedGI
+  /**
+   * Expected FPL points over the whole fixture window. THIS IS THE SCORE —
+   * `score` is kept as an alias so nothing downstream breaks, but both are
+   * now in real points rather than arbitrary units. That means they can be
+   * compared across positions, and a -4 transfer hit can finally be priced
+   * against them.
+   */
+  expectedPoints: number;
+  /**
+   * Expected FPL points for the NEXT GAMEWEEK ONLY. Captaincy and starting-XI
+   * choices are single-gameweek decisions and must use this, not the window
+   * total — a player with a poor next fixture and four great ones after it
+   * should not get the armband.
+   */
+  expectedPointsNext: number;
+  /** Where the window's expected points come from, for transparency. */
+  breakdown: ExpectedPointsBreakdown;
   score: number;
   isDifferential: boolean;
   isPreseason: boolean;
@@ -47,48 +66,33 @@ const POSITION_SHORT: Record<number, string> = {
   4: "FWD",
 };
 
-// Neutral per-fixture goal baseline — the average of the two home/away
-// baselines the Poisson model itself is built on (lib/matchmodel.ts) —
-// used only to express "is this team's window better/worse than a
-// neutral fixture run", as a ratio. Re-derives from the same constants
-// matchmodel.ts uses (rather than a second hand-picked number) so the two
-// stay in sync if that model's baseline is ever retuned.
-const NEUTRAL_PER_FIXTURE_GOALS = (BASE_HOME_GOALS + BASE_AWAY_GOALS) / 2;
+/**
+ * The scoring engine no longer has "calibration constants".
+ *
+ * Until v1.11 this block held a set of hand-picked multipliers
+ * (ATTACK_MULTIPLIER, DC_WEIGHT, and friends) that turned various signals
+ * into an arbitrary score. An audit established that no setting of those
+ * numbers could work, because the quantity they produced had no unit:
+ * midfielders scored 22-64 and defenders 9-32 purely because the attacking
+ * terms were larger, so every cross-position decision was really being
+ * decided by position. Two successive attempts to retune them (v1.9 raised
+ * one 6x; the audit found that overshot by ~1.8x) treated the symptom.
+ *
+ * lib/expectedpoints.ts replaces the whole approach: each real FPL scoring
+ * mechanism is modelled as the points it actually pays, so the weights are
+ * the game's own rules rather than anyone's guesses. What remains here is
+ * fixture context and the qualitative layer.
+ */
 
-// Score-formula calibration constants. These are a first pass, not a
-// backtested optimum — lib/accuracy.ts is what lets that claim actually
-// get checked against real results over the season, and these are the
-// first numbers worth revisiting once it has enough data.
-// v1.8 shipped individualExpectedGI with ATTACK_MULTIPLIER = 0.5, which
-// LOOKED like a reasonable, proportionate number in isolation but turned
-// out to be a mistake once actually checked against the OTHER terms in
-// the same formula: for a real early-season top forward vs. a solid-but-
-// less-hyped teammate, formNum*1.8 + ppg*1.4 alone accounted for roughly
-// 8x more of the score gap between them than individualExpectedGI*0.5
-// did. The new signal was real and correctly differentiated the two
-// players — it just couldn't outweigh form/points-per-game, which (early
-// in a season, on tiny sample sizes) are themselves largely driven by
-// who has already had a big haul, i.e. close to the same "whoever got
-// hot/hyped first wins" dynamic the individual-threat model was built to
-// counteract. Net effect: a real fix that was mathematically too small
-// to change any actual ranking, which is exactly what showed up as "the
-// suggested squad hasn't changed." Raised roughly 6x here so the new
-// signal is comparable in weight to form+ppg rather than a rounding
-// error next to them — see the in-season formula below for how this
-// plays out, and lib/accuracy.ts for how to check, with real results,
-// whether this new weighting is actually better rather than just louder.
-const ATTACK_MULTIPLIER = 3.0; // in-season: individualExpectedGI -> score
-const ATTACK_MULTIPLIER_PRESEASON = 0.6;
-const DEF_ATTACK_UPSIDE_MULTIPLIER = 1.8; // defenders' own attacking threat — same 6x correction as ATTACK_MULTIPLIER, still smaller than their clean-sheet term
-const DC_WEIGHT = 1.0; // defensive-contribution-bonus proximity, DEF/MID
-// "Form" (FPL's 30-day rolling metric) is at its most volatile/least
-// trustworthy exactly when a player has the fewest minutes to back it up
-// — a single big early haul can inflate it on a near-meaningless sample.
-// This ramps form's weight from 40% up to 100% as a player accumulates
-// their first ~3 full matches of minutes, rather than trusting it fully
-// from minute one. Same "don't over-trust a small sample" principle
-// lib/teamrating.ts already applies to team-level results.
-const FORM_TRUST_MINUTES = 270; // ~3 full matches
+/** Bounds on the COMBINED effect of all qualitative notes on one player.
+ * Each individual note is already validated into [0.8, 1.2] when it is
+ * stored, but notes are applied multiplicatively and a player can match
+ * both a player-scoped and a team-scoped note — so three notes at 0.8
+ * compounded to 0.512, a 49% cut, while the app promised a 20% cap. The
+ * cap is now enforced on the product, which is where it was always meant
+ * to apply. */
+const INSIGHT_MIN_COMBINED = 0.8;
+const INSIGHT_MAX_COMBINED = 1.2;
 
 /**
  * Scores every available (non-injured-out) player for a given upcoming
@@ -175,6 +179,26 @@ export function buildScoredPlayers(
   const teamFinishedFixtures = teamFinishedFixtureCounts(bootstrap.teams.map((t) => t.id), fixtures);
   const currentEvent = bootstrap.events.find((e) => e.is_current);
   const isPreseason = !currentEvent;
+  // The season's real last gameweek, so fixture windows can be clamped to
+  // the gameweeks that actually exist instead of assuming 38.
+  const lastEvent = bootstrap.events.reduce((max, e) => Math.max(max, e.id), 38);
+
+  // Each team's own average expected goals per fixture this season — the
+  // denominator for "is this run better than normal FOR THIS TEAM", which
+  // is what avoids counting team quality twice (once inside the player's
+  // per-90 rate, once again in the fixture adjustment).
+  const teamSeasonAvgGoalsFor = new Map<number, number>();
+  for (const team of bootstrap.teams) {
+    const all = expectationsByTeam.get(team.id) ?? [];
+    if (all.length === 0) {
+      teamSeasonAvgGoalsFor.set(team.id, 0);
+      continue;
+    }
+    teamSeasonAvgGoalsFor.set(
+      team.id,
+      all.reduce((s, e) => s + e.expectedGoalsFor, 0) / all.length
+    );
+  }
 
   const out: ScoredPlayer[] = [];
 
@@ -183,16 +207,12 @@ export function buildScoredPlayers(
     const team = teamById.get(el.team);
     if (!team) continue;
 
-    const priceM = el.now_cost / 10;
+    // Guarded parse: a missing/renamed upstream field must degrade this
+    // player's signal, never produce NaN that flows into a score, a sort
+    // comparator (where it silently corrupts ordering) or rendered text.
+    const priceM = Number.isFinite(el.now_cost) ? el.now_cost / 10 : 0;
     const ownershipPct = parseFloat(el.selected_by_percent) || 0;
     const formNum = parseFloat(el.form) || 0;
-    const ppg = parseFloat(el.points_per_game) || 0;
-    const ictNum = parseFloat(el.ict_index) || 0;
-    // FPL's own predicted points for the next gameweek — exists even
-    // before a ball is kicked (unlike everything else per-player this
-    // formula uses), so it's the one genuine individual signal available
-    // to break ties between team-mates in the preseason branch below,
-    // where individualExpectedGI is necessarily 0 (see its comment).
     const epNext = parseFloat(el.ep_next ?? "") || 0;
 
     const teamFixtures = ticker[team.id] ?? [];
@@ -204,112 +224,93 @@ export function buildScoredPlayers(
     const window = windowExpectation(
       expectationsByTeam.get(team.id),
       fromEvent,
-      fixtureWindow
+      fixtureWindow,
+      lastEvent
     );
-    // Display fields stay per-fixture averages (readable as "~X/jogo");
-    // the score itself is driven by the WINDOW TOTAL below, so a double
-    // gameweek inside the window correctly counts as more opportunity
-    // rather than being averaged away.
+    // Single-gameweek view, for decisions that are genuinely about the
+    // next gameweek alone (captaincy, who starts) rather than the run.
+    const nextWindow = windowExpectation(
+      expectationsByTeam.get(team.id),
+      fromEvent,
+      1,
+      lastEvent
+    );
+
     const { avgGoalsFor: expectedGoalsFor, avgCleanSheetProbability: cleanSheetProbability } = window;
-    const { totalCleanSheetProbability } = window;
 
     const isDefensive = DEFENSIVE_POSITIONS.has(el.element_type);
     const isAttacking = ATTACKING_POSITIONS.has(el.element_type);
 
-    const threat = computePlayerThreat(el, teamFinishedFixtures.get(team.id) ?? 0, isPreseason);
-    const dc = defensiveContributionFactor(el, el.element_type);
-    const minutesPlayed = el.minutes ?? 0;
-    // 0.4 at 0 minutes (never fully zeroed — even one big haul is *some*
-    // evidence) ramping to 1.0 by FORM_TRUST_MINUTES.
-    const formTrust = 0.4 + 0.6 * Math.min(1, minutesPlayed / FORM_TRUST_MINUTES);
+    const reasons: string[] = [];
 
-    // This player's own expected goal involvement for the window: their
-    // blended per-90 rate (+ set-piece duty), scaled by how much better/
-    // worse than a neutral fixture run this team's window actually is,
-    // by how many of those minutes this player is reliably on the pitch
-    // for, and by how many fixtures are actually in the window (so a
-    // double gameweek is worth roughly double for this player too, not
-    // just for the team-level total).
-    const fixtureRunFactor =
-      window.fixtureCount > 0
-        ? window.totalGoalsFor / (window.fixtureCount * NEUTRAL_PER_FIXTURE_GOALS)
+    // ---- expected points -------------------------------------------------
+    const mins = computeMinutesModel(el, teamFinishedFixtures.get(team.id) ?? 0, isPreseason);
+    const rates = computePlayerRates(el);
+    const minutesPlayed = Number.isFinite(el.minutes) ? el.minutes : 0;
+
+    // How good is this team's upcoming run RELATIVE TO ITS OWN normal
+    // level? The player's per-90 rates were earned playing for this team,
+    // so they already contain the team's standing quality — comparing to
+    // the league baseline instead (as the old model did) counted strong
+    // teams twice and inflated their players systematically.
+    const teamBaselineGoals = teamSeasonAvgGoalsFor.get(team.id) ?? 0;
+    const attackRatio = (perFixtureGoals: number) =>
+      teamBaselineGoals > 0
+        ? Math.min(1.6, Math.max(0.5, perFixtureGoals / teamBaselineGoals))
         : 1;
-    const individualExpectedGI = isPreseason
-      ? 0
-      : (threat.blendedGI90 + threat.setPieceBonus) *
-        fixtureRunFactor *
-        threat.reliability *
-        window.fixtureCount;
 
+    const perFixtureWindow = expectedPointsForFixture(el.element_type, rates, mins, {
+      teamAttackRatio: attackRatio(window.avgGoalsFor),
+      cleanSheetProbability: window.avgCleanSheetProbability,
+      expectedGoalsAgainst: window.avgGoalsAgainst,
+    });
+    const modelWindowPoints = scaleBreakdown(perFixtureWindow, window.fixtureCount);
+
+    const perFixtureNext = expectedPointsForFixture(el.element_type, rates, mins, {
+      teamAttackRatio: attackRatio(nextWindow.avgGoalsFor),
+      cleanSheetProbability: nextWindow.avgCleanSheetProbability,
+      expectedGoalsAgainst: nextWindow.avgGoalsAgainst,
+    });
+    const modelNextPoints = perFixtureNext.total * nextWindow.fixtureCount;
+
+    // Blend our structural model with FPL's own published projection,
+    // weighted by how much evidence this season actually supports. With no
+    // minutes played `ep_next` is strictly better information; by ~4 full
+    // matches our model has real per-90 rates and fixture context that
+    // `ep_next` does not expose. Using it as a blend partner rather than
+    // as one more additive term is what stops it double-counting form,
+    // fixtures and minutes, all of which it already contains.
+    const trust = isPreseason ? 0 : modelTrust(minutesPlayed);
+    const epNextWindow = epNext * window.fixtureCount;
+    const epNextSingle = epNext * Math.min(1, nextWindow.fixtureCount);
+
+    let expectedPoints = modelWindowPoints.total * trust + epNextWindow * (1 - trust);
+    let expectedPointsNext = modelNextPoints * trust + epNextSingle * (1 - trust);
+
+    // Individual goal involvement, kept for display and the risk profile.
+    const individualExpectedGI =
+      (rates.xg90 + rates.xa90 + rates.setPieceXg90) *
+      attackRatio(window.avgGoalsFor) *
+      (mins.expectedMinutes / 90) *
+      window.fixtureCount;
     const ceilingGI = poissonQuantile(individualExpectedGI, 0.85);
     const floorGI = poissonQuantile(individualExpectedGI, 0.15);
 
-    // Availability penalty: doubtful/injured players get scored down hard
-    // even if their underlying numbers are great — a great player who
-    // doesn't play is worth 0.
-    const availability =
-      el.chance_of_playing_next_round === null
-        ? 1
-        : el.chance_of_playing_next_round / 100;
-
-    let raw: number;
-    const reasons: string[] = [];
-
+    reasons.push(...mins.reasons);
+    reasons.push(...rates.reasons);
+    if (!isPreseason && trust < 1) {
+      reasons.push(
+        `amostra ainda pequena (${minutesPlayed}min esta época) — a previsão ainda se apoia bastante na estimativa da própria FPL`
+      );
+    }
     if (isPreseason) {
-      // Price is the market's own pre-season valuation of quality;
-      // ownership is the collective wisdom of everyone else who has
-      // already looked at press-conference/preseason signals. Neither
-      // one, though, can tell team-mates apart from each other — two
-      // players on the same team, similarly priced/owned, are otherwise
-      // a coin flip here. `epNext` (FPL's OWN predicted points for the
-      // next gameweek) is the one real individual signal that exists
-      // this early — presumably informed by FPL's own read on expected
-      // lineups/team news — so it's weighted heavily here specifically
-      // to break that tie. individualExpectedGI is still 0 this early
-      // (see its own comment above) and the team-level window total is
-      // used for the fixture-context term instead, same as before —
-      // multipliers below are calibrated for the default 5-gameweek
-      // window (see lib/matchmodel.ts for how these numbers are derived;
-      // re-tune if fixtureWindow changes materially from 5).
-      raw =
-        priceM * 1.6 +
-        epNext * 4.0 +
-        Math.log10(ownershipPct + 1) * 6 +
-        (isDefensive ? totalCleanSheetProbability * 2 : 0) +
-        (isAttacking ? window.totalGoalsFor * ATTACK_MULTIPLIER_PRESEASON : 0) +
-        ictNum * 0.02;
+      reasons.push(
+        `pré-época: previsão baseada na estimativa da própria FPL (~${epNext.toFixed(1)}pts/jornada) e no calendário`
+      );
       if (ownershipPct >= 25) reasons.push("escolha consensual do mercado (template)");
       if (ownershipPct < 10 && priceM >= 6) reasons.push("possível diferencial de qualidade");
-      if (epNext >= 4) {
-        reasons.push(
-          `a própria FPL prevê uma pontuação alta para a próxima jornada (~${epNext.toFixed(1)}pts)`
-        );
-      }
-    } else {
-      raw =
-        formNum * 1.0 * formTrust +
-        ppg * 1.4 +
-        epNext * 1.5 +
-        (isDefensive ? totalCleanSheetProbability * 1.6 : 0) +
-        (isAttacking ? individualExpectedGI * ATTACK_MULTIPLIER : 0) +
-        (isDefensive && el.element_type === 2
-          ? individualExpectedGI * DEF_ATTACK_UPSIDE_MULTIPLIER
-          : 0) +
-        (isDefensive || isAttacking ? dc.factor * DC_WEIGHT : 0) +
-        ictNum * 0.015 +
-        Math.log10(ownershipPct + 1) * 1.5;
-      if (formNum >= 5) reasons.push("em grande forma recente");
-      if (minutesPlayed < FORM_TRUST_MINUTES) {
-        reasons.push(
-          `amostra ainda pequena (${minutesPlayed}min esta época) — forma/pontos por jogo pesam menos até acumular mais jogos`
-        );
-      }
-      reasons.push(...threat.reasons);
-      if (dc.reason) reasons.push(dc.reason);
-      if (ceilingGI - floorGI >= 2 && individualExpectedGI > 0) {
-        reasons.push("perfil de risco/recompensa: potencial de teto alto, mas resultado pode variar bastante");
-      }
     }
+    if (formNum >= 5) reasons.push("em grande forma recente");
 
     if (isDefensive && cleanSheetProbability >= 0.35) {
       reasons.push(
@@ -331,32 +332,82 @@ export function buildScoredPlayers(
           : `inclui possível jornada em branco nas próximas ${fixtureWindow} jornadas`
       );
     }
-    if (window.anyMarketAdjusted) {
-      reasons.push("ajustado com odds de mercado");
+    if (window.anyMarketAdjusted) reasons.push("ajustado com odds de mercado");
+    if (ceilingGI - floorGI >= 2 && individualExpectedGI > 0) {
+      reasons.push("perfil de risco/recompensa: teto alto, mas resultado pode variar bastante");
     }
 
-    // Qualitative/tactical adjustments — the human+AI-researched layer on
-    // top of everything else in this formula (see lib/managerinsights.ts
-    // for what this is and isn't). Empty by default; applied identically
-    // in preseason and in-season since a manager's substitution habits or
-    // a team's tactical identity are just as real before a ball is kicked
-    // as after.
+    // ---- qualitative layer ----------------------------------------------
+    // Applied as a single COMBINED multiplier, clamped. Each note is
+    // already individually bounded when stored, but they are applied
+    // multiplicatively and one player can match both a player-scoped and a
+    // team-scoped note, so the product could exceed the bound the app
+    // promises. Clamping here is what makes "no more than +-20%" true.
     const insights = [
       ...filterInsights(managerInsights, "player", el.id),
       ...filterInsights(managerInsights, "team", team.id),
     ];
-    for (const insight of insights) {
-      raw *= insight.factor;
-      reasons.push(formatInsightReason(insight));
+    if (insights.length > 0) {
+      const combined = Math.min(
+        INSIGHT_MAX_COMBINED,
+        Math.max(
+          INSIGHT_MIN_COMBINED,
+          insights.reduce((acc, i) => acc * i.factor, 1)
+        )
+      );
+      expectedPoints *= combined;
+      expectedPointsNext *= combined;
+      for (const insight of insights) reasons.push(formatInsightReason(insight));
+      if (insights.length > 1) {
+        reasons.push(
+          `efeito combinado das notas táticas limitado a ${Math.round((combined - 1) * 100)}%`
+        );
+      }
     }
 
-    raw *= availability;
-    if (availability < 1) {
+    // ---- availability ----------------------------------------------------
+    // `chance_of_playing_next_round` describes the NEXT round specifically,
+    // so it is applied at full strength to the single-gameweek number but
+    // damped over a multi-gameweek window, where a one-week doubt costs at
+    // most one of several fixtures. The old model applied the raw
+    // percentage to the whole window, over-penalising a one-week knock by
+    // roughly 3x on a five-gameweek horizon.
+    const availability =
+      el.chance_of_playing_next_round === null
+        ? 1
+        : Math.max(0, Math.min(1, el.chance_of_playing_next_round / 100));
+    const windowAvailability =
+      window.fixtureCount > 1
+        ? 1 - (1 - availability) / window.fixtureCount
+        : availability;
+
+    expectedPointsNext *= availability;
+    expectedPoints *= windowAvailability;
+
+    // A player flagged as unavailable by status but with no percentage
+    // published is still a real risk — treat an explicit non-available
+    // status as a doubt rather than trusting the null.
+    // `status === "u"` (removed from the game) is already filtered out at
+    // the top of the loop, so anything non-"a" here is a doubt/injury/
+    // suspension that FPL has not attached a percentage to.
+    if (availability === 1 && el.status !== "a") {
+      expectedPointsNext *= 0.5;
+      expectedPoints *= 0.8;
+      reasons.push(
+        `estado "${el.status}" na FPL sem percentagem publicada — tratado como dúvida` +
+          (el.news ? ` — ${el.news}` : "")
+      );
+    } else if (availability < 1) {
       reasons.push(
         `risco de utilização: ${el.chance_of_playing_next_round}% de hipótese de jogar` +
           (el.news ? ` — ${el.news}` : "")
       );
     }
+
+    // Final guard: never let a non-finite value reach a score, a sort
+    // comparator or the rendered page.
+    if (!Number.isFinite(expectedPoints)) expectedPoints = 0;
+    if (!Number.isFinite(expectedPointsNext)) expectedPointsNext = 0;
 
     out.push({
       element: el,
@@ -372,7 +423,12 @@ export function buildScoredPlayers(
       individualExpectedGI: Math.round(individualExpectedGI * 100) / 100,
       ceilingGI,
       floorGI,
-      score: Math.round(raw * 100) / 100,
+      expectedPoints: Math.round(expectedPoints * 100) / 100,
+      expectedPointsNext: Math.round(expectedPointsNext * 100) / 100,
+      breakdown: modelWindowPoints,
+      // Alias, so nothing downstream had to change when the score became a
+      // real quantity. Both are expected FPL points over the window.
+      score: Math.round(expectedPoints * 100) / 100,
       isDifferential: ownershipPct < 10,
       isPreseason,
       reasons,
@@ -402,90 +458,182 @@ export function buildSuggestedSquad(
   budgetM = 100
 ): { squad: ScoredPlayer[]; starters: ScoredPlayer[]; totalCost: number } {
   const need: Record<number, number> = { 1: 2, 2: 5, 3: 5, 4: 3 };
-  const budgetShare: Record<number, number> = { 1: 0.08, 2: 0.24, 3: 0.4, 4: 0.28 };
   const clubCount = new Map<number, number>();
   const squad: ScoredPlayer[] = [];
   let spent = 0;
 
+  const clubN = (id: number) => clubCount.get(id) ?? 0;
+
+  // ---- pass 1: a guaranteed-legal baseline -----------------------------
+  //
+  // Fill every slot with the CHEAPEST eligible player first. This is the
+  // change that actually fixes the audit's C-05: the previous version
+  // picked best-scoring-first and simply ran out of money before reaching
+  // the forwards, returning a squad of twelve that the optimizer's
+  // fallback then labelled valid. Buying the floor first means a legal
+  // 2-5-5-3 exists from the very first step, and every later decision is
+  // an upgrade that can only be applied if it still fits.
   for (const posId of [1, 2, 3, 4]) {
-    const posBudget = budgetM * budgetShare[posId];
-    const candidates = scored
+    const byPrice = scored
       .filter((p) => p.element.element_type === posId)
-      .sort((a, b) => b.score - a.score);
-
+      .sort((a, b) => a.priceM - b.priceM);
     let picked = 0;
-    let posSpent = 0;
-    for (const cand of candidates) {
+    for (const cand of byPrice) {
       if (picked >= need[posId]) break;
-      const club = cand.team.id;
-      const clubN = clubCount.get(club) ?? 0;
-      if (clubN >= 3) continue;
-      // Prefer to stay within this position's soft budget, but never
-      // block filling the squad — fall back to cheapest remaining need
-      // once the window is nearly out on later picks.
-      const remainingSlots = need[posId] - picked;
-      const affordableGuard =
-        posSpent + cand.priceM <= posBudget + 8 || remainingSlots <= 1;
-      if (!affordableGuard) continue;
+      if (clubN(cand.team.id) >= 3) continue;
       if (spent + cand.priceM > budgetM) continue;
-
       squad.push(cand);
-      clubCount.set(club, clubN + 1);
+      clubCount.set(cand.team.id, clubN(cand.team.id) + 1);
       spent += cand.priceM;
-      posSpent += cand.priceM;
       picked++;
     }
-    // If we still couldn't fill the position (budget too tight), take
-    // cheapest remaining eligible candidates regardless of score.
-    if (picked < need[posId]) {
-      const byPrice = candidates
-        .filter((c) => !squad.includes(c))
-        .sort((a, b) => a.priceM - b.priceM);
-      for (const cand of byPrice) {
-        if (picked >= need[posId]) break;
-        const club = cand.team.id;
-        const clubN = clubCount.get(club) ?? 0;
-        if (clubN >= 3) continue;
-        if (spent + cand.priceM > budgetM) continue;
-        squad.push(cand);
-        clubCount.set(club, clubN + 1);
-        spent += cand.priceM;
-        picked++;
+  }
+
+  // Genuinely infeasible (not enough players, or not enough money for even
+  // the cheapest legal squad). Return what we have; callers check validity
+  // with isValidSquad rather than trusting a hard-coded flag.
+  if (squad.length !== 15) {
+    return { squad, starters: pickBestXI(squad), totalCost: Math.round(spent * 10) / 10 };
+  }
+
+  // ---- pass 2: spend the remaining budget on the best upgrades ---------
+  //
+  // Repeatedly apply the single swap with the largest score gain that
+  // still fits the budget and the three-per-club limit. Each iteration
+  // strictly increases total score and the squad stays legal throughout,
+  // so this can only improve on the baseline.
+  const inSquad = new Set(squad.map((p) => p.element.id));
+  const byPosition = new Map<number, ScoredPlayer[]>();
+  for (const posId of [1, 2, 3, 4]) {
+    byPosition.set(
+      posId,
+      scored
+        .filter((p) => p.element.element_type === posId)
+        .sort((a, b) => b.score - a.score)
+    );
+  }
+
+  const MAX_UPGRADES = 60; // far above the 15 swaps a full rebuild needs
+  for (let iteration = 0; iteration < MAX_UPGRADES; iteration++) {
+    let best: { outIdx: number; incoming: ScoredPlayer; gain: number } | null = null;
+
+    for (let i = 0; i < squad.length; i++) {
+      const current = squad[i];
+      const posId = current.element.element_type;
+      const candidates = byPosition.get(posId) ?? [];
+
+      for (const cand of candidates) {
+        const gain = cand.score - current.score;
+        // Sorted by score descending, so once the gain stops beating the
+        // best swap found so far, nothing later in this list can win.
+        if (best && gain <= best.gain) break;
+        if (gain <= 0) break;
+        if (inSquad.has(cand.element.id)) continue;
+        if (spent - current.priceM + cand.priceM > budgetM) continue;
+        // Club limit, accounting for the slot the outgoing player frees.
+        const freed = cand.team.id === current.team.id ? 1 : 0;
+        if (clubN(cand.team.id) - freed >= 3) continue;
+
+        best = { outIdx: i, incoming: cand, gain };
+        break; // best possible for this slot
       }
     }
+
+    if (!best) break;
+
+    const outgoing = squad[best.outIdx];
+    clubCount.set(outgoing.team.id, clubN(outgoing.team.id) - 1);
+    clubCount.set(best.incoming.team.id, clubN(best.incoming.team.id) + 1);
+    inSquad.delete(outgoing.element.id);
+    inSquad.add(best.incoming.element.id);
+    spent = spent - outgoing.priceM + best.incoming.priceM;
+    squad[best.outIdx] = best.incoming;
   }
 
   return { squad, starters: pickBestXI(squad), totalCost: Math.round(spent * 10) / 10 };
 }
 
+/** Does this squad satisfy every FPL constraint? Callers must check this
+ * before telling a user the squad is valid — the previous code hard-coded
+ * `feasible: true` on a path that demonstrably returned short squads. */
+export function isValidSquad(squad: ScoredPlayer[], budgetM = 100): boolean {
+  if (squad.length !== 15) return false;
+  const need: Record<number, number> = { 1: 2, 2: 5, 3: 5, 4: 3 };
+  const counts: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
+  const clubs = new Map<number, number>();
+  let cost = 0;
+  for (const p of squad) {
+    counts[p.element.element_type] = (counts[p.element.element_type] ?? 0) + 1;
+    clubs.set(p.team.id, (clubs.get(p.team.id) ?? 0) + 1);
+    cost += p.priceM;
+  }
+  for (const posId of [1, 2, 3, 4]) if (counts[posId] !== need[posId]) return false;
+  for (const n of clubs.values()) if (n > 3) return false;
+  return cost <= budgetM + 1e-9;
+}
+
 /**
- * Picks the best-scoring valid starting XI out of an arbitrary 15-player
- * squad (min 3 DEF, 2 MID, 1 FWD, always exactly 1 GK) — shared by the
- * auto-suggested squad and the Shadow Team simulator, so both apply the
- * exact same "who should actually start" logic to whatever 15 players
- * they're given.
+ * Picks the best valid starting XI out of a 15-player squad — exactly 1 GK,
+ * at least 3 DEF, 2 MID and 1 FWD, 11 players in total.
+ *
+ * Selection is driven by `expectedPointsNext`, NOT the multi-gameweek
+ * score: who to start is a decision about the next gameweek alone. Using
+ * the 5-gameweek total here meant a player with a poor next fixture but a
+ * strong run after it displaced someone better for the only gameweek that
+ * was actually being decided.
+ *
+ * Returns `{ xi, valid }` rather than a bare array so callers can tell a
+ * legal XI from a best-effort one. The previous version silently returned
+ * whatever it could assemble — 1 player from a squad of goalkeepers, or an
+ * all-midfield XI — and callers had no way to know.
  */
 export function pickBestXI(squad: ScoredPlayer[]): ScoredPlayer[] {
-  const byPos = (id: number) =>
-    squad.filter((p) => p.element.element_type === id).sort((a, b) => b.score - a.score);
-  const gk = byPos(1).slice(0, 1);
-  const def = byPos(2).slice(0, 3);
-  const mid = byPos(3).slice(0, 2);
-  const fwd = byPos(4).slice(0, 1);
+  return pickBestXIChecked(squad).xi;
+}
+
+export function pickBestXIChecked(squad: ScoredPlayer[]): {
+  xi: ScoredPlayer[];
+  valid: boolean;
+} {
+  const by = (id: number) =>
+    squad
+      .filter((p) => p.element.element_type === id)
+      .sort((a, b) => b.expectedPointsNext - a.expectedPointsNext);
+
+  const gk = by(1).slice(0, 1);
+  const def = by(2).slice(0, 3);
+  const mid = by(3).slice(0, 2);
+  const fwd = by(4).slice(0, 1);
   const chosen = new Set([...gk, ...def, ...mid, ...fwd]);
   const remaining = squad
     .filter((p) => !chosen.has(p) && p.element.element_type !== 1)
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.expectedPointsNext - a.expectedPointsNext)
     .slice(0, 11 - chosen.size);
 
-  return [...gk, ...def, ...mid, ...fwd, ...remaining];
+  const xi = [...gk, ...def, ...mid, ...fwd, ...remaining];
+  const valid =
+    xi.length === 11 && gk.length === 1 && def.length === 3 && mid.length === 2 && fwd.length === 1;
+  return { xi, valid };
 }
 
+/**
+ * Captain and vice-captain, chosen on NEXT-GAMEWEEK expected points.
+ *
+ * The armband doubles a player's score in one gameweek, so ranking by a
+ * five-gameweek total — as this did until v1.11 — answers the wrong
+ * question: a player with a poor next fixture and four excellent ones
+ * afterwards would outrank the player who is actually best this week.
+ *
+ * Returns `undefined` for either slot when the XI is too short to fill it,
+ * rather than claiming a `ScoredPlayer` that isn't there.
+ */
 export function pickCaptain(starters: ScoredPlayer[]): {
-  captain: ScoredPlayer;
-  viceCaptain: ScoredPlayer;
+  captain: ScoredPlayer | undefined;
+  viceCaptain: ScoredPlayer | undefined;
 } {
-  const ranked = [...starters].sort((a, b) => b.score - a.score);
+  const ranked = [...starters].sort(
+    (a, b) => b.expectedPointsNext - a.expectedPointsNext
+  );
   return { captain: ranked[0], viceCaptain: ranked[1] };
 }
 

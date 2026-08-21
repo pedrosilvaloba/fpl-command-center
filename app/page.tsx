@@ -88,6 +88,15 @@ export default async function Home() {
     bootstrap.events.find((e) => e.is_current) ??
     bootstrap.events[0];
   const fromEvent = nextEvent?.id ?? 1;
+  // FPL only serves /entry/{id}/event/{gw}/picks/ for a gameweek whose
+  // deadline has already passed — a squad for the UPCOMING gameweek lives
+  // behind an authenticated endpoint this app deliberately does not use.
+  // `fromEvent` is `is_next` (correct for recommendations), so passing it
+  // to the picks fetch asked for the one gameweek FPL will not return, all
+  // week, every week. These are two different questions and now use two
+  // different variables.
+  const currentEventForPicks = bootstrap.events.find((e) => e.is_current);
+  const picksEvent = currentEventForPicks?.id ?? Math.max(1, fromEvent - 1);
 
   // The Calendário panel used to show FPL's own crude 1-5 difficulty
   // digit — recomputed here (cheaply — a season is a few hundred
@@ -256,7 +265,7 @@ export default async function Home() {
         )}
 
         <Section id="my-team" title="A Minha Equipa" eyebrow="Ligado ao teu Team ID">
-          <MyTeamPanel scored={scored} eventId={fromEvent} />
+          <MyTeamPanel scored={scored} eventId={picksEvent} />
         </Section>
 
         <Section
@@ -345,13 +354,13 @@ export default async function Home() {
               <h3 className="font-display text-lg tracking-wide mb-2">
                 Onze Inicial
               </h3>
-              <PlayerTable players={starters} />
+              <PlayerTable players={starters} showReasons />
             </div>
             <div>
               <h3 className="font-display text-lg tracking-wide mb-2">
                 Banco
               </h3>
-              <PlayerTable players={bench} />
+              <PlayerTable players={bench} showReasons />
             </div>
           </div>
         </Section>

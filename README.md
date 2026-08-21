@@ -44,6 +44,7 @@ lib/
   oddsapi.ts      Cliente da The Odds API — probabilidades de mercado (opcional)
   schedule.ts     Deteção de jornadas duplas e em branco por equipa
   playerthreat.ts Ameaça de golo/assistência individual, fiabilidade de utilização (incl. padrão de substituição cedo), bolas paradas, contribuição defensiva
+  expectedpoints.ts Modelo de pontos esperados — minutos, golos, assistências, clean sheets, bónus, contribuição defensiva
   managerinsights.ts Ajustes qualitativos/táticos — lista permanente manual + camada dinâmica auto-aplicada (resolução de nomes, validação, expiração, limite)
   teamrating.ts   Rating de equipa dinâmico (Elo + taxa de golos), calibrado com os resultados reais desta época
   accuracy.ts     Compara previsões do modelo com pontos reais, jornada a jornada (opcional, precisa de Redis)
@@ -52,6 +53,9 @@ lib/
   strategy.ts     Playbook e regras 2026/27 (conteúdo da investigação)
   constants.ts    Team ID e League ID por omissão desta instalação pessoal
   kv.ts           Cliente Upstash Redis (com fallback gracioso se não ligado)
+tests/
+  fixtures.ts        Dados sintéticos partilhados + micro-harness de asserções
+  regression.test.ts Suite de regressão — um teste por defeito encontrado na auditoria
 components/
   CountdownTimer.tsx  Contagem decrescente até ao deadline (client)
   FixtureTicker.tsx   Tabela de calendário com chips de dificuldade
@@ -60,7 +64,7 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
-## O que já funciona (v1.11)
+## O que já funciona (v1.12)
 
 - Dados 100% reais e ao vivo — preço, forma, posse, pontos, calendário —
   vindos diretamente da API oficial, sem qualquer valor inventado ou
@@ -270,6 +274,57 @@ components/
        uma nota específica antes da expiração natural, se alguma vez
        discordar de uma — a rede de segurança para "automático não é
        irreversível".
+- **Reescrita do motor em pontos esperados (v1.12).** Uma auditoria
+  independente concluiu que a pontuação anterior — uma soma ponderada com
+  multiplicadores escolhidos à mão — tinha três problemas que nenhuma
+  recalibração resolvia: não tinha unidade (médios pontuavam 22-64 e
+  defesas 9-32 só porque os termos de ataque eram maiores, o que decidia
+  por posição qualquer comparação entre posições, e tornava impossível
+  avaliar um hit de -4); contava a forma recente cinco vezes através de
+  `form`, `ppg`, `ep_next`, a metade realizada da ameaça individual e o
+  índice ICT, somando ~60% da pontuação de um premium; e deixava de fora
+  sinais reais por não haver onde os encaixar. `lib/expectedpoints.ts`
+  modela agora cada mecanismo de pontuação da FPL pelos pontos que ele
+  realmente paga, o que resolve os três de uma vez. Mudanças concretas:
+  - **Modelo de minutos a sério** — separa "começa o jogo?" de "fica em
+    campo até aos 60min?", que são riscos diferentes. A estimativa de
+    minutos por titularidade está agora limitada a 90 (antes podia dar
+    123min/jogo e anular a penalização por substituição cedo).
+  - **Bónus entram na pontuação** — `bonus` era obtido da API e nunca
+    usado, apesar de valer ~0,5-1,5 pts por jornada num premium e ser
+    altamente previsível.
+  - **Bolas paradas contam em pré-época** — ser o marcador de penáltis é
+    um papel, não uma estatística acumulada, por isso é conhecido antes de
+    a época começar. Era calculado e deitado fora exatamente nessa altura.
+  - **Capitão e onze passam a usar a próxima jornada** — a braçadeira
+    duplica os pontos de UMA jornada; era escolhida por um total de cinco.
+  - **`ep_next` passa a ser parceiro de mistura, não mais uma parcela** —
+    com poucos minutos jogados a estimativa da FPL é melhor informação que
+    a nossa; ao fim de ~4 jogos o nosso modelo domina. Isto elimina a
+    dupla contagem e, de caminho, a descontinuidade que fazia as
+    pontuações saltar 3× no fecho da GW1.
+  - **Contexto de calendário normalizado pela própria equipa** — o ritmo
+    por 90min de um jogador foi obtido a jogar naquela equipa, por isso já
+    contém a qualidade dela; comparar com a média da liga contava as
+    equipas fortes duas vezes.
+- **Correções da auditoria (v1.12).** Notas táticas passam a aparecer nas
+  razões da Equipa Sugerida (antes só em Melhores Escolhas e Diferenciais,
+  apesar de a app prometer o contrário); o limite de ±20% passa a ser
+  aplicado ao **efeito combinado** das notas e não a cada uma
+  isoladamente (três notas a 0.8 compunham para -49%); a inversão que
+  classificava a melhor defesa da liga como exatamente média foi
+  substituída por suavização de Laplace; a heurística de recurso passa a
+  construir um plantel legal pelo preço mínimo antes de o melhorar, e o
+  otimizador deixou de escrever `feasible: true` à mão sem validar; "A
+  Minha Equipa" deixou de pedir à FPL a jornada que ela não serve; e o
+  Painel de Precisão compara agora **dentro de cada posição** (antes
+  juntava as quatro e media, na prática, a diferença entre médios e
+  defesas — um modelo aleatório teria reportado o mesmo valor).
+- **Suite de regressão (v1.12).** `npm test` corre 53 verificações, uma
+  por defeito encontrado na auditoria. Até aqui as verificações eram
+  escritas, corridas e apagadas antes de empacotar, o que significava que
+  nada impedia uma correção futura de reintroduzir em silêncio um defeito
+  já resolvido. `npm run verify` corre tipos, lint e testes de uma vez.
 - **A Minha Equipa** — introduz o teu Team ID (guardado neste browser, com
   o teu por omissão) e vês o teu plantel real, capitão, banco, valor e
   rank, com sugestões de transferência calculadas contra o teu plantel
