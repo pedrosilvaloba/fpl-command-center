@@ -1,7 +1,19 @@
 import type { FplBootstrap, FplElement, FplTeam } from "./types";
 import { averageDifficulty, buildFixtureTicker } from "./fdr";
-import { buildFixtureExpectations, windowExpectation } from "./matchmodel";
+import {
+  buildFixtureExpectations,
+  windowExpectation,
+  poissonQuantile,
+  BASE_HOME_GOALS,
+  BASE_AWAY_GOALS,
+} from "./matchmodel";
 import type { OddsMatch } from "./oddsapi";
+import { computeDynamicTeamFactors } from "./teamrating";
+import {
+  computePlayerThreat,
+  defensiveContributionFactor,
+  teamFinishedFixtureCounts,
+} from "./playerthreat";
 
 export interface ScoredPlayer {
   element: FplElement;
@@ -14,6 +26,9 @@ export interface ScoredPlayer {
   nextOpponents: string; // e.g. "BOU (H), MCI (A), ..."
   expectedGoalsFor: number; // team's avg expected goals over the fixture window
   cleanSheetProbability: number; // team's avg clean-sheet probability over the window
+  individualExpectedGI: number; // this player's own expected goal involvements over the window
+  ceilingGI: number; // rough 85th-percentile outcome for individualExpectedGI
+  floorGI: number; // rough 15th-percentile outcome for individualExpectedGI
   score: number;
   isDifferential: boolean;
   isPreseason: boolean;
@@ -30,6 +45,23 @@ const POSITION_SHORT: Record<number, string> = {
   4: "FWD",
 };
 
+// Neutral per-fixture goal baseline — the average of the two home/away
+// baselines the Poisson model itself is built on (lib/matchmodel.ts) —
+// used only to express "is this team's window better/worse than a
+// neutral fixture run", as a ratio. Re-derives from the same constants
+// matchmodel.ts uses (rather than a second hand-picked number) so the two
+// stay in sync if that model's baseline is ever retuned.
+const NEUTRAL_PER_FIXTURE_GOALS = (BASE_HOME_GOALS + BASE_AWAY_GOALS) / 2;
+
+// Score-formula calibration constants. These are a first pass, not a
+// backtested optimum — lib/accuracy.ts is what lets that claim actually
+// get checked against real results over the season, and these are the
+// first numbers worth revisiting once it has enough data.
+const ATTACK_MULTIPLIER = 0.5; // in-season: individualExpectedGI -> score
+const ATTACK_MULTIPLIER_PRESEASON = 0.6;
+const DEF_ATTACK_UPSIDE_MULTIPLIER = 0.3; // defenders' own attacking threat — smaller weight than their clean-sheet term, but real (a defender goal is worth more points than a forward's)
+const DC_WEIGHT = 1.0; // defensive-contribution-bonus proximity, DEF/MID
+
 /**
  * Scores every available (non-injured-out) player for a given upcoming
  * gameweek window. This is a transparent, tunable heuristic — not a
@@ -39,18 +71,37 @@ const POSITION_SHORT: Record<number, string> = {
  * fixture context, and don't overreact to a single gameweek's form.
  *
  * Fixture context comes from lib/matchmodel.ts, not FPL's single 1-5
- * difficulty digit: every team's attack/defence strength ratings are run
- * through a Poisson goal-expectancy model, giving each player a signal
- * specific to their own team's role in that fixture — defenders/keepers
- * are weighted by their team's clean-sheet probability, midfielders/
- * forwards by their team's expected goals-for — instead of every player
- * on a team getting the same generic "easy/hard calendar" bump.
+ * difficulty digit: every team's attack/defence strength ratings — now
+ * additionally corrected by lib/teamrating.ts's in-season, self-updating
+ * signal built from this season's actual results, on top of FPL's own
+ * static ratings — are run through a Poisson goal-expectancy model.
+ *
+ * That team-level number alone isn't enough, though: it says how many
+ * goals a TEAM is expected to score, not which of that team's players
+ * are actually likely to be the ones scoring/assisting them. Every
+ * attacker on the same team used to get exactly the same team-level
+ * number here — the single biggest structural weakness identified in a
+ * review of this model (a genuinely strong attacking team was showing
+ * only one standout recommended player, because the "team goals" term
+ * couldn't tell its players apart, leaving price/ownership — which move
+ * slowly and unevenly across a squad — to do almost all the
+ * differentiating). lib/playerthreat.ts fixes this using FPL's own
+ * per-player expected-goals/expected-assists, starts (rotation
+ * reliability) and set-piece duty data — already fetched, never
+ * previously used — to give each attacker (and each attacking-minded
+ * defender) their own fixture-and-role-aware expected goal involvement,
+ * computed below as `individualExpectedGI`. Defenders/keepers are still
+ * primarily weighted by their team's clean-sheet probability (a
+ * genuinely team-shared outcome, unlike scoring), plus a smaller
+ * individual-attacking-upside term and a defensive-contribution-bonus
+ * proximity term (see lib/playerthreat.ts — a real 2025/26 scoring
+ * mechanism this model was fetching data for but never using).
  *
  * Before a ball has been kicked this season (preseason / GW1), in-season
  * form and points are meaningless (everyone is 0), so the weights shift
  * towards price and ownership — the market's pre-season consensus on
  * quality — and fixture context. Once games have been played, form/
- * points-per-game take over as the primary signal.
+ * points-per-game/individual-threat take over as the primary signal.
  *
  * When betting-market odds are available (`oddsMatches`, optional —
  * requires an ODDS_API_KEY, see lib/oddsapi.ts), the match model above
@@ -61,13 +112,12 @@ const POSITION_SHORT: Record<number, string> = {
  * own. Without a key configured, this runs on the statistical model
  * alone — a real, honest fallback, not a broken state.
  *
- * A full xG-differential model built from this season's actual results
- * (once enough of it exists to calibrate one), and simulating outcomes
- * against specific rivals rather than in the abstract, are the next
- * upgrades noted in the README — this is the honest v1.2 baseline.
- * Builds the fixture ticker and match-model expectations once, then
- * scores every player against them — this is what the dashboard calls
- * directly.
+ * Simulating outcomes against specific rivals rather than in the
+ * abstract (Camada 2 of the roadmap) is the next upgrade, now that this
+ * gives it a gameweek-aware, individually-attributed foundation to build
+ * on instead of a flat team-level average. Builds the fixture ticker and
+ * match-model expectations once, then scores every player against them —
+ * this is what the dashboard calls directly.
  */
 export function buildScoredPlayers(
   bootstrap: FplBootstrap,
@@ -78,7 +128,9 @@ export function buildScoredPlayers(
 ): ScoredPlayer[] {
   const teamById = new Map(bootstrap.teams.map((t) => [t.id, t]));
   const ticker = buildFixtureTicker(bootstrap.teams, fixtures, fromEvent, fixtureWindow);
-  const expectationsByTeam = buildFixtureExpectations(bootstrap.teams, fixtures, oddsMatches);
+  const teamFactors = computeDynamicTeamFactors(bootstrap.teams, fixtures);
+  const expectationsByTeam = buildFixtureExpectations(bootstrap.teams, fixtures, oddsMatches, teamFactors);
+  const teamFinishedFixtures = teamFinishedFixtureCounts(bootstrap.teams.map((t) => t.id), fixtures);
   const currentEvent = bootstrap.events.find((e) => e.is_current);
   const isPreseason = !currentEvent;
 
@@ -111,7 +163,34 @@ export function buildScoredPlayers(
     // gameweek inside the window correctly counts as more opportunity
     // rather than being averaged away.
     const { avgGoalsFor: expectedGoalsFor, avgCleanSheetProbability: cleanSheetProbability } = window;
-    const { totalGoalsFor, totalCleanSheetProbability } = window;
+    const { totalCleanSheetProbability } = window;
+
+    const isDefensive = DEFENSIVE_POSITIONS.has(el.element_type);
+    const isAttacking = ATTACKING_POSITIONS.has(el.element_type);
+
+    const threat = computePlayerThreat(el, teamFinishedFixtures.get(team.id) ?? 0, isPreseason);
+    const dc = defensiveContributionFactor(el, el.element_type);
+
+    // This player's own expected goal involvement for the window: their
+    // blended per-90 rate (+ set-piece duty), scaled by how much better/
+    // worse than a neutral fixture run this team's window actually is,
+    // by how many of those minutes this player is reliably on the pitch
+    // for, and by how many fixtures are actually in the window (so a
+    // double gameweek is worth roughly double for this player too, not
+    // just for the team-level total).
+    const fixtureRunFactor =
+      window.fixtureCount > 0
+        ? window.totalGoalsFor / (window.fixtureCount * NEUTRAL_PER_FIXTURE_GOALS)
+        : 1;
+    const individualExpectedGI = isPreseason
+      ? 0
+      : (threat.blendedGI90 + threat.setPieceBonus) *
+        fixtureRunFactor *
+        threat.reliability *
+        window.fixtureCount;
+
+    const ceilingGI = poissonQuantile(individualExpectedGI, 0.85);
+    const floorGI = poissonQuantile(individualExpectedGI, 0.15);
 
     // Availability penalty: doubtful/injured players get scored down hard
     // even if their underlying numbers are great — a great player who
@@ -123,35 +202,43 @@ export function buildScoredPlayers(
 
     let raw: number;
     const reasons: string[] = [];
-    const isDefensive = DEFENSIVE_POSITIONS.has(el.element_type);
-    const isAttacking = ATTACKING_POSITIONS.has(el.element_type);
 
     if (isPreseason) {
       // Price is the market's own pre-season valuation of quality;
       // ownership is the collective wisdom of everyone else who has
-      // already looked at press-conference/preseason signals. The
-      // fixture-context term uses the WINDOW TOTAL (not the average), so
-      // a double gameweek inside the window is worth more, not diluted —
-      // multipliers below are calibrated for the default 5-gameweek
-      // window (see lib/matchmodel.ts for how these numbers are derived;
-      // re-tune if fixtureWindow changes materially from 5).
+      // already looked at press-conference/preseason signals. No
+      // underlying-stats history exists yet this early, so
+      // individualExpectedGI is 0 and the team-level window total is
+      // used instead, same as before — multipliers below are calibrated
+      // for the default 5-gameweek window (see lib/matchmodel.ts for how
+      // these numbers are derived; re-tune if fixtureWindow changes
+      // materially from 5).
       raw =
         priceM * 1.6 +
         Math.log10(ownershipPct + 1) * 6 +
         (isDefensive ? totalCleanSheetProbability * 2 : 0) +
-        (isAttacking ? totalGoalsFor * 0.4 : 0) +
+        (isAttacking ? window.totalGoalsFor * ATTACK_MULTIPLIER_PRESEASON : 0) +
         ictNum * 0.02;
       if (ownershipPct >= 25) reasons.push("escolha consensual do mercado (template)");
       if (ownershipPct < 10 && priceM >= 6) reasons.push("possível diferencial de qualidade");
     } else {
       raw =
-        formNum * 2.2 +
+        formNum * 1.8 +
         ppg * 1.4 +
         (isDefensive ? totalCleanSheetProbability * 1.6 : 0) +
-        (isAttacking ? totalGoalsFor * 0.32 : 0) +
+        (isAttacking ? individualExpectedGI * ATTACK_MULTIPLIER : 0) +
+        (isDefensive && el.element_type === 2
+          ? individualExpectedGI * DEF_ATTACK_UPSIDE_MULTIPLIER
+          : 0) +
+        (isDefensive || isAttacking ? dc.factor * DC_WEIGHT : 0) +
         ictNum * 0.015 +
         Math.log10(ownershipPct + 1) * 1.5;
       if (formNum >= 5) reasons.push("em grande forma recente");
+      reasons.push(...threat.reasons);
+      if (dc.reason) reasons.push(dc.reason);
+      if (ceilingGI - floorGI >= 2 && individualExpectedGI > 0) {
+        reasons.push("perfil de risco/recompensa: potencial de teto alto, mas resultado pode variar bastante");
+      }
     }
 
     if (isDefensive && cleanSheetProbability >= 0.35) {
@@ -197,6 +284,9 @@ export function buildScoredPlayers(
       nextOpponents,
       expectedGoalsFor: Math.round(expectedGoalsFor * 100) / 100,
       cleanSheetProbability: Math.round(cleanSheetProbability * 1000) / 1000,
+      individualExpectedGI: Math.round(individualExpectedGI * 100) / 100,
+      ceilingGI,
+      floorGI,
       score: Math.round(raw * 100) / 100,
       isDifferential: ownershipPct < 10,
       isPreseason,

@@ -9,6 +9,11 @@ import { buildOptimalSquad } from "@/lib/optimizer";
 import { buildPriceWatch, buildNewsWatch } from "@/lib/pricewatch";
 import { getOddsImpliedProbabilities } from "@/lib/oddsapi";
 import { findScheduleAnomalies } from "@/lib/schedule";
+import {
+  snapshotIfMissing,
+  recordOutcomesForFinishedEvents,
+  getAccuracyHistory,
+} from "@/lib/accuracy";
 import { PLAYBOOK, RULES_2026_27 } from "@/lib/strategy";
 import { DEFAULT_TEAM_ID, DEFAULT_LEAGUE_ID } from "@/lib/constants";
 import CountdownTimer from "@/components/CountdownTimer";
@@ -57,7 +62,13 @@ function Section({
 export default async function Home() {
   const [bootstrap, fixtures, oddsMatches] = await Promise.all([
     getBootstrap(),
-    getFixtures({ future: true }),
+    // Full season (past + future), not just upcoming — the dynamic team-
+    // rating model (lib/teamrating.ts) needs finished fixtures' actual
+    // scores, and the individual-reliability model (lib/playerthreat.ts)
+    // needs a count of each team's finished fixtures so far. Every
+    // existing consumer of `fixtures` already filters by event range, so
+    // including past ones is safe.
+    getFixtures(),
     // Optional enrichment — returns null when ODDS_API_KEY isn't
     // configured, or if the request fails for any reason. Included in
     // this Promise.all because getOddsImpliedProbabilities never
@@ -80,6 +91,29 @@ export default async function Home() {
   const differentials = findDifferentials(scored, 10, 8);
   const { risers, fallers } = buildPriceWatch(bootstrap, 8);
   const newsWatch = buildNewsWatch(bootstrap, 15);
+
+  // Model accuracy tracker (optional — requires the same Upstash Redis
+  // integration as the Shadow Team sync, see lib/accuracy.ts). Snapshots
+  // this visit's top picks for whichever gameweek's deadline hasn't
+  // passed yet (guaranteeing no fixture in it has kicked off), and
+  // records real outcomes for any gameweek that has since finished.
+  // Both are no-ops without Redis configured, and never throw — a
+  // tracking failure here must never take the page down.
+  // This is a force-dynamic Server Component (see the `dynamic` export
+  // above): reading the wall clock fresh on every request is the
+  // intended behaviour, not a violation of the memoization assumptions
+  // this rule protects against in client components/hooks.
+  // eslint-disable-next-line react-hooks/purity
+  const nowMs = Date.now();
+  const upcomingEvent = bootstrap.events.find(
+    (e) => !e.finished && new Date(e.deadline_time).getTime() > nowMs
+  );
+  const finishedEventIds = bootstrap.events.filter((e) => e.finished).map((e) => e.id);
+  await Promise.all([
+    upcomingEvent ? snapshotIfMissing(scored, upcomingEvent.id) : Promise.resolve(),
+    recordOutcomesForFinishedEvents(finishedEventIds),
+  ]);
+  const accuracyHistory = await getAccuracyHistory();
 
   // Chip-timing horizon: further out than the 5-week scoring window,
   // since Bench Boost/Triple Captain/Free Hit planning benefits from
@@ -178,6 +212,7 @@ export default async function Home() {
             ["differentials", "Diferenciais"],
             ["price-watch", "Preços"],
             ["news-watch", "Notícias/Lesões"],
+            ["model-accuracy", "Precisão do Modelo"],
             ["playbook", "Playbook"],
             ["rules", "Regras"],
             ["roadmap", "Roadmap"],
@@ -472,6 +507,77 @@ export default async function Home() {
           )}
         </Section>
 
+        <Section
+          id="model-accuracy"
+          title="Precisão do Modelo"
+          eyebrow="Previsto vs. real, jornada a jornada"
+        >
+          {!accuracyHistory.configured ? (
+            <p className="text-sm text-text-muted">
+              Este painel compara o que o motor de pontuação previu com o
+              que realmente aconteceu, jornada a jornada — a única forma
+              séria de saber se as mudanças ao modelo estão mesmo a
+              ajudar, em vez de confiar apenas na intuição. Precisa da
+              mesma integração Upstash Redis opcional do Shadow Team (ver
+              README) para guardar as previsões antes de cada jornada.
+            </p>
+          ) : accuracyHistory.results.length === 0 ? (
+            <p className="text-sm text-text-muted">
+              Ainda sem jornadas comparadas. Isto só consegue começar a
+              medir a partir de agora — não há forma fiável de reconstruir
+              o que o modelo teria previsto antes de jornadas já
+              passadas. Volta aqui depois da próxima jornada terminar.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-sm min-w-[480px]">
+                <thead>
+                  <tr className="text-left text-text-muted uppercase text-xs tracking-wide">
+                    <th className="py-2 pr-3 font-medium">Jornada</th>
+                    <th className="py-2 pr-3 font-medium text-right">
+                      Média — metade top do modelo
+                    </th>
+                    <th className="py-2 pr-3 font-medium text-right">
+                      Média — resto
+                    </th>
+                    <th className="py-2 font-medium text-right">Diferença</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {accuracyHistory.results.map((r) => (
+                    <tr key={r.event} className="border-t border-border">
+                      <td className="py-2 pr-3">GW{r.event}</td>
+                      <td className="py-2 pr-3 text-right font-mono tabular">
+                        {r.topAvgPoints.toFixed(1)}
+                      </td>
+                      <td className="py-2 pr-3 text-right font-mono tabular">
+                        {r.restAvgPoints.toFixed(1)}
+                      </td>
+                      <td
+                        className={`py-2 text-right font-mono tabular font-semibold ${
+                          r.lift >= 0 ? "text-success" : "text-danger"
+                        }`}
+                      >
+                        {r.lift >= 0 ? "+" : ""}
+                        {r.lift.toFixed(1)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="text-xs text-text-muted opacity-70 mt-3">
+                &quot;Metade top do modelo&quot; = os jogadores com melhor
+                pontuação do motor entre os candidatos guardados antes da
+                jornada, por posição; &quot;resto&quot; = os restantes
+                candidatos guardados nessa altura. Uma diferença positiva
+                e consistente ao longo da época é o sinal de que o motor
+                está mesmo a distinguir quem vai pontuar mais — não uma
+                garantia jornada a jornada.
+              </p>
+            </div>
+          )}
+        </Section>
+
         <Section id="playbook" title="Playbook de Estratégia" eyebrow="O que separa os melhores gestores">
           <div className="grid md:grid-cols-2 gap-5">
             {PLAYBOOK.map((p) => (
@@ -528,6 +634,12 @@ export default async function Home() {
                 <li>✓ Modelo de golos esperados por equipa (Poisson), substituindo o dígito de calendário genérico</li>
                 <li>✓ Odds de mercado como sinal de contexto (opcional — ver ODDS_API_KEY no README), para captar fatores não estatísticos e opinião especializada</li>
                 <li>✓ Deteção de jornadas duplas/brancas e pontuação sensível ao calendário (uma dupla vale mais, não é diluída numa média)</li>
+                <li>✓ Ameaça de golo/assistência individual (xG/xA e bolas paradas por jogador, não só a equipa) — cada jogador atacante deixou de herdar o mesmo número genérico da equipa</li>
+                <li>✓ Fiabilidade de utilização (risco de rotação) a partir dos jogos como titular</li>
+                <li>✓ Bónus de contribuição defensiva (regra 2025/26) finalmente usado na pontuação</li>
+                <li>✓ Rating de equipa dinâmico, calibrado com os resultados reais desta época, a corrigir as classificações estáticas da FPL</li>
+                <li>✓ Perfil de risco/recompensa (teto vs. chão) para diferenciar apostas seguras de apostas de variância alta</li>
+                <li>✓ Painel de Precisão do Modelo — compara previsões com pontos reais, jornada a jornada (opcional, precisa de Redis)</li>
               </ul>
             </div>
             <div>

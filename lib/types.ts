@@ -69,6 +69,23 @@ export interface FplElement {
   cost_change_event: number;
   cost_change_start: number;
   news_added: string | null;
+  // Individual underlying-performance and role signals — all already
+  // present in the real FPL bootstrap payload, previously fetched but
+  // never used by the scoring engine (see lib/playerthreat.ts for why
+  // that mattered). Field names/shapes follow the FPL API as documented
+  // by the wider open-source FPL community; this sandbox can't reach the
+  // live API to verify them directly, so every read of these fields is
+  // done defensively (missing/renamed -> 0/null, never a crash).
+  starts?: number;
+  expected_goals?: string;
+  expected_assists?: string;
+  expected_goal_involvements?: string;
+  expected_goals_per_90?: string;
+  expected_assists_per_90?: string;
+  expected_goal_involvements_per_90?: string;
+  penalties_order?: number | null;
+  corners_and_indirect_freekicks_order?: number | null;
+  direct_freekicks_order?: number | null;
 }
 
 export interface FplBootstrap {

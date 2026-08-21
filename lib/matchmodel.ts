@@ -1,6 +1,7 @@
 import type { FplFixture, FplTeam } from "./types";
 import type { OddsMatch } from "./oddsapi";
 import { matchOddsTeam } from "./oddsapi";
+import type { TeamFactor } from "./teamrating";
 
 export interface FixtureExpectation {
   fixtureId: number;
@@ -17,8 +18,8 @@ export interface FixtureExpectation {
 // widely-cited prior (home teams score somewhat more than away teams on
 // average across a season). This is only the baseline the attack/defence
 // factors below scale around; it does not need to be exact.
-const BASE_HOME_GOALS = 1.5;
-const BASE_AWAY_GOALS = 1.2;
+export const BASE_HOME_GOALS = 1.5;
+export const BASE_AWAY_GOALS = 1.2;
 
 function poissonZeroProb(lambda: number): number {
   return Math.exp(-lambda);
@@ -28,6 +29,22 @@ function poissonPmf(k: number, lambda: number): number {
   let factorial = 1;
   for (let i = 2; i <= k; i++) factorial *= i;
   return (Math.exp(-lambda) * Math.pow(lambda, k)) / factorial;
+}
+
+/** Smallest k such that P(X <= k) >= p for X ~ Poisson(lambda) — turns a
+ * single expected-value number into a rough outcome band (e.g. p=0.85
+ * for a "ceiling", p=0.15 for a "floor") instead of only ever showing
+ * the mean. Used to flag boom/bust players for captaincy/differential
+ * decisions, where two players who share an expected value can have
+ * very different real risk profiles. */
+export function poissonQuantile(lambda: number, p: number, maxK = 12): number {
+  if (lambda <= 0) return 0;
+  let cumulative = 0;
+  for (let k = 0; k <= maxK; k++) {
+    cumulative += poissonPmf(k, lambda);
+    if (cumulative >= p) return k;
+  }
+  return maxK;
 }
 
 /** P(home win) / P(draw) / P(away win) implied by two independent
@@ -127,11 +144,20 @@ function average(teams: FplTeam[], key: keyof FplTeam): number {
  * analysis the static preseason ratings can't see get folded in. Without
  * odds configured, this runs on the strength-rating model alone — a
  * real, honest fallback, not a broken state.
+ *
+ * When `teamFactors` is supplied (from lib/teamrating.ts — an in-season,
+ * self-updating attack/defence signal built from this season's actual
+ * results), it's applied to the strength ratios FIRST, before the market
+ * tilt: FPL's static baseline gets corrected by what's actually happened
+ * this season, and then nudged again towards the latest market read.
+ * Early season (no finished matches yet) every team factor is exactly
+ * 1.0, so this is a no-op until there's real evidence to react to.
  */
 export function buildFixtureExpectations(
   teams: FplTeam[],
   fixtures: FplFixture[],
-  oddsMatches: OddsMatch[] | null = null
+  oddsMatches: OddsMatch[] | null = null,
+  teamFactors: Map<number, TeamFactor> | null = null
 ): Map<number, FixtureExpectation[]> {
   const byId = new Map(teams.map((t) => [t.id, t]));
   const avgAttackHome = average(teams, "strength_attack_home");
@@ -162,12 +188,19 @@ export function buildFixtureExpectations(
     const away = byId.get(f.team_a);
     if (!home || !away) continue;
 
-    const attackFactorHome = home.strength_attack_home / (avgAttackHome || 1);
-    const defenceFactorAway = away.strength_defence_away / (avgDefenceAway || 1);
+    const homeDynamic = teamFactors?.get(home.id);
+    const awayDynamic = teamFactors?.get(away.id);
+
+    const attackFactorHome =
+      (home.strength_attack_home / (avgAttackHome || 1)) * (homeDynamic?.attackFactor ?? 1);
+    const defenceFactorAway =
+      (away.strength_defence_away / (avgDefenceAway || 1)) * (awayDynamic?.defenceFactor ?? 1);
     let xgHome = (BASE_HOME_GOALS * attackFactorHome) / (defenceFactorAway || 1);
 
-    const attackFactorAway = away.strength_attack_away / (avgAttackAway || 1);
-    const defenceFactorHome = home.strength_defence_home / (avgDefenceHome || 1);
+    const attackFactorAway =
+      (away.strength_attack_away / (avgAttackAway || 1)) * (awayDynamic?.attackFactor ?? 1);
+    const defenceFactorHome =
+      (home.strength_defence_home / (avgDefenceHome || 1)) * (homeDynamic?.defenceFactor ?? 1);
     let xgAway = (BASE_AWAY_GOALS * attackFactorAway) / (defenceFactorHome || 1);
 
     let marketAdjusted = false;

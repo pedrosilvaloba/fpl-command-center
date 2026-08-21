@@ -42,6 +42,9 @@ lib/
   matchmodel.ts   Modelo de golos esperados por equipa/jogo (Poisson) e clean sheets
   oddsapi.ts      Cliente da The Odds API — probabilidades de mercado (opcional)
   schedule.ts     Deteção de jornadas duplas e em branco por equipa
+  playerthreat.ts Ameaça de golo/assistência individual, fiabilidade de utilização, bolas paradas, contribuição defensiva
+  teamrating.ts   Rating de equipa dinâmico (Elo + taxa de golos), calibrado com os resultados reais desta época
+  accuracy.ts     Compara previsões do modelo com pontos reais, jornada a jornada (opcional, precisa de Redis)
   optimizer.ts    Otimizador real (programação linear) da equipa sugerida
   pricewatch.ts   Preditor de mudanças de preço e monitor de notícias/lesões
   strategy.ts     Playbook e regras 2026/27 (conteúdo da investigação)
@@ -55,7 +58,7 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
-## O que já funciona (v1.7)
+## O que já funciona (v1.8)
 
 - Dados 100% reais e ao vivo — preço, forma, posse, pontos, calendário —
   vindos diretamente da API oficial, sem qualquer valor inventado ou
@@ -93,6 +96,49 @@ components/
   só costumam ficar confirmadas a algumas semanas de distância, é normal
   esta secção aparecer vazia no início da época — não é um erro. Ver
   `lib/schedule.ts` e `windowExpectation` em `lib/matchmodel.ts`.
+- **Revisão crítica do motor de pontuação (v1.8) — sete melhorias
+  diretas.** Depois de reparar que uma equipa genuinamente candidata ao
+  título só tinha UM jogador a aparecer nas recomendações, fizemos uma
+  revisão a sério de onde o modelo era estruturalmente fraco. A causa:
+  todos os médios/avançados da mesma equipa recebiam exatamente o mesmo
+  número de "golos esperados da equipa" — o modelo não sabia distinguir,
+  dentro de uma equipa, quem realmente marca golos. Sete correções
+  diretas a isso e a outras lacunas identificadas:
+  1. **Ameaça de golo/assistência individual** — cada jogador atacante
+     (e defesas ofensivos) passa a ter a sua própria estimativa de golos
+     + assistências esperados, a partir dos dados de xG/xA por jogador
+     que a FPL já publica (e que a app já ia buscar, mas nunca usava),
+     combinados com os retornos reais já obtidos. Ver `lib/playerthreat.ts`.
+  2. **Fiabilidade de utilização (risco de rotação)** — um jogador que
+     joga sempre 90 minutos e um suplente rotativo com boas médias
+     deixam de ser tratados da mesma forma; a fiabilidade vem de quantos
+     jogos da equipa este jogador realmente começou como titular.
+  3. **Responsabilidades de bolas paradas** — marcadores de grandes
+     penalidades, cantos e livres diretos (dados que a FPL também já
+     publica) passam a valer mais na pontuação, refletindo o seu valor
+     real em pontos FPL.
+  4. **Menos dependência da "forma" da FPL** — a forma oficial (média de
+     30 dias) mistura minutos, variância de bónus e dificuldade de
+     calendário já defrontada; o seu peso na fórmula foi reduzido a favor
+     do sinal individual mais fundamentado do ponto 1.
+  5. **Rating de equipa dinâmico** — as classificações de força da FPL
+     são um número interno, opaco e pouco atualizado. Um modelo próprio
+     (estilo Elo + taxa de golos marcados/sofridos) recalcula, a partir
+     dos resultados reais desta época, o quanto cada equipa está a jogar
+     acima ou abaixo do que a FPL assume — e corrige o modelo de golos
+     esperados com isso. No início da época (sem jogos ainda) isto não
+     tem qualquer efeito — só começa a corrigir à medida que há resultados
+     reais para aprender com eles. Ver `lib/teamrating.ts`.
+  6. **Perfil de risco/recompensa (teto vs. chão)** — dois jogadores com a
+     mesma pontuação esperada podem ter perfis de risco muito diferentes;
+     jogadores com um teto bem mais alto que o chão recebem agora uma
+     nota a assinalar isso, útil para decisões de capitão/diferenciais.
+  7. **Painel de Precisão do Modelo** — a única forma séria de saber se
+     tudo isto está mesmo a ajudar: a app guarda as suas próprias
+     escolhas antes de cada jornada fechar e compara-as com os pontos
+     reais assim que a jornada termina. Só consegue começar a medir a
+     partir de agora (não há forma fiável de reconstruir previsões de
+     jornadas já passadas) — ver secção dedicada na app e `lib/accuracy.ts`.
 - **A Minha Equipa** — introduz o teu Team ID (guardado neste browser, com
   o teu por omissão) e vês o teu plantel real, capitão, banco, valor e
   rank, com sugestões de transferência calculadas contra o teu plantel
@@ -195,10 +241,11 @@ Ou, mais simples: importa o repositório diretamente em
 que é uma app Next.js. Não precisa de nenhuma variável de ambiente para
 funcionar — o passo abaixo é opcional.
 
-### Passo opcional: sincronizar a Shadow Team entre dispositivos
+### Passo opcional: sincronizar a Shadow Team entre dispositivos (e ligar o Painel de Precisão do Modelo)
 
 Sem isto a Shadow Team continua a funcionar normalmente, só que guardada
-apenas no browser onde a usaste. Para sincronizar entre telemóvel/computador:
+apenas no browser onde a usaste, e o Painel de Precisão do Modelo fica
+por ligar. Para sincronizar entre telemóvel/computador e ativar o painel:
 
 1. No painel do projeto na Vercel, vai a **Storage** → **Create Database** →
    escolhe a integração **Upstash** (ou procura "Redis" no Marketplace) →
@@ -206,7 +253,10 @@ apenas no browser onde a usaste. Para sincronizar entre telemóvel/computador:
 2. A Vercel liga automaticamente as variáveis de ambiente necessárias ao
    projeto — não precisas de copiar nada à mão.
 3. No deploy seguinte, a Shadow Team passa a mostrar "Sincronizado entre
-   dispositivos" em vez de "Guardado só neste browser".
+   dispositivos" em vez de "Guardado só neste browser", e a secção
+   "Precisão do Modelo" começa a guardar as escolhas de cada jornada
+   automaticamente (só a partir daí — não consegue reconstruir jornadas
+   já passadas).
 
 ### Passo opcional: ligar odds de mercado
 
@@ -230,9 +280,12 @@ Para incluir odds de mercado no modelo de golos esperados:
 - A API da FPL é pública mas **não-oficial e não documentada** pela
   Premier League — pode mudar sem aviso. O código foi escrito para falhar
   de forma controlada (erros claros) em vez de rebentar silenciosamente.
-- A dificuldade de calendário (FDR) usada é a oficial da FPL, conhecida por
-  ser algo grosseira (baseada em posição na liga). Um FDR próprio, baseado
-  em Elo/diferencial de xG por equipa, está no roadmap.
+- O "Calendário" (Fixture Ticker) continua a mostrar o dígito 1-5 oficial
+  da FPL, conhecido por ser algo grosseiro (baseado em posição na liga) —
+  é só para leitura rápida. A pontuação a sério já não depende dele: usa
+  o modelo de golos esperados de `lib/matchmodel.ts`, agora também
+  corrigido pelo rating de equipa dinâmico de `lib/teamrating.ts` (Elo +
+  taxa de golos, calibrado com os resultados reais desta época).
 - O otimizador encontra a equipa matematicamente ótima *para a pontuação
   do motor v1* — continua tão bom (ou limitado) quanto essa pontuação. Por
   performance, resolve sobre um conjunto reduzido de candidatos por posição
@@ -258,3 +311,34 @@ Para incluir odds de mercado no modelo de golos esperados:
   `lib/recommend.ts`) — se algum dia mudares o tamanho dessa janela, vale a
   pena rever esses números, porque deixam de estar calibrados para o total
   esperado numa janela de outro tamanho.
+- Os campos de xG/xA individual, `starts` e ordem de bolas paradas
+  (`lib/playerthreat.ts`) foram adicionados a partir da documentação
+  pública da comunidade open-source da FPL sobre a API — este ambiente
+  não consegue chamar a API ao vivo para confirmar os nomes exatos dos
+  campos antes de publicar. Cada leitura é feita de forma defensiva (campo
+  em falta ou renomeado → contribui 0/nulo, nunca rebenta a página), mas
+  vale a pena confirmar visualmente na app depois deste deploy — por
+  exemplo, um marcador de grandes penalidades conhecido deve mostrar a
+  nota "marcador de grandes penalidades" nas razões da pontuação. Se
+  achares que os números de ameaça de golo individual não fazem sentido
+  para algum jogador, é o primeiro sítio a verificar.
+- Os multiplicadores novos (`ATTACK_MULTIPLIER`, `DEF_ATTACK_UPSIDE_MULTIPLIER`,
+  `DC_WEIGHT` em `lib/recommend.ts`) são uma primeira calibração, não um
+  ótimo validado — é exatamente para isto que serve o novo Painel de
+  Precisão do Modelo: dar dados reais para rever estes números com o
+  tempo, em vez de continuarmos a ajustá-los "a olho".
+- O rating de equipa dinâmico (`lib/teamrating.ts`) não persiste estado —
+  recalcula o histórico Elo/taxa-de-golos completo a partir dos fixtures
+  já carregados em cada pedido. Isto é intencional (barato, sem risco de
+  cache desatualizada), mas significa que depende inteiramente dos
+  resultados que a própria API da FPL já reporta como terminados.
+- O Painel de Precisão do Modelo só começa a medir a partir do momento em
+  que é ativado — não existe forma fiável de reconstruir o que o modelo
+  "teria dito" antes de jornadas já jogadas sem voltar a pedir o histórico
+  jogo-a-jogo de cada um dos ~700 jogadores individualmente (uma operação
+  pesada, não feita aqui). A comparação também assume que a primeira
+  visita à app depois de uma jornada ficar "a seguir" acontece antes do
+  deadline — o que é sempre verdade por construção (o deadline É o
+  kickoff do primeiro jogo dessa jornada), mas se a app só for aberta
+  vários dias depois de a jornada se tornar a próxima, a fotografia
+  guardada pode já refletir pequenas variações de forma entretanto.
