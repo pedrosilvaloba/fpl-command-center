@@ -57,10 +57,36 @@ const NEUTRAL_PER_FIXTURE_GOALS = (BASE_HOME_GOALS + BASE_AWAY_GOALS) / 2;
 // backtested optimum — lib/accuracy.ts is what lets that claim actually
 // get checked against real results over the season, and these are the
 // first numbers worth revisiting once it has enough data.
-const ATTACK_MULTIPLIER = 0.5; // in-season: individualExpectedGI -> score
+// v1.8 shipped individualExpectedGI with ATTACK_MULTIPLIER = 0.5, which
+// LOOKED like a reasonable, proportionate number in isolation but turned
+// out to be a mistake once actually checked against the OTHER terms in
+// the same formula: for a real early-season top forward vs. a solid-but-
+// less-hyped teammate, formNum*1.8 + ppg*1.4 alone accounted for roughly
+// 8x more of the score gap between them than individualExpectedGI*0.5
+// did. The new signal was real and correctly differentiated the two
+// players — it just couldn't outweigh form/points-per-game, which (early
+// in a season, on tiny sample sizes) are themselves largely driven by
+// who has already had a big haul, i.e. close to the same "whoever got
+// hot/hyped first wins" dynamic the individual-threat model was built to
+// counteract. Net effect: a real fix that was mathematically too small
+// to change any actual ranking, which is exactly what showed up as "the
+// suggested squad hasn't changed." Raised roughly 6x here so the new
+// signal is comparable in weight to form+ppg rather than a rounding
+// error next to them — see the in-season formula below for how this
+// plays out, and lib/accuracy.ts for how to check, with real results,
+// whether this new weighting is actually better rather than just louder.
+const ATTACK_MULTIPLIER = 3.0; // in-season: individualExpectedGI -> score
 const ATTACK_MULTIPLIER_PRESEASON = 0.6;
-const DEF_ATTACK_UPSIDE_MULTIPLIER = 0.3; // defenders' own attacking threat — smaller weight than their clean-sheet term, but real (a defender goal is worth more points than a forward's)
+const DEF_ATTACK_UPSIDE_MULTIPLIER = 1.8; // defenders' own attacking threat — same 6x correction as ATTACK_MULTIPLIER, still smaller than their clean-sheet term
 const DC_WEIGHT = 1.0; // defensive-contribution-bonus proximity, DEF/MID
+// "Form" (FPL's 30-day rolling metric) is at its most volatile/least
+// trustworthy exactly when a player has the fewest minutes to back it up
+// — a single big early haul can inflate it on a near-meaningless sample.
+// This ramps form's weight from 40% up to 100% as a player accumulates
+// their first ~3 full matches of minutes, rather than trusting it fully
+// from minute one. Same "don't over-trust a small sample" principle
+// lib/teamrating.ts already applies to team-level results.
+const FORM_TRUST_MINUTES = 270; // ~3 full matches
 
 /**
  * Scores every available (non-injured-out) player for a given upcoming
@@ -170,6 +196,10 @@ export function buildScoredPlayers(
 
     const threat = computePlayerThreat(el, teamFinishedFixtures.get(team.id) ?? 0, isPreseason);
     const dc = defensiveContributionFactor(el, el.element_type);
+    const minutesPlayed = el.minutes ?? 0;
+    // 0.4 at 0 minutes (never fully zeroed — even one big haul is *some*
+    // evidence) ramping to 1.0 by FORM_TRUST_MINUTES.
+    const formTrust = 0.4 + 0.6 * Math.min(1, minutesPlayed / FORM_TRUST_MINUTES);
 
     // This player's own expected goal involvement for the window: their
     // blended per-90 rate (+ set-piece duty), scaled by how much better/
@@ -223,7 +253,7 @@ export function buildScoredPlayers(
       if (ownershipPct < 10 && priceM >= 6) reasons.push("possível diferencial de qualidade");
     } else {
       raw =
-        formNum * 1.8 +
+        formNum * 1.0 * formTrust +
         ppg * 1.4 +
         (isDefensive ? totalCleanSheetProbability * 1.6 : 0) +
         (isAttacking ? individualExpectedGI * ATTACK_MULTIPLIER : 0) +
@@ -234,6 +264,11 @@ export function buildScoredPlayers(
         ictNum * 0.015 +
         Math.log10(ownershipPct + 1) * 1.5;
       if (formNum >= 5) reasons.push("em grande forma recente");
+      if (minutesPlayed < FORM_TRUST_MINUTES) {
+        reasons.push(
+          `amostra ainda pequena (${minutesPlayed}min esta época) — forma/pontos por jogo pesam menos até acumular mais jogos`
+        );
+      }
       reasons.push(...threat.reasons);
       if (dc.reason) reasons.push(dc.reason);
       if (ceilingGI - floorGI >= 2 && individualExpectedGI > 0) {

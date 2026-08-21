@@ -58,7 +58,7 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
-## O que já funciona (v1.8)
+## O que já funciona (v1.9)
 
 - Dados 100% reais e ao vivo — preço, forma, posse, pontos, calendário —
   vindos diretamente da API oficial, sem qualquer valor inventado ou
@@ -139,6 +139,29 @@ components/
      reais assim que a jornada termina. Só consegue começar a medir a
      partir de agora (não há forma fiável de reconstruir previsões de
      jornadas já passadas) — ver secção dedicada na app e `lib/accuracy.ts`.
+- **Correção de calibração (v1.9) — a Equipa Sugerida continuava igual.**
+  Depois de ligar a v1.8, reparou-se (com razão) que a Equipa Sugerida não
+  tinha mudado, apesar da ameaça de golo individual do ponto 1 acima
+  existir e estar correta. A causa, confirmada a fazer as contas: o peso
+  dado a essa nova ameaça individual na fórmula de pontuação
+  (`ATTACK_MULTIPLIER = 0.5`) era cerca de 8x mais pequeno do que devia
+  ser comparado com a "forma" e os "pontos por jogo" já existentes na
+  mesma fórmula — o sinal novo estava correto, mas era pequeno demais
+  para alguma vez virar uma ordenação. Pior: início de época, "forma" e
+  "pontos por jogo" são eles próprios dominados por quem já teve uma
+  grande exibição cedo — exatamente a mesma dinâmica que o sinal novo
+  devia estar a corrigir. Duas correções diretas:
+  - O peso do sinal de ameaça individual foi multiplicado por 6x
+    (`ATTACK_MULTIPLIER` de 0.5 para 3.0), para deixar de ser irrelevante
+    ao lado de forma/pontos por jogo.
+  - A "forma" da FPL passa a pesar menos quanto menor for a amostra de
+    minutos do jogador esta época (40% do peso a 0 minutos, sobe até
+    100% por volta de 3 jogos completos) — o mesmo princípio de "não
+    confiar demasiado numa amostra pequena" que `lib/teamrating.ts` já
+    aplicava ao nível da equipa, agora também ao nível do jogador.
+    Jogadores com amostra ainda pequena recebem uma nota a dizê-lo.
+  Ver os comentários junto a `ATTACK_MULTIPLIER` em `lib/recommend.ts`
+  para as contas completas por trás desta correção.
 - **A Minha Equipa** — introduz o teu Team ID (guardado neste browser, com
   o teu por omissão) e vês o teu plantel real, capitão, banco, valor e
   rank, com sugestões de transferência calculadas contra o teu plantel
