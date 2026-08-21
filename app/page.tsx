@@ -21,6 +21,7 @@ import {
 } from "@/lib/accuracy";
 import { loadActiveInsights, getLastResearchRun } from "@/lib/managerinsights";
 import { isStorageConfigured } from "@/lib/kv";
+import { computeSquadRisk } from "@/lib/correlation";
 import { PLAYBOOK, RULES_2026_27 } from "@/lib/strategy";
 import { DEFAULT_TEAM_ID, DEFAULT_LEAGUE_ID } from "@/lib/constants";
 import CountdownTimer from "@/components/CountdownTimer";
@@ -150,6 +151,10 @@ export default async function Home() {
   const oddsActive = oddsResult.status === "ok";
   const { squad, starters, totalCost, method: squadMethod } = buildOptimalSquad(scored, 100);
   const { captain, viceCaptain } = pickCaptain(starters);
+  // Concentration risk: FPL points are correlated within a club (a clean
+  // sheet is ONE event shared by every defender), so two squads with equal
+  // expected points can carry very different variance. See lib/correlation.ts.
+  const squadRisk = computeSquadRisk(starters);
   const differentials = findDifferentials(scored, 10, 8);
   const { risers, fallers } = buildPriceWatch(bootstrap, 8);
   const newsWatch = buildNewsWatch(bootstrap, 15);
@@ -425,6 +430,67 @@ export default async function Home() {
               ? "Pontuação enriquecida com odds de mercado (ver \"ajustado com odds de mercado\" nas Melhores Escolhas)."
               : "A correr só com o modelo estatístico — liga a ODDS_API_KEY na Vercel para incluir odds de mercado (ver README)."}
           </p>
+          <div className="mb-5 rounded-lg border border-border bg-surface-2 p-4">
+            <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 mb-2">
+              <span className="text-xs uppercase tracking-widest text-text-muted">
+                Risco de concentração
+              </span>
+              <span className="text-sm">
+                Pontos esperados na próxima jornada:{" "}
+                <strong className="font-mono tabular">{squadRisk.expectedPoints}</strong>
+              </span>
+              <span className="text-sm">
+                Desvio-padrão:{" "}
+                <strong className="font-mono tabular">±{squadRisk.stdDev}</strong>
+              </span>
+              <span className="text-sm">
+                Concentração defensiva:{" "}
+                <strong
+                  className={`font-mono tabular ${
+                    squadRisk.defensiveConcentrationRatio >= 1.7
+                      ? "text-danger"
+                      : squadRisk.defensiveConcentrationRatio >= 1.3
+                        ? "text-warn"
+                        : "text-success"
+                  }`}
+                >
+                  {squadRisk.defensiveConcentrationRatio.toFixed(2)}×
+                </strong>
+              </span>
+              <span className="text-sm">
+                Global:{" "}
+                <strong
+                  className={`font-mono tabular ${
+                    squadRisk.concentrationRatio >= 1.35
+                      ? "text-danger"
+                      : squadRisk.concentrationRatio >= 1.15
+                        ? "text-warn"
+                        : "text-success"
+                  }`}
+                >
+                  {squadRisk.concentrationRatio.toFixed(2)}×
+                </strong>
+              </span>
+            </div>
+            {squadRisk.warnings.length > 0 ? (
+              <ul className="text-sm text-warn list-disc pl-5 space-y-1 mb-2">
+                {squadRisk.warnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            ) : null}
+            <p className="text-xs text-text-muted">
+              Os pontos da FPL não são independentes dentro do mesmo clube: um
+              clean sheet é <strong>um único acontecimento</strong> partilhado
+              por todos os teus defesas desse clube. Empilhar não muda os
+              pontos esperados — multiplica a variância. Não é um erro: se
+              estás atrás na tua liga, queres precisamente isso; se estás à
+              frente, queres o contrário. &quot;Concentração&quot; compara
+              este onze com os mesmos jogadores espalhados por clubes
+              diferentes — 1.00× é totalmente diversificado.
+            </p>
+          </div>
+
           <div className="grid md:grid-cols-2 gap-6">
             <div>
               <h3 className="font-display text-lg tracking-wide mb-2">

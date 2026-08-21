@@ -43,6 +43,25 @@ const SOLVE_TIMEOUT_MS = 6000;
  */
 const BENCH_WEIGHT = 0.12;
 
+/**
+ * The price of stacking one club's defence in the starting eleven.
+ *
+ * A clean sheet is a single event, so a goalkeeper plus two defenders from
+ * the same club are one bet, not three (see lib/correlation.ts). Expected
+ * points do not change; variance roughly triples. A model that only
+ * maximises expected points therefore cannot tell a diversified eleven
+ * from an all-eggs-in-one-basket eleven — they score identically.
+ *
+ * This is deliberately a PRICE, not a ban. Loading up on a strong defence
+ * before good fixtures is a legitimate and often correct play, and whether
+ * you want that variance depends on your league position, which this model
+ * does not know. So the third clean-sheet-dependent starter from a single
+ * club is allowed — it just has to be worth more than the penalty to earn
+ * its place, instead of being chosen by accident.
+ */
+const FREE_DEFENSIVE_STACK = 2; // up to two is not penalised at all
+const STACK_PENALTY_POINTS = 1.5; // charged per starter beyond that
+
 export interface OptimalSquadResult {
   squad: ScoredPlayer[];
   starters: ScoredPlayer[];
@@ -108,7 +127,12 @@ export function buildOptimalSquad(
       xi_mid: { min: 2 },
       xi_fwd: { min: 1 },
     };
-    for (const clubId of clubIds) constraints[`club_${clubId}`] = { max: 3 };
+    for (const clubId of clubIds) {
+      constraints[`club_${clubId}`] = { max: 3 };
+      // stack_<club> absorbs clean-sheet-dependent starters beyond the free
+      // allowance, and is charged for in the objective.
+      constraints[`stack_${clubId}`] = { max: FREE_DEFENSIVE_STACK };
+    }
 
     for (const p of pool) {
       const squadVar = `s${p.element.id}`;
@@ -124,15 +148,32 @@ export function buildOptimalSquad(
         [`club_${p.team.id}`]: 1,
         [`link_${p.element.id}`]: -1,
       };
+      const isCleanSheetDependent =
+        p.element.element_type === 1 || p.element.element_type === 2;
       variables[xiVar] = {
         score: p.expectedPoints * (1 - BENCH_WEIGHT),
         xi: 1,
         [`xi_${POS_KEY[p.element.element_type]}`]: 1,
         [`link_${p.element.id}`]: 1,
+        // Only clean-sheet-dependent starters count toward the stack.
+        ...(isCleanSheetDependent ? { [`stack_${p.team.id}`]: 1 } : {}),
       };
       constraints[`link_${p.element.id}`] = { max: 0 };
       binaries[squadVar] = 1;
       binaries[xiVar] = 1;
+    }
+
+    // One relief variable per club: buying it raises that club's allowed
+    // defensive stack by one, at a cost. This is what turns "forbidden"
+    // into "has to be worth it".
+    const ints: Record<string, 1> = {};
+    for (const clubId of clubIds) {
+      const reliefVar = `relief${clubId}`;
+      variables[reliefVar] = {
+        score: -STACK_PENALTY_POINTS,
+        [`stack_${clubId}`]: -1,
+      };
+      ints[reliefVar] = 1;
     }
 
     const model = {
@@ -141,6 +182,7 @@ export function buildOptimalSquad(
       constraints,
       variables,
       binaries,
+      ints,
       timeout: SOLVE_TIMEOUT_MS,
     };
 

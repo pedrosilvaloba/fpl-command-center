@@ -30,6 +30,7 @@ import {
 } from "../lib/recommend";
 import { computeMinutesModel, computePlayerRates } from "../lib/expectedpoints";
 import { buildOptimalSquad } from "../lib/optimizer";
+import { computeSquadRisk, computeTeamExposures } from "../lib/correlation";
 import {
   validateInsightInput,
   resolveInsightTarget,
@@ -896,6 +897,86 @@ function testOptimizerBenchSpend() {
   check("onze tem pelo menos 1 avançado", cnt(4) >= 1, `${cnt(4)}`);
 }
 
+// ---------------------------------------------------------------------
+// Risco de correlação — pontos da mesma equipa não são independentes
+// ---------------------------------------------------------------------
+function testCorrelationRisk() {
+  const mk = (id: number, type: number, teamId: number, pts: number, cs: number): ScoredPlayer =>
+    ({
+      element: makeElement({ id, element_type: type, team: teamId }),
+      team: makeTeam(teamId, `T${teamId}`), positionShort: "X", priceM: 5,
+      ownershipPct: 5, formNum: 0, fixtureAvgDifficulty: 3, nextOpponents: "",
+      expectedGoalsFor: 1.4, cleanSheetProbability: cs, individualExpectedGI: 0,
+      ceilingGI: 0, floorGI: 0, expectedPoints: pts * 5, expectedPointsNext: pts,
+      breakdown: { appearance: 0, goals: 0, assists: 0, cleanSheet: 0, concededPenalty: 0, defensiveContribution: 0, bonus: 0, total: 0 },
+      score: pts * 5, isDifferential: false, isPreseason: false, reasons: [],
+    }) as ScoredPlayer;
+
+  // Onze A: 1 GK + 4 DEF TODOS do mesmo clube (concentração máxima).
+  const stacked = [
+    mk(1, 1, 1, 4, 0.4), mk(2, 2, 1, 4, 0.4), mk(3, 2, 1, 4, 0.4),
+    mk(4, 2, 1, 4, 0.4), mk(5, 2, 1, 4, 0.4),
+    mk(6, 3, 2, 5, 0.3), mk(7, 3, 3, 5, 0.3), mk(8, 3, 4, 5, 0.3),
+    mk(9, 3, 5, 5, 0.3), mk(10, 4, 6, 5, 0.3), mk(11, 4, 7, 5, 0.3),
+  ];
+  // Onze B: exatamente os mesmos jogadores, mas espalhados por 5 clubes.
+  const spread = [
+    mk(1, 1, 1, 4, 0.4), mk(2, 2, 8, 4, 0.4), mk(3, 2, 9, 4, 0.4),
+    mk(4, 2, 10, 4, 0.4), mk(5, 2, 11, 4, 0.4),
+    mk(6, 3, 2, 5, 0.3), mk(7, 3, 3, 5, 0.3), mk(8, 3, 4, 5, 0.3),
+    mk(9, 3, 5, 5, 0.3), mk(10, 4, 6, 5, 0.3), mk(11, 4, 7, 5, 0.3),
+  ];
+
+  const a = computeSquadRisk(stacked);
+  const b = computeSquadRisk(spread);
+
+  check(
+    "os pontos esperados são IGUAIS nos dois onzes",
+    Math.abs(a.expectedPoints - b.expectedPoints) < 1e-6,
+    `empilhado=${a.expectedPoints} espalhado=${b.expectedPoints}`
+  );
+  check(
+    "mas o onze empilhado tem variância maior",
+    a.stdDev > b.stdDev * 1.15,
+    `empilhado ±${a.stdDev} vs espalhado ±${b.stdDev}`
+  );
+  check(
+    "a concentração global do onze empilhado é sinalizada acima de 1",
+    a.concentrationRatio > 1.15,
+    `${a.concentrationRatio}×`
+  );
+  check(
+    "o onze espalhado aproxima-se de totalmente diversificado",
+    b.concentrationRatio < 1.05,
+    `${b.concentrationRatio}×`
+  );
+  // A métrica defensiva isolada é a que mostra o risco a sério — não é
+  // diluída pelo bloco ofensivo.
+  check(
+    "a concentração DEFENSIVA isolada expõe a pilha com muito mais clareza",
+    a.defensiveConcentrationRatio > 2,
+    `defensiva ${a.defensiveConcentrationRatio}× vs global ${a.concentrationRatio}×`
+  );
+  check(
+    "e no onze espalhado a concentração defensiva é ~1",
+    b.defensiveConcentrationRatio < 1.05,
+    `${b.defensiveConcentrationRatio}×`
+  );
+  check(
+    "o utilizador é avisado da pilha defensiva",
+    a.warnings.some((w) => w.includes("defensivos")),
+    a.warnings.join(" | ")
+  );
+  check("o onze diversificado não gera aviso defensivo",
+    !b.warnings.some((w) => w.includes("defensivos")));
+
+  // Exposição por equipa tem de contar corretamente.
+  const exposures = computeTeamExposures(stacked);
+  const t1 = exposures.find((e) => e.teamId === 1)!;
+  check("exposição defensiva do clube empilhado é contada", t1.cleanSheetPlayers.length === 5,
+    `${t1.cleanSheetPlayers.length}`);
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testDefenceInversion();
 testMissingTeamStrengths();
@@ -907,6 +988,7 @@ testPreseasonDifferentiation();
 testPreseasonSetPieces();
 testStaticInsightSeeds();
 testOptimizerBenchSpend();
+testCorrelationRisk();
 testPoissonQuantile();
 testLateSeasonWindow();
 testExpectedPointsScale();
