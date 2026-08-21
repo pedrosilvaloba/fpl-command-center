@@ -34,6 +34,7 @@ app/
   api/fpl/entry/[id]/picks/route.ts Proxy para /entry/{id}/event/{gw}/picks/
   api/fpl/league/[id]/route.ts Proxy para /leagues-classic/{id}/standings/
   api/shadow-team/route.ts    Guarda/lê a Shadow Team no Upstash Redis (quando ligado)
+  api/insights/route.ts       Lê/escreve notas táticas dinâmicas (GET aberto; POST/DELETE autenticados por INSIGHTS_API_TOKEN)
 lib/
   types.ts        Tipos TypeScript para as respostas da API da FPL
   fpl-client.ts   Cliente HTTP server-side para a API da FPL (com cache)
@@ -43,7 +44,7 @@ lib/
   oddsapi.ts      Cliente da The Odds API — probabilidades de mercado (opcional)
   schedule.ts     Deteção de jornadas duplas e em branco por equipa
   playerthreat.ts Ameaça de golo/assistência individual, fiabilidade de utilização (incl. padrão de substituição cedo), bolas paradas, contribuição defensiva
-  managerinsights.ts Tabela editorial de ajustes qualitativos/táticos (padrões de gestão, identidade de equipa) — alimentada pela investigação semanal, revista manualmente
+  managerinsights.ts Ajustes qualitativos/táticos — lista permanente manual + camada dinâmica auto-aplicada (resolução de nomes, validação, expiração, limite)
   teamrating.ts   Rating de equipa dinâmico (Elo + taxa de golos), calibrado com os resultados reais desta época
   accuracy.ts     Compara previsões do modelo com pontos reais, jornada a jornada (opcional, precisa de Redis)
   optimizer.ts    Otimizador real (programação linear) da equipa sugerida
@@ -229,26 +230,46 @@ components/
      inteiramente calculado a partir de dados que a app já tinha, sem
      integração nova nenhuma. Ver `EARLY_SUB_MINUTES_THRESHOLD` em
      `lib/playerthreat.ts`.
-  2. **`lib/managerinsights.ts` — a tabela editorial** onde entram os
-     padrões qualitativos que só investigação (humana ou de IA) consegue
-     encontrar, como os dois exemplos do Arteta/Rice e do Man United.
-     Cada entrada tem jogador/equipa, um fator de ajuste modesto (0.8-1.2,
-     propositadamente pequeno — isto afina o modelo quantitativo, não o
-     substitui), a razão e a fonte. Começa vazia (nada inventado só para
-     preencher) e alimenta diretamente a lista de razões de cada jogador
-     na Equipa Sugerida, exatamente como qualquer outro sinal do modelo —
-     nada de caixa-negra.
-  3. **Sessão de investigação semanal agendada** — uma tarefa agendada
-     (fora desta conversa, corre à parte todas as quintas de manhã) que
-     usa pesquisa web para investigar padrões de substituição e identidade
-     tática das equipas mais relevantes para FPL, e produz um briefing
-     em português com as descobertas mais sustentadas por fontes,
-     incluindo um fator de ajuste sugerido para cada uma. É só investigação
-     e redação — não edita código nem faz deploy sozinha. As sugestões
-     ficam para revisão manual antes de serem adicionadas a
-     `lib/managerinsights.ts`, mantendo o mesmo princípio de transparência
-     do resto do projeto: nada entra no modelo sem uma razão visível e
-     rastreável.
+  2. **`lib/managerinsights.ts` — duas camadas, uma automática.** Uma
+     lista permanente e escrita à mão (`MANAGER_INSIGHTS`, começa vazia)
+     para padrões confiantes o suficiente para entrar no código a sério, e
+     uma camada **dinâmica, aplicada automaticamente**, alimentada pela
+     investigação semanal abaixo — decisão explícita do Pedro: isto não
+     fica à espera dele para ter efeito. Cada entrada tem jogador/equipa,
+     um fator de ajuste modesto (0.8-1.2, sempre — reforçado no código,
+     não só documentado), a razão e a fonte, e alimenta diretamente a
+     lista de razões de cada jogador na Equipa Sugerida, tal como qualquer
+     outro sinal do modelo — automático não é o mesmo que invisível.
+  3. **Investigação semanal agendada, com aplicação automática e
+     proteções** — uma tarefa agendada (fora desta conversa, quintas de
+     manhã) pesquisa na web padrões de substituição e identidade tática, e
+     publica os achados diretamente via `POST /api/insights`, sem
+     aprovação manual prévia. Porque isto ajusta a pontuação de todos sem
+     revisão antes de entrar em vigor, tem proteções reais, não apenas
+     documentadas:
+     - **Validação de nomes por código, nunca por IA a ler o JSON** — a
+       investigação envia nomes de jogador/equipa (o que encontra a
+       pesquisar), e `resolveInsightTarget` em `lib/managerinsights.ts`
+       resolve isso a um id real da FPL por correspondência determinística
+       (com casos de teste para acentos, apelidos ambíguos como "Silva" e
+       desambiguação por equipa) — o mesmo princípio de "não deixar um
+       modelo pequeno interpretar JSON grande" que já regia o resto deste
+       projeto, aplicado agora à escrita, não só à leitura.
+     - **Fator sempre entre 0.8 e 1.2**, verificado no servidor.
+     - **Expira ao fim de 2 semanas** (escolha explícita do Pedro) — uma
+       nota errada ou desatualizada sai sozinha; a investigação seguinte
+       tem de a reconfirmar para continuar a valer.
+     - **Máximo de 15 notas dinâmicas em simultâneo** — nunca pode crescer
+       a ponto de dominar o modelo quantitativo.
+     - **Endpoint de escrita protegido** por `INSIGHTS_API_TOKEN` (ver
+       "Deploy" abaixo) — só a tarefa agendada (ou o Pedro, manualmente)
+       consegue escrever; qualquer visitante só consegue ler (`GET`).
+     - **Painel "Notas Táticas Ativas"** no dashboard mostra exatamente o
+       que está aplicado agora, com razão, fonte e validade — e um
+       `DELETE /api/insights?key=...` autenticado permite ao Pedro matar
+       uma nota específica antes da expiração natural, se alguma vez
+       discordar de uma — a rede de segurança para "automático não é
+       irreversível".
 - **A Minha Equipa** — introduz o teu Team ID (guardado neste browser, com
   o teu por omissão) e vês o teu plantel real, capitão, banco, valor e
   rank, com sugestões de transferência calculadas contra o teu plantel
@@ -386,6 +407,31 @@ Para incluir odds de mercado no modelo de golos esperados:
    dizer "Pontuação enriquecida com odds de mercado" em vez de "a correr só
    com o modelo estatístico".
 
+### Passo necessário para a investigação semanal automática (`INSIGHTS_API_TOKEN`)
+
+Sem isto, a app continua a funcionar normalmente, e `GET /api/insights`
+continua a ler notas dinâmicas já guardadas — mas nenhuma nota NOVA
+consegue ser escrita (a tarefa agendada recebe 401 e a semana fica sem
+efeito nenhum), porque o endpoint de escrita fica desligado por omissão em
+vez de aceitar pedidos sem chave nenhuma.
+
+1. Gera um valor aleatório longo para servir de chave (por exemplo,
+   `openssl rand -hex 24` no terminal, ou qualquer gerador de password de
+   pelo menos 32 caracteres).
+2. No projeto na Vercel: **Settings** → **Environment Variables** →
+   adiciona uma variável chamada `INSIGHTS_API_TOKEN` com esse valor →
+   grava.
+3. Faz um novo deploy para a variável ficar ativa.
+4. O mesmo valor tem de estar configurado na tarefa agendada semanal
+   ("FPL - Análise Semanal Tática e Padrões de Gestão", ver `/config` ou
+   a lista de tarefas agendadas) para que os pedidos `POST` dela sejam
+   aceites — já está configurado com o valor gerado nesta sessão; só
+   precisas de repetir este passo se algum dia gerares uma chave nova.
+5. Também precisa da mesma integração Upstash Redis do passo da Shadow
+   Team acima — sem Redis, `GET /api/insights` funciona mas devolve
+   sempre só a lista estática (vazia por omissão), e qualquer escrita
+   falha mesmo com a chave certa.
+
 ## Notas honestas
 
 - A API da FPL é pública mas **não-oficial e não documentada** pela
@@ -445,9 +491,24 @@ Para incluir odds de mercado no modelo de golos esperados:
   Só é aplicado com 3+ titularidades, precisamente para não reagir a
   ruído de amostra pequena.
 - `lib/managerinsights.ts` começa **vazio** — nenhum padrão qualitativo
-  foi inventado só para ter conteúdo. Preenche-se com o tempo, através da
-  investigação semanal agendada + revisão manual (ver secção v1.11
-  acima). Até lá, este mecanismo existe mas não altera nenhuma pontuação.
+  foi inventado só para ter conteúdo. A lista permanente preenche-se ao
+  longo do tempo por edição manual; a camada dinâmica preenche-se sozinha
+  a partir da investigação semanal (ver secção v1.11 acima). Até à
+  primeira pesquisa produzir algo válido, este mecanismo existe mas não
+  altera nenhuma pontuação.
+- A resolução de nomes (`resolveInsightTarget`) é uma correspondência
+  determinística (exata, depois por substring, com equipa a desempatar),
+  não um modelo de linguagem a adivinhar — mas continua a ser uma
+  heurística: cobre bem os casos comuns (nome único, ou `web_name` da FPL
+  já exato) e é testada para acentos e apelidos ambíguos conhecidos, mas
+  um nome genuinamente novo e ambíguo sem `teamShortName` é rejeitado em
+  vez de arriscar aplicar a nota ao jogador errado — rejeitar é sempre a
+  opção mais segura aqui.
+- O `DELETE /api/insights?key=...` (autenticado) é a forma de remover uma
+  nota dinâmica antes da expiração natural de 2 semanas — não existe
+  ainda um botão no dashboard para isto, só o endpoint; usar `curl` com o
+  `INSIGHTS_API_TOKEN` é suficiente enquanto isto não justificar uma
+  interface própria.
 - Os multiplicadores novos (`ATTACK_MULTIPLIER`, `DEF_ATTACK_UPSIDE_MULTIPLIER`,
   `DC_WEIGHT` em `lib/recommend.ts`) são uma primeira calibração, não um
   ótimo validado — é exatamente para isto que serve o novo Painel de

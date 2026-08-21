@@ -14,7 +14,8 @@ import {
   defensiveContributionFactor,
   teamFinishedFixtureCounts,
 } from "./playerthreat";
-import { getManagerInsights, formatInsightReason } from "./managerinsights";
+import { MANAGER_INSIGHTS, filterInsights, formatInsightReason } from "./managerinsights";
+import type { ManagerInsight } from "./managerinsights";
 
 export interface ScoredPlayer {
   element: FplElement;
@@ -145,13 +146,27 @@ const FORM_TRUST_MINUTES = 270; // ~3 full matches
  * on instead of a flat team-level average. Builds the fixture ticker and
  * match-model expectations once, then scores every player against them —
  * this is what the dashboard calls directly.
+ *
+ * `managerInsights` (optional, see lib/managerinsights.ts) is the one
+ * genuinely qualitative layer in this otherwise fully quantitative model
+ * — a small, bounded multiplier applied per player/team for patterns no
+ * stats API can express (a manager's substitution habits, a team's
+ * tactical identity). Every applied insight still surfaces in that
+ * player's `reasons[]`, same as everything else here.
  */
 export function buildScoredPlayers(
   bootstrap: FplBootstrap,
   fixtures: Parameters<typeof buildFixtureTicker>[1],
   fromEvent: number,
   fixtureWindow = 5,
-  oddsMatches: OddsMatch[] | null = null
+  oddsMatches: OddsMatch[] | null = null,
+  // Static + Redis-backed dynamic qualitative adjustments (see
+  // lib/managerinsights.ts). Defaults to just the static, hand-curated
+  // list so any existing/test caller that doesn't pass this explicitly
+  // still behaves the same as before this parameter existed — callers
+  // that want the full auto-updating layer (i.e. the live dashboard) pass
+  // the result of `loadActiveInsights()` here instead.
+  managerInsights: ManagerInsight[] = MANAGER_INSIGHTS
 ): ScoredPlayer[] {
   const teamById = new Map(bootstrap.teams.map((t) => [t.id, t]));
   const ticker = buildFixtureTicker(bootstrap.teams, fixtures, fromEvent, fixtureWindow);
@@ -327,8 +342,8 @@ export function buildScoredPlayers(
     // a team's tactical identity are just as real before a ball is kicked
     // as after.
     const insights = [
-      ...getManagerInsights("player", el.id),
-      ...getManagerInsights("team", team.id),
+      ...filterInsights(managerInsights, "player", el.id),
+      ...filterInsights(managerInsights, "team", team.id),
     ];
     for (const insight of insights) {
       raw *= insight.factor;

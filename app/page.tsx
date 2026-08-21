@@ -15,6 +15,7 @@ import {
   recordOutcomesForFinishedEvents,
   getAccuracyHistory,
 } from "@/lib/accuracy";
+import { loadActiveInsights } from "@/lib/managerinsights";
 import { PLAYBOOK, RULES_2026_27 } from "@/lib/strategy";
 import { DEFAULT_TEAM_ID, DEFAULT_LEAGUE_ID } from "@/lib/constants";
 import CountdownTimer from "@/components/CountdownTimer";
@@ -61,7 +62,7 @@ function Section({
 }
 
 export default async function Home() {
-  const [bootstrap, fixtures, oddsMatches] = await Promise.all([
+  const [bootstrap, fixtures, oddsMatches, activeInsights] = await Promise.all([
     getBootstrap(),
     // Full season (past + future), not just upcoming — the dynamic team-
     // rating model (lib/teamrating.ts) needs finished fixtures' actual
@@ -76,6 +77,10 @@ export default async function Home() {
     // rejects (see lib/oddsapi.ts), so it can't take the whole page
     // down; it only ever resolves to real data or null.
     getOddsImpliedProbabilities(),
+    // Static (hand-curated) + dynamic (weekly-research, Redis-backed)
+    // qualitative adjustments — see lib/managerinsights.ts. Never throws
+    // and degrades to just the static list without Redis configured.
+    loadActiveInsights(),
   ]);
 
   const nextEvent =
@@ -98,7 +103,7 @@ export default async function Home() {
     teamFactorsForDisplay
   );
   const ticker = buildModelTicker(bootstrap.teams, expectationsByTeamForDisplay, fromEvent, 5);
-  const scored = buildScoredPlayers(bootstrap, fixtures, fromEvent, 5, oddsMatches);
+  const scored = buildScoredPlayers(bootstrap, fixtures, fromEvent, 5, oddsMatches, activeInsights);
   const oddsActive = Array.isArray(oddsMatches) && oddsMatches.length > 0;
   const { squad, starters, totalCost, method: squadMethod } = buildOptimalSquad(scored, 100);
   const { captain, viceCaptain } = pickCaptain(starters);
@@ -227,6 +232,7 @@ export default async function Home() {
             ["price-watch", "Preços"],
             ["news-watch", "Notícias/Lesões"],
             ["model-accuracy", "Precisão do Modelo"],
+            ["insights", "Notas Táticas"],
             ["playbook", "Playbook"],
             ["rules", "Regras"],
             ["roadmap", "Roadmap"],
@@ -591,6 +597,72 @@ export default async function Home() {
                 e consistente ao longo da época é o sinal de que o motor
                 está mesmo a distinguir quem vai pontuar mais — não uma
                 garantia jornada a jornada.
+              </p>
+            </div>
+          )}
+        </Section>
+
+        <Section
+          id="insights"
+          title="Notas Táticas Ativas"
+          eyebrow="Camada qualitativa — padrões de gestão e identidade de equipa"
+        >
+          {activeInsights.length === 0 ? (
+            <p className="text-sm text-text-muted">
+              Nenhuma nota ativa neste momento. Esta secção mostra ajustes
+              qualitativos que nenhum dado da FPL ou das odds consegue captar
+              sozinho — por exemplo, um treinador que substitui sistematicamente
+              um titular antes dos 60min, ou uma equipa com um estilo de jogo
+              claramente identificável esta época. Alimentada por uma
+              investigação semanal automática (pesquisa na web, com fontes) que
+              aplica os achados diretamente aqui — com limites apertados
+              (±20% no máximo por nota), validação contra os dados reais da
+              FPL, e expiração automática ao fim de 2 semanas para que um
+              padrão desatualizado não fique para sempre. Fica vazia até a
+              primeira pesquisa produzir algo suficientemente sustentado por
+              fontes.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-sm min-w-[600px]">
+                <thead>
+                  <tr className="text-left text-text-muted uppercase text-xs tracking-wide">
+                    <th className="py-2 pr-3 font-medium">Jogador/Equipa</th>
+                    <th className="py-2 pr-3 font-medium text-right">Ajuste</th>
+                    <th className="py-2 pr-3 font-medium">Razão</th>
+                    <th className="py-2 pr-3 font-medium">Fonte</th>
+                    <th className="py-2 font-medium">Validade</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeInsights.map((insight, i) => (
+                    <tr key={`${insight.scope}-${insight.id}-${i}`} className="border-t border-border">
+                      <td className="py-2 pr-3">{insight.label}</td>
+                      <td
+                        className={`py-2 pr-3 text-right font-mono tabular font-semibold ${
+                          insight.factor >= 1 ? "text-success" : "text-danger"
+                        }`}
+                      >
+                        {insight.factor >= 1 ? "+" : ""}
+                        {Math.round((insight.factor - 1) * 100)}%
+                      </td>
+                      <td className="py-2 pr-3 text-text-muted">{insight.reason}</td>
+                      <td className="py-2 pr-3 text-text-muted text-xs">{insight.source}</td>
+                      <td className="py-2 text-xs text-text-muted">
+                        {insight.expiresAt
+                          ? `até ${new Date(insight.expiresAt).toLocaleDateString("pt-PT", { timeZone: "Europe/Lisbon" })}`
+                          : "permanente"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="text-xs text-text-muted opacity-70 mt-3">
+                Notas com validade são geradas pela investigação semanal
+                automática e já estão a ser aplicadas à pontuação — não
+                dependem de aprovação manual. Continuam visíveis nas razões de
+                cada jogador na Equipa Sugerida, como qualquer outro sinal do
+                modelo. Ver lib/managerinsights.ts para os limites aplicados.
               </p>
             </div>
           )}

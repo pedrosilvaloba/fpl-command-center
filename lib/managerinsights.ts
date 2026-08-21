@@ -1,8 +1,11 @@
+import { getRedis } from "./kv";
+import type { FplBootstrap } from "./types";
+
 /**
- * Hand-maintained table of QUALITATIVE, tactical/managerial adjustments —
- * the kind of insight that doesn't live in any API field: a manager's
- * substitution habits, a team's attacking-vs-defensive identity, a
- * player's role changing after a new signing, and so on.
+ * QUALITATIVE, tactical/managerial adjustments — the kind of insight that
+ * doesn't live in any API field: a manager's substitution habits, a team's
+ * attacking-vs-defensive identity, a player's role changing after a new
+ * signing, and so on.
  *
  * Why this file exists: every other signal in this model (lib/playerthreat
  * .ts, lib/teamrating.ts, lib/matchmodel.ts) is derived automatically from
@@ -11,32 +14,43 @@
  * Rice at ~55min in games that are already won, so he's a weaker asset
  * than his start-count alone suggests" or "Man United play an open,
  * high-event style this season — concede a lot, but also score a lot" —
- * these are judgment calls a human analyst (or an AI doing real research:
- * match reports, tactical write-ups, press-conference notes) makes by
- * actually watching/reading about the games, not something derivable from
- * a stats API. This is exactly the differentiation the project's owner
- * asked for: a genuinely qualitative research layer on top of the
+ * these are judgment calls made by actually reading match reports,
+ * tactical write-ups and press-conference notes, not something derivable
+ * from a stats API. This is exactly the differentiation the project's
+ * owner asked for: a genuinely qualitative research layer on top of the
  * quantitative model, not a replacement for it.
  *
- * Deliberately NOT auto-written by an unsupervised process. The intended
- * workflow is: a periodic research pass (see the weekly scheduled research
- * task set up alongside this file) proposes candidate entries with their
- * sourcing, a human (Pedro) reviews them, and they get added here through
- * the normal code-review/deploy flow — same transparency principle as
- * every other part of this model (nothing invisible, nothing that can't be
- * traced back to a stated reason). Treat every entry as an editorial
- * call with an expiry: tactical patterns change (new signings, injuries,
- * a manager changing his approach after criticism), so `addedDate` is
- * there to make stale entries easy to spot and prune, not just decoration.
+ * Two sources feed into this, merged at read time by `loadActiveInsights`:
  *
- * `factor` is a direct multiplier on the player's/team's raw score in
- * lib/recommend.ts — keep adjustments modest (roughly 0.8-1.2, i.e. +-20%)
- * so this stays a nudge on top of the quantitative model rather than a
- * substitute for it. A pattern strong enough to justify more than that
- * is almost always better expressed by fixing the underlying model
- * instead (see e.g. the minutes-per-start reliability fix in
- * lib/playerthreat.ts, which grew directly out of the Rice example below
- * and needed no manual table entry at all once it existed as real logic).
+ * 1. MANAGER_INSIGHTS below — a hand-curated, permanent list for judgment
+ *    calls confident/durable enough to commit to code and review like
+ *    everything else in this project. Starts empty; add entries here
+ *    through the normal edit/test/deploy flow when something is worth
+ *    that level of permanence.
+ * 2. A Redis-backed DYNAMIC layer, written by a weekly scheduled research
+ *    pass (see app/api/insights/route.ts) that searches the web for
+ *    exactly this kind of pattern and posts candidate findings. This is
+ *    intentionally NOT gated behind manual review before taking effect —
+ *    Pedro asked for this specifically so the qualitative layer isn't
+ *    bottlenecked on him being available every week — but it ships with
+ *    real guardrails instead of blind trust in an AI web-research pass:
+ *      - `factor` is hard-capped to 0.8-1.2 (enforced server-side in the
+ *        API route, not just documented here) — a nudge on top of the
+ *        quantitative model, never a takeover of it.
+ *      - every id is checked against the LIVE FPL bootstrap before being
+ *        accepted — a hallucinated player/team simply gets rejected.
+ *      - every dynamic entry expires automatically 2 weeks after being
+ *        added (Pedro's choice — short enough that a stale or wrong
+ *        pattern ages itself out, forcing the next research pass to
+ *        reconfirm it rather than letting it linger silently).
+ *      - a hard cap on how many dynamic entries can be active at once,
+ *        so this can never gradually crowd out the quantitative model.
+ *      - every applied insight — static or dynamic — still shows up in
+ *        that player's `reasons[]` on the dashboard, exactly like any
+ *        other scoring signal. Automatic does not mean invisible.
+ *      - the write endpoint is auth-gated (INSIGHTS_API_TOKEN) since,
+ *        unlike everything else in this file, it can be called from
+ *        outside a deploy — see app/api/insights/route.ts.
  */
 
 export interface ManagerInsight {
@@ -45,22 +59,24 @@ export interface ManagerInsight {
   // bootstrap ids, same ones already used everywhere else in this app.
   id: number;
   // Human-readable label only — never read by the scoring logic, purely
-  // so this file stays legible/reviewable without cross-referencing ids.
+  // so this stays legible/reviewable without cross-referencing ids.
   label: string;
   factor: number;
   reason: string;
-  // When this was added or last reconfirmed — review anything older than
-  // a few months, and definitely re-check after a managerial change.
+  // When this was added or last reconfirmed.
   addedDate: string;
   // Where this judgment came from — a specific search finding, a match
   // watched, a pundit note. Kept honest and checkable, not "AI vibes".
   source: string;
+  // Only set on dynamic (Redis-backed) entries — static, hand-curated
+  // entries in MANAGER_INSIGHTS below have no expiry (a human already
+  // committed to them). ISO timestamp.
+  expiresAt?: string;
 }
 
-// Empty by default — this ships with no qualitative overrides baked in
-// (nothing was fabricated to fill the table), populated over time via the
-// weekly research pass + manual review. Example shape, kept commented out
-// as a template:
+// Permanent, hand-curated entries — starts empty (nothing fabricated to
+// fill it), populated over time for judgment calls confident enough to
+// commit to code. Example shape, kept commented out as a template:
 //
 // {
 //   scope: "player",
@@ -69,18 +85,340 @@ export interface ManagerInsight {
 //   factor: 0.9,
 //   reason: "padrão de substituição cedo em jogos já resolvidos (Arteta)",
 //   addedDate: "2026-08-28",
-//   source: "análise semanal — relatórios de jogo das últimas 4 jornadas",
+//   source: "confirmado manualmente após várias semanas de sinal dinâmico consistente",
 // },
 export const MANAGER_INSIGHTS: ManagerInsight[] = [];
 
-export function getManagerInsights(
+export function filterInsights(
+  insights: ManagerInsight[],
   scope: "player" | "team",
   id: number
 ): ManagerInsight[] {
-  return MANAGER_INSIGHTS.filter((i) => i.scope === scope && i.id === id);
+  return insights.filter((i) => i.scope === scope && i.id === id);
 }
 
 /** Convenience for building a reason string consistently wherever this is surfaced. */
 export function formatInsightReason(insight: ManagerInsight): string {
-  return `${insight.reason} (nota qualitativa, ${insight.addedDate})`;
+  const tag = insight.expiresAt ? "nota da investigação semanal" : "nota qualitativa";
+  return `${insight.reason} (${tag}, ${insight.addedDate})`;
+}
+
+const DYNAMIC_INDEX_KEY = "fpl-command-center:insights:dynamic:index";
+const DYNAMIC_ENTRY_KEY = (key: string) => `fpl-command-center:insights:dynamic:entry:${key}`;
+
+export interface DynamicInsight extends ManagerInsight {
+  key: string; // unique storage key, needed to delete/prune a specific entry
+}
+
+/**
+ * Reads every non-expired dynamic (Redis-backed) insight. Best-effort and
+ * never throws — without Redis configured, or on any read failure, this
+ * degrades to "no dynamic insights" rather than breaking the page, same
+ * pattern as lib/accuracy.ts.
+ */
+export async function loadDynamicInsights(): Promise<DynamicInsight[]> {
+  const redis = getRedis();
+  if (!redis) return [];
+  try {
+    const keys = (await redis.get<string[]>(DYNAMIC_INDEX_KEY)) ?? [];
+    if (keys.length === 0) return [];
+    const nowMs = Date.now();
+    const entries = await Promise.all(keys.map((k) => redis.get<DynamicInsight>(DYNAMIC_ENTRY_KEY(k))));
+    return entries.filter((e): e is DynamicInsight => {
+      if (!e) return false;
+      if (!e.expiresAt) return true;
+      return new Date(e.expiresAt).getTime() > nowMs;
+    });
+  } catch {
+    return [];
+  }
+}
+
+/** Static + dynamic, merged — this is what lib/recommend.ts should be given. */
+export async function loadActiveInsights(): Promise<ManagerInsight[]> {
+  const dynamic = await loadDynamicInsights();
+  return [...MANAGER_INSIGHTS, ...dynamic];
+}
+
+// Guardrails on the dynamic (auto-applied, AI-researched) layer — see the
+// big comment at the top of this file for why each of these exists.
+export const MAX_DYNAMIC_INSIGHTS = 15;
+export const DYNAMIC_TTL_DAYS = 14; // Pedro's explicit choice: 2 weeks
+const FACTOR_MIN = 0.8;
+const FACTOR_MAX = 1.2;
+const REASON_MAX_LENGTH = 300;
+
+export interface NewInsightInput {
+  scope: "player" | "team";
+  id: number;
+  label: string;
+  factor: number;
+  reason: string;
+  source: string;
+}
+
+export interface RejectedInsight {
+  input: NewInsightInput;
+  reason: string;
+}
+
+/**
+ * Name -> id resolution, run entirely by deterministic code — never by an
+ * LLM reading through bootstrap-static's ~700-player JSON itself. This is
+ * the same principle the rest of this project already applies (see the
+ * README's "JSON grande não deve ser lido por um modelo de IA" note): the
+ * weekly research agent knows player/team NAMES from what it read, not
+ * FPL's internal numeric ids, and asking it to open bootstrap-static and
+ * pick out the right id by hand is exactly the kind of bulk-JSON-reading
+ * that produces confidently wrong answers (wrong player, right-looking
+ * but incorrect id). So the agent submits names; this function resolves
+ * them against a live bootstrap fetched fresh in the API route.
+ */
+export interface InsightTarget {
+  id?: number; // already-known numeric id — skips name resolution entirely
+  playerName?: string; // scope "player" — matched against web_name / full name
+  teamShortName?: string; // scope "team" target, OR a disambiguator for scope "player"
+  teamName?: string; // scope "team" target (full name), alternative to teamShortName
+}
+
+// A few common Latin letters used in real player names that DON'T have a
+// canonical NFD decomposition (so the accent-strip below can't reach
+// them) — e.g. Martin Ødegaard. Small, explicit and non-exhaustive on
+// purpose: this only needs to cover names that actually show up in the
+// Premier League, not be a general transliteration library.
+const SPECIAL_LETTERS: [RegExp, string][] = [
+  [/[øØ]/g, "o"],
+  [/[æÆ]/g, "ae"],
+  [/[œŒ]/g, "oe"],
+  [/[đĐ]/g, "d"],
+  [/[łŁ]/g, "l"],
+  [/ß/g, "ss"],
+];
+
+function normalizeName(s: string): string {
+  let out = s;
+  for (const [pattern, replacement] of SPECIAL_LETTERS) {
+    out = out.replace(pattern, replacement);
+  }
+  return out
+    .normalize("NFD")
+    // Strips the Unicode combining-diacritics block (U+0300-U+036F) left
+    // behind by NFD normalization — á -> a, ã -> a, ç -> c, etc.
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+export function resolveInsightTarget(
+  bootstrap: FplBootstrap,
+  scope: "player" | "team",
+  target: InsightTarget
+): { ok: true; id: number; label: string } | { ok: false; reason: string } {
+  if (typeof target.id === "number") {
+    if (scope === "player") {
+      const el = bootstrap.elements.find((e) => e.id === target.id);
+      if (!el) return { ok: false, reason: "id de jogador não encontrado nos dados atuais da FPL" };
+      const team = bootstrap.teams.find((t) => t.id === el.team);
+      return { ok: true, id: el.id, label: `${el.web_name} (${team?.short_name ?? "?"})` };
+    }
+    const team = bootstrap.teams.find((t) => t.id === target.id);
+    if (!team) return { ok: false, reason: "id de equipa não encontrado nos dados atuais da FPL" };
+    return { ok: true, id: team.id, label: team.short_name };
+  }
+
+  if (scope === "team") {
+    const query = normalizeName(target.teamName ?? target.teamShortName ?? "");
+    if (!query) return { ok: false, reason: "teamName ou teamShortName em falta para scope 'team'" };
+    const matches = bootstrap.teams.filter(
+      (t) =>
+        normalizeName(t.name) === query ||
+        normalizeName(t.short_name) === query ||
+        normalizeName(t.name).includes(query)
+    );
+    if (matches.length === 0) {
+      return { ok: false, reason: `equipa "${target.teamName ?? target.teamShortName}" não encontrada` };
+    }
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        reason: `nome de equipa ambíguo entre: ${matches.map((m) => m.name).join(", ")} — usa teamShortName`,
+      };
+    }
+    return { ok: true, id: matches[0].id, label: matches[0].short_name };
+  }
+
+  // scope === "player"
+  const nameQuery = normalizeName(target.playerName ?? "");
+  if (!nameQuery) return { ok: false, reason: "playerName em falta para scope 'player'" };
+  let candidates = bootstrap.elements.filter((e) => {
+    const web = normalizeName(e.web_name);
+    const full = normalizeName(`${e.first_name} ${e.second_name}`);
+    return web === nameQuery || full === nameQuery || web.includes(nameQuery) || full.includes(nameQuery);
+  });
+  if (target.teamShortName) {
+    const teamQuery = normalizeName(target.teamShortName);
+    const teamMatch = bootstrap.teams.find(
+      (t) => normalizeName(t.short_name) === teamQuery || normalizeName(t.name) === teamQuery
+    );
+    if (teamMatch) {
+      const narrowed = candidates.filter((e) => e.team === teamMatch.id);
+      if (narrowed.length > 0) candidates = narrowed;
+    }
+  }
+  if (candidates.length === 0) {
+    return { ok: false, reason: `jogador "${target.playerName}" não encontrado` };
+  }
+  if (candidates.length > 1) {
+    const exact = candidates.filter((e) => normalizeName(e.web_name) === nameQuery);
+    if (exact.length === 1) {
+      candidates = exact;
+    } else {
+      return {
+        ok: false,
+        reason: `nome de jogador ambíguo (${candidates.length} correspondências) — inclui teamShortName para desambiguar`,
+      };
+    }
+  }
+  const el = candidates[0];
+  const team = bootstrap.teams.find((t) => t.id === el.team);
+  return { ok: true, id: el.id, label: `${el.web_name} (${team?.short_name ?? "?"})` };
+}
+
+/**
+ * Pure validation for a single candidate insight — no Redis, no network,
+ * fully unit-testable on its own. `activeCount` is the number of dynamic
+ * insights already active BEFORE this one, so the cap can be checked
+ * correctly while validating a whole batch one at a time. Kept separate
+ * from saveDynamicInsights (which does the actual Redis I/O) specifically
+ * so this safety-critical logic — the one thing standing between an AI
+ * web-research pass and the live scoring model — can be tested in
+ * isolation, not just as a side effect of a Redis round-trip.
+ */
+export function validateInsightInput(
+  input: NewInsightInput,
+  isValidId: (scope: "player" | "team", id: number) => boolean,
+  activeCount: number
+): { ok: true } | { ok: false; reason: string } {
+  if (input.scope !== "player" && input.scope !== "team") {
+    return { ok: false, reason: "scope inválido (tem de ser 'player' ou 'team')" };
+  }
+  if (!Number.isInteger(input.id) || input.id <= 0) {
+    return { ok: false, reason: "id inválido" };
+  }
+  if (!isValidId(input.scope, input.id)) {
+    return { ok: false, reason: "id não corresponde a nenhum jogador/equipa nos dados atuais da FPL" };
+  }
+  if (
+    typeof input.factor !== "number" ||
+    !Number.isFinite(input.factor) ||
+    input.factor < FACTOR_MIN ||
+    input.factor > FACTOR_MAX
+  ) {
+    return { ok: false, reason: `factor fora do intervalo permitido (${FACTOR_MIN}-${FACTOR_MAX})` };
+  }
+  if (!input.reason || typeof input.reason !== "string" || input.reason.length > REASON_MAX_LENGTH) {
+    return { ok: false, reason: `reason em falta ou demasiado longo (máx ${REASON_MAX_LENGTH} caracteres)` };
+  }
+  if (!input.label || !input.source) {
+    return { ok: false, reason: "label ou source em falta" };
+  }
+  if (activeCount >= MAX_DYNAMIC_INSIGHTS) {
+    return { ok: false, reason: `limite de ${MAX_DYNAMIC_INSIGHTS} notas dinâmicas ativas em simultâneo já atingido` };
+  }
+  return { ok: true };
+}
+
+/**
+ * Validates and persists candidate insights from the weekly research pass.
+ * `isValidId` is injected by the caller (app/api/insights/route.ts) rather
+ * than fetched here, so this file never needs its own network access —
+ * the route already has a fresh bootstrap loaded for other reasons.
+ * Every rejection reason is returned so the calling research agent (or
+ * Pedro, reading the response) can see exactly why something didn't apply
+ * — this file rejects loudly, it never silently drops or clamps a
+ * malformed entry into something that looks accepted.
+ */
+export async function saveDynamicInsights(
+  inputs: NewInsightInput[],
+  isValidId: (scope: "player" | "team", id: number) => boolean
+): Promise<{
+  ok: boolean;
+  accepted: DynamicInsight[];
+  rejected: RejectedInsight[];
+  error?: string;
+}> {
+  const redis = getRedis();
+  if (!redis) {
+    return { ok: false, accepted: [], rejected: [], error: "Redis não configurado nesta instalação." };
+  }
+  try {
+    const existingKeys = (await redis.get<string[]>(DYNAMIC_INDEX_KEY)) ?? [];
+    const existingEntries = await Promise.all(
+      existingKeys.map((k) => redis.get<DynamicInsight>(DYNAMIC_ENTRY_KEY(k)))
+    );
+    const nowMs = Date.now();
+    const stillActive = existingEntries.filter(
+      (e): e is DynamicInsight => !!e && (!e.expiresAt || new Date(e.expiresAt).getTime() > nowMs)
+    );
+
+    const accepted: DynamicInsight[] = [];
+    const rejected: RejectedInsight[] = [];
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + DYNAMIC_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    let activeCount = stillActive.length;
+
+    for (const input of inputs) {
+      const validation = validateInsightInput(input, isValidId, activeCount);
+      if (!validation.ok) {
+        rejected.push({ input, reason: validation.reason });
+        continue;
+      }
+      const key = `${input.scope}-${input.id}-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`;
+      const entry: DynamicInsight = {
+        key,
+        scope: input.scope,
+        id: input.id,
+        label: input.label,
+        factor: input.factor,
+        reason: input.reason,
+        addedDate: now.toISOString().slice(0, 10),
+        source: input.source,
+        expiresAt,
+      };
+      await redis.set(DYNAMIC_ENTRY_KEY(key), entry);
+      accepted.push(entry);
+      activeCount++;
+    }
+
+    // Keep the index pruned of expired keys even on a request that adds
+    // nothing new — otherwise it only ever grows.
+    const newIndex = [...stillActive.map((e) => e.key), ...accepted.map((e) => e.key)];
+    if (newIndex.length !== existingKeys.length || accepted.length > 0) {
+      await redis.set(DYNAMIC_INDEX_KEY, newIndex);
+    }
+
+    return { ok: true, accepted, rejected };
+  } catch {
+    return { ok: false, accepted: [], rejected: [], error: "Falha a gravar no Redis." };
+  }
+}
+
+/** Manual override: lets Pedro kill one specific dynamic insight before
+ * its natural expiry, without needing a code change/deploy — the safety
+ * net for "automatic doesn't mean irreversible". */
+export async function deleteDynamicInsight(key: string): Promise<{ ok: boolean; error?: string }> {
+  const redis = getRedis();
+  if (!redis) return { ok: false, error: "Redis não configurado nesta instalação." };
+  try {
+    const keys = (await redis.get<string[]>(DYNAMIC_INDEX_KEY)) ?? [];
+    if (!keys.includes(key)) return { ok: false, error: "chave não encontrada" };
+    await redis.del(DYNAMIC_ENTRY_KEY(key));
+    await redis.set(
+      DYNAMIC_INDEX_KEY,
+      keys.filter((k) => k !== key)
+    );
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Falha a apagar no Redis." };
+  }
 }
