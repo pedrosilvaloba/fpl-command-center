@@ -29,6 +29,7 @@ import {
   type ScoredPlayer,
 } from "../lib/recommend";
 import { computeMinutesModel, computePlayerRates } from "../lib/expectedpoints";
+import { buildOptimalSquad } from "../lib/optimizer";
 import {
   validateInsightInput,
   resolveInsightTarget,
@@ -826,6 +827,75 @@ function testStaticInsightSeeds() {
   check("sem correspondências, nenhuma nota é aplicada", empty.length === 0);
 }
 
+// ---------------------------------------------------------------------
+// Otimizador — o dinheiro tem de ir para o ONZE, não para o banco
+// ---------------------------------------------------------------------
+function testOptimizerBenchSpend() {
+  const pool: ScoredPlayer[] = [];
+  let id = 1;
+  for (let t = 1; t <= 20; t++) {
+    const teamStrength = 0.6 + (t % 10) / 10;
+    for (const [type, n] of [[1, 3], [2, 9], [3, 10], [4, 6]] as [number, number][]) {
+      for (let i = 0; i < n; i++) {
+        const r = ((id * 37) % 100) / 100;
+        const price = r < 0.5 ? 3.9 + r * 1.2 : r < 0.85 ? 5.0 + r * 3 : 9.0 + r * 6;
+        const pts = (price * 1.6 + teamStrength * 8) * (0.85 + ((id * 17) % 30) / 100);
+        pool.push({
+          element: makeElement({ id, element_type: type, team: t }),
+          team: makeTeam(t), positionShort: "X",
+          priceM: Math.round(price * 10) / 10, ownershipPct: 5, formNum: 0,
+          fixtureAvgDifficulty: 3, nextOpponents: "", expectedGoalsFor: 1.4,
+          cleanSheetProbability: 0.3, individualExpectedGI: 0, ceilingGI: 0, floorGI: 0,
+          expectedPoints: Math.round(pts * 10) / 10, expectedPointsNext: pts / 5,
+          breakdown: { appearance: 0, goals: 0, assists: 0, cleanSheet: 0, concededPenalty: 0, defensiveContribution: 0, bonus: 0, total: pts },
+          score: Math.round(pts * 10) / 10, isDifferential: false, isPreseason: false, reasons: [],
+        } as ScoredPlayer);
+        id++;
+      }
+    }
+  }
+
+  const started = Date.now();
+  const res = buildOptimalSquad(pool, 100);
+  const elapsed = Date.now() - started;
+
+  check("otimizador resolve (não cai na heurística)", res.method === "otimizador", res.method);
+  check("resolve dentro do limite de tempo da Vercel", elapsed < 8000, `${elapsed}ms`);
+  check("plantel devolvido é válido", isValidSquad(res.squad, 100));
+  check("onze tem 11 jogadores", res.starters.length === 11, `${res.starters.length}`);
+
+  const xiIds = new Set(res.starters.map((p) => p.element.id));
+  const bench = res.squad.filter((p) => !xiIds.has(p.element.id));
+  check("banco tem 4 jogadores", bench.length === 4, `${bench.length}`);
+
+  const benchSpend = bench.reduce((s, p) => s + p.priceM, 0);
+  const xiSpend = res.starters.reduce((s, p) => s + p.priceM, 0);
+  // Quatro jogadores ao preço mínimo rondam £16m. O modelo antigo chegava a
+  // sentar um jogador de £6.6m no banco.
+  check(
+    "o banco é comprado ao preço mínimo, não com dinheiro a sério",
+    benchSpend <= 18,
+    `£${benchSpend.toFixed(1)}m no banco`
+  );
+  check(
+    "nenhum jogador caro fica sentado no banco",
+    bench.every((p) => p.priceM <= 5.5),
+    `mais caro no banco: £${Math.max(...bench.map((p) => p.priceM))}m`
+  );
+  check(
+    "a maior parte do orçamento vai para o onze",
+    xiSpend > benchSpend * 4,
+    `onze £${xiSpend.toFixed(1)}m vs banco £${benchSpend.toFixed(1)}m`
+  );
+
+  // O onze escolhido pelo solver tem de ser uma formação legal.
+  const cnt = (t: number) => res.starters.filter((p) => p.element.element_type === t).length;
+  check("onze tem exatamente 1 guarda-redes", cnt(1) === 1, `${cnt(1)}`);
+  check("onze tem pelo menos 3 defesas", cnt(2) >= 3, `${cnt(2)}`);
+  check("onze tem pelo menos 2 médios", cnt(3) >= 2, `${cnt(3)}`);
+  check("onze tem pelo menos 1 avançado", cnt(4) >= 1, `${cnt(4)}`);
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testDefenceInversion();
 testMissingTeamStrengths();
@@ -836,6 +906,7 @@ testRedisCredentialNames();
 testPreseasonDifferentiation();
 testPreseasonSetPieces();
 testStaticInsightSeeds();
+testOptimizerBenchSpend();
 testPoissonQuantile();
 testLateSeasonWindow();
 testExpectedPointsScale();
