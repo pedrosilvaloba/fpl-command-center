@@ -581,11 +581,54 @@ function testMarketDerivedRatings() {
   check("jogo com equipa não resolvida é ignorado por completo", (bogus.get(1)?.sample ?? 0) === 0);
 }
 
+// ---------------------------------------------------------------------
+// Cobertura do mercado — uma equipa sem rating não pode deitar fora a
+// informação que o mercado dá sobre a outra
+// ---------------------------------------------------------------------
+function testPartialMarketCoverage() {
+  const teams = Array.from({ length: 4 }, (_, i) => makeTeam(i + 1, `T${i + 1}`));
+  // Só T1 e T2 aparecem no mercado. T3 nunca é avaliado (ex: recém-promovido
+  // cujo nome o fornecedor de odds escreve de outra forma).
+  const matches: OddsMatch[] = [
+    { homeTeam: "T1", awayTeam: "T2", homeWinProb: 0.75, drawProb: 0.15, awayWinProb: 0.10, overProb: 0.62, commenceTime: "" },
+  ];
+  // Jogo entre uma equipa avaliada (T1) e uma não avaliada (T3).
+  const fixtures = [makeFixture({ id: 1, event: 1, team_h: 1, team_a: 3 })];
+  const exp = buildFixtureExpectations(teams, fixtures, matches, null);
+  const row = (exp.get(1) ?? [])[0];
+  check("jogo com só uma equipa avaliada usa o mercado, não fica neutro",
+    row?.source === "market-ratings", `fonte=${row?.source}`);
+  check("a equipa forte continua a ter mais golos esperados que a fraca",
+    !!row && row.expectedGoalsFor > row.expectedGoalsAgainst);
+
+  // Com ratings da FPL válidos, um jogo sem mercado deve cair no degrau da
+  // FPL — que é melhor que neutro. A hierarquia tem de ser respeitada.
+  const neither = buildFixtureExpectations(
+    teams, [makeFixture({ id: 2, event: 1, team_h: 3, team_a: 4 })], matches, null
+  );
+  const nrow = (neither.get(3) ?? [])[0];
+  check("sem mercado mas com ratings da FPL, usa a FPL e não o neutro",
+    nrow?.source === "fpl", `fonte=${nrow?.source}`);
+
+  // Só quando NEM mercado NEM ratings da FPL existem é que fica neutro.
+  const bare = teams.map((t) => ({
+    ...t, strength_attack_home: 0, strength_attack_away: 0,
+    strength_defence_home: 0, strength_defence_away: 0,
+  }));
+  const nothing = buildFixtureExpectations(
+    bare, [makeFixture({ id: 3, event: 1, team_h: 3, team_a: 4 })], matches, null
+  );
+  const brow = (nothing.get(3) ?? [])[0];
+  check("sem mercado e sem ratings da FPL fica neutro e é assinalado",
+    brow?.source === "neutral", `fonte=${brow?.source}`);
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testDefenceInversion();
 testMissingTeamStrengths();
 testMarketInversion();
 testMarketDerivedRatings();
+testPartialMarketCoverage();
 testPoissonQuantile();
 testLateSeasonWindow();
 testExpectedPointsScale();

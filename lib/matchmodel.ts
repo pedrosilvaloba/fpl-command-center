@@ -292,11 +292,20 @@ export function buildFixtureExpectations(
       xgAway = derived.xgAway;
       source = "market";
       marketAdjusted = true;
-    } else if (marketRatings && hasMarketRatings(home.id) && hasMarketRatings(away.id)) {
-      // ---- rung 2: no line for this fixture, but the market has told us
-      // how strong both these teams are elsewhere.
-      const h = marketRatings.get(home.id)!;
-      const a = marketRatings.get(away.id)!;
+    } else if (marketRatings && (hasMarketRatings(home.id) || hasMarketRatings(away.id))) {
+      // ---- rung 2: no line for THIS fixture, but the market has told us
+      // how strong at least one of these teams is elsewhere.
+      //
+      // Requiring BOTH teams to have a rating was too strict: a single
+      // unrated side (typically a promoted club whose name the odds
+      // provider spells differently, so it never resolves) dragged the
+      // whole fixture down to the neutral rung and threw away perfectly
+      // good information about its opponent. An unrated team simply keeps
+      // the neutral 1.0 it is initialised with, which is exactly the right
+      // assumption for a team we know nothing about — while the rated team
+      // still contributes what the market does say.
+      const h = marketRatings.get(home.id) ?? { attack: 1, defence: 1, sample: 0 };
+      const a = marketRatings.get(away.id) ?? { attack: 1, defence: 1, sample: 0 };
       xgHome = BASE_HOME_GOALS * h.attack * a.defence;
       xgAway = BASE_AWAY_GOALS * a.attack * h.defence;
       source = "market-ratings";

@@ -101,9 +101,14 @@ function TransferSuggestionRow({ s }: { s: TransferSuggestion }) {
 export default function MyTeamPanel({
   scored,
   eventId,
+  isPreseason = false,
 }: {
   scored: ScoredPlayer[];
   eventId: number;
+  /** True before the season's first deadline. FPL cannot serve a saved
+   * squad for ANY gameweek at that point, so a failed picks fetch is the
+   * expected state rather than a fault to blame on the user. */
+  isPreseason?: boolean;
 }) {
   const [teamId, setTeamId] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -151,6 +156,17 @@ export default function MyTeamPanel({
         // nothing downstream tries to .map() over a missing array.
         if (Array.isArray(picksRes?.picks)) {
           setPicks(picksRes);
+        } else if (isPreseason) {
+          // Not an error. FPL only exposes a squad AFTER a gameweek's
+          // deadline passes, so before the season's very first deadline
+          // there is nothing to fetch for anyone — and telling the user to
+          // "check your Team ID or try the previous gameweek" blamed them
+          // for a state they cannot do anything about (and there IS no
+          // previous gameweek). The entry data loaded fine right above,
+          // which is itself proof the Team ID is correct.
+          setError(
+            "A FPL só disponibiliza o plantel depois da deadline fechar, por isso antes da primeira jornada não há nada para mostrar aqui. O teu Team ID está correto — os dados da equipa acima vieram dele. Assim que a Jornada 1 fechar, o teu onze aparece."
+          );
         } else {
           setError(
             picksRes?.error ??
@@ -160,7 +176,7 @@ export default function MyTeamPanel({
       })
       .catch((e) => setError(e.message || "Erro a carregar a equipa"))
       .finally(() => setLoading(false));
-  }, [teamId, eventId]);
+  }, [teamId, eventId, isPreseason]);
 
   const scoredById = useMemo(
     () => new Map(scored.map((p) => [p.element.id, p])),
@@ -266,17 +282,23 @@ export default function MyTeamPanel({
                 {entry.entry.player_first_name} {entry.entry.player_last_name} ·
                 Rank Geral{" "}
                 <span className="font-mono tabular text-text">
-                  {entry.entry.summary_overall_rank?.toLocaleString("pt-PT")}
+                  {/* FPL reports 0 for both of these before the first
+                      deadline. Rendering the literal 0 read as "you are
+                      ranked zero / your squad is worth nothing" rather
+                      than "this does not exist yet". */}
+                  {entry.entry.summary_overall_rank
+                    ? entry.entry.summary_overall_rank.toLocaleString("pt-PT")
+                    : "—"}
                 </span>{" "}
                 · Valor{" "}
                 <span className="font-mono tabular text-text">
-                  £
-                  {(
-                    (entry.entry.last_deadline_value +
-                      entry.entry.last_deadline_bank) /
-                    10
-                  ).toFixed(1)}
-                  m
+                  {entry.entry.last_deadline_value
+                    ? `£${(
+                        (entry.entry.last_deadline_value +
+                          entry.entry.last_deadline_bank) /
+                        10
+                      ).toFixed(1)}m`
+                    : "—"}
                 </span>
               </p>
             </>

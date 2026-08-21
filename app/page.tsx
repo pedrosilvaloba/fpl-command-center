@@ -333,7 +333,7 @@ export default async function Home() {
         )}
 
         <Section id="my-team" title="A Minha Equipa" eyebrow="Ligado ao teu Team ID">
-          <MyTeamPanel scored={scored} eventId={picksEvent} />
+          <MyTeamPanel scored={scored} eventId={picksEvent} isPreseason={isPreseason} />
         </Section>
 
         <Section
