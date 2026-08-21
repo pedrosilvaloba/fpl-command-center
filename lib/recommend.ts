@@ -1,6 +1,7 @@
 import type { FplBootstrap, FplElement, FplTeam } from "./types";
 import { averageDifficulty, buildFixtureTicker } from "./fdr";
 import { buildFixtureExpectations, windowExpectation } from "./matchmodel";
+import type { OddsMatch } from "./oddsapi";
 
 export interface ScoredPlayer {
   element: FplElement;
@@ -51,10 +52,19 @@ const POSITION_SHORT: Record<number, string> = {
  * quality — and fixture context. Once games have been played, form/
  * points-per-game take over as the primary signal.
  *
+ * When betting-market odds are available (`oddsMatches`, optional —
+ * requires an ODDS_API_KEY, see lib/oddsapi.ts), the match model above
+ * additionally nudges each fixture towards what the market implies —
+ * bookmakers price in team news, tactical changes and expert analysis
+ * almost as soon as it's known, so this is how the app captures "the eye
+ * test" and public expert opinion without any subjective judgment of our
+ * own. Without a key configured, this runs on the statistical model
+ * alone — a real, honest fallback, not a broken state.
+ *
  * A full xG-differential model built from this season's actual results
  * (once enough of it exists to calibrate one), and simulating outcomes
  * against specific rivals rather than in the abstract, are the next
- * upgrades noted in the README — this is the honest v1.1 baseline.
+ * upgrades noted in the README — this is the honest v1.2 baseline.
  * Builds the fixture ticker and match-model expectations once, then
  * scores every player against them — this is what the dashboard calls
  * directly.
@@ -63,11 +73,12 @@ export function buildScoredPlayers(
   bootstrap: FplBootstrap,
   fixtures: Parameters<typeof buildFixtureTicker>[1],
   fromEvent: number,
-  fixtureWindow = 5
+  fixtureWindow = 5,
+  oddsMatches: OddsMatch[] | null = null
 ): ScoredPlayer[] {
   const teamById = new Map(bootstrap.teams.map((t) => [t.id, t]));
   const ticker = buildFixtureTicker(bootstrap.teams, fixtures, fromEvent, fixtureWindow);
-  const expectationsByTeam = buildFixtureExpectations(bootstrap.teams, fixtures);
+  const expectationsByTeam = buildFixtureExpectations(bootstrap.teams, fixtures, oddsMatches);
   const currentEvent = bootstrap.events.find((e) => e.is_current);
   const isPreseason = !currentEvent;
 
@@ -148,6 +159,9 @@ export function buildScoredPlayers(
     }
     if (window.fixtureCount === 0) {
       reasons.push("sem jogos previstos na janela considerada (semana em branco?)");
+    }
+    if (window.anyMarketAdjusted) {
+      reasons.push("ajustado com odds de mercado");
     }
 
     raw *= availability;

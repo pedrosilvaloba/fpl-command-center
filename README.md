@@ -40,6 +40,7 @@ lib/
   fdr.ts          Construção do fixture ticker / dificuldade de calendário
   recommend.ts    Motor de pontuação, onze ideal, capitão e heurística de recurso
   matchmodel.ts   Modelo de golos esperados por equipa/jogo (Poisson) e clean sheets
+  oddsapi.ts      Cliente da The Odds API — probabilidades de mercado (opcional)
   optimizer.ts    Otimizador real (programação linear) da equipa sugerida
   pricewatch.ts   Preditor de mudanças de preço e monitor de notícias/lesões
   strategy.ts     Playbook e regras 2026/27 (conteúdo da investigação)
@@ -53,11 +54,20 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
-## O que já funciona (v1.5)
+## O que já funciona (v1.6)
 
 - Dados 100% reais e ao vivo — preço, forma, posse, pontos, calendário —
   vindos diretamente da API oficial, sem qualquer valor inventado ou
   copiado deste chat.
+- **Odds de mercado como sinal de contexto (opcional)** — quando ligada
+  (ver "Deploy" abaixo), a app vai buscar probabilidades implícitas de
+  casas de apostas para os jogos da Premier League e usa-as para ajustar
+  o modelo de golos esperados abaixo. É a forma de captar fatores não
+  estatísticos (mudança de treinador, regresso de um jogador-chave,
+  ajustes táticos) e a opinião agregada de milhares de analistas — sem
+  fazer nós próprios qualquer análise subjetiva de texto. Sem chave
+  configurada, a app funciona normalmente só com o modelo estatístico.
+  Ver `lib/oddsapi.ts`.
 - **Modelo de golos esperados por equipa** — a base de toda a pontuação
   deixou de ser um único dígito de dificuldade de calendário (1 a 5,
   igual para todos os jogadores da mesma equipa). Usa as próprias
@@ -184,6 +194,23 @@ apenas no browser onde a usaste. Para sincronizar entre telemóvel/computador:
 3. No deploy seguinte, a Shadow Team passa a mostrar "Sincronizado entre
    dispositivos" em vez de "Guardado só neste browser".
 
+### Passo opcional: ligar odds de mercado
+
+Sem isto a app funciona normalmente, só com o modelo estatístico próprio.
+Para incluir odds de mercado no modelo de golos esperados:
+
+1. Cria uma conta gratuita em [the-odds-api.com](https://the-odds-api.com/)
+   (plano gratuito: 500 pedidos/mês, mais do que suficiente — a app só
+   consulta a cada 12h).
+2. Copia a tua chave de API (aparece no painel depois de criares a conta).
+3. No projeto na Vercel: **Settings** → **Environment Variables** → adiciona
+   uma variável chamada `ODDS_API_KEY` com o valor da tua chave → grava.
+4. Faz um novo deploy (qualquer alteração e novo push serve, ou usa o botão
+   "Redeploy" na Vercel) para a variável ficar ativa.
+5. Na secção "Equipa Sugerida" da app, a nota por baixo do capitão passa a
+   dizer "Pontuação enriquecida com odds de mercado" em vez de "a correr só
+   com o modelo estatístico".
+
 ## Notas honestas
 
 - A API da FPL é pública mas **não-oficial e não documentada** pela
@@ -200,3 +227,15 @@ apenas no browser onde a usaste. Para sincronizar entre telemóvel/computador:
   de exceder o tempo limite da Vercel.
 - O preditor de preços é uma estimativa heurística, não a fórmula real da
   FPL (nunca publicada) — trata como um sinal para decidir, não como certeza.
+- O ajuste por odds de mercado é uma aproximação (ver `applyMarketTilt` em
+  `lib/matchmodel.ts`): em vez de recalcular o par de golos esperados que
+  reproduziria exatamente as probabilidades do mercado (um problema
+  numérico mais pesado, deixado para depois), desloca os números do nosso
+  próprio modelo na direção do mercado, com um limite de ±40% para um
+  mercado pouco líquido/ruidoso não dominar a previsão. Direcionalmente
+  correto, não uma réplica exata do mercado.
+- O emparelhamento de nomes de equipas entre a FPL e a The Odds API é por
+  correspondência exata (com uma tabela de aliases conhecidos), nunca por
+  aproximação — se uma equipa não corresponder por algum motivo (ex.: um
+  nome mudou), essa equipa simplesmente fica sem o ajuste de mercado nessa
+  jornada, em vez de arriscar aplicar o sinal errado a outra equipa.

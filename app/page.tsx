@@ -7,6 +7,7 @@ import {
 } from "@/lib/recommend";
 import { buildOptimalSquad } from "@/lib/optimizer";
 import { buildPriceWatch, buildNewsWatch } from "@/lib/pricewatch";
+import { getOddsImpliedProbabilities } from "@/lib/oddsapi";
 import { PLAYBOOK, RULES_2026_27 } from "@/lib/strategy";
 import { DEFAULT_TEAM_ID, DEFAULT_LEAGUE_ID } from "@/lib/constants";
 import CountdownTimer from "@/components/CountdownTimer";
@@ -53,9 +54,15 @@ function Section({
 }
 
 export default async function Home() {
-  const [bootstrap, fixtures] = await Promise.all([
+  const [bootstrap, fixtures, oddsMatches] = await Promise.all([
     getBootstrap(),
     getFixtures({ future: true }),
+    // Optional enrichment — returns null when ODDS_API_KEY isn't
+    // configured, or if the request fails for any reason. Included in
+    // this Promise.all because getOddsImpliedProbabilities never
+    // rejects (see lib/oddsapi.ts), so it can't take the whole page
+    // down; it only ever resolves to real data or null.
+    getOddsImpliedProbabilities(),
   ]);
 
   const nextEvent =
@@ -65,7 +72,8 @@ export default async function Home() {
   const fromEvent = nextEvent?.id ?? 1;
 
   const ticker = buildFixtureTicker(bootstrap.teams, fixtures, fromEvent, 5);
-  const scored = buildScoredPlayers(bootstrap, fixtures, fromEvent, 5);
+  const scored = buildScoredPlayers(bootstrap, fixtures, fromEvent, 5, oddsMatches);
+  const oddsActive = Array.isArray(oddsMatches) && oddsMatches.length > 0;
   const { squad, starters, totalCost, method: squadMethod } = buildOptimalSquad(scored, 100);
   const { captain, viceCaptain } = pickCaptain(starters);
   const differentials = findDifferentials(scored, 10, 8);
@@ -245,6 +253,11 @@ export default async function Home() {
             Capitão sugerido:{" "}
             <strong className="text-text">{captain?.element.web_name}</strong>{" "}
             · Vice: <strong className="text-text">{viceCaptain?.element.web_name}</strong>
+          </p>
+          <p className="text-xs text-text-muted opacity-70 mb-4">
+            {oddsActive
+              ? "Pontuação enriquecida com odds de mercado (ver \"ajustado com odds de mercado\" nas Melhores Escolhas)."
+              : "A correr só com o modelo estatístico — liga a ODDS_API_KEY na Vercel para incluir odds de mercado (ver README)."}
           </p>
           <div className="grid md:grid-cols-2 gap-6">
             <div>
@@ -441,6 +454,8 @@ export default async function Home() {
                 <li>✓ Shadow Team — sandbox para testar transferências antes de aplicar, sincronizada entre dispositivos quando o Upstash Redis estiver ligado</li>
                 <li>✓ Otimizador real (programação linear) — equipa sugerida matematicamente ótima, não só uma heurística gananciosa</li>
                 <li>✓ Preditor de mudanças de preço e monitor de notícias/lesões</li>
+                <li>✓ Modelo de golos esperados por equipa (Poisson), substituindo o dígito de calendário genérico</li>
+                <li>✓ Odds de mercado como sinal de contexto (opcional — ver ODDS_API_KEY no README), para captar fatores não estatísticos e opinião especializada</li>
               </ul>
             </div>
             <div>
@@ -448,6 +463,8 @@ export default async function Home() {
                 A caminho
               </h3>
               <ul className="flex flex-col gap-1.5 text-text-muted">
+                <li>→ Simulação contra os rivais da Haal of Fame (Camada 2) — recomendações que visam ultrapassar/manter distância de rivais específicos, não só maximizar pontos em abstrato</li>
+                <li>→ Aprendizagem entre estratégias via Shadow Team (Camada 3) — começa a fazer sentido a partir de jornadas reais jogadas</li>
                 <li>→ Login FPL + execução automática de transferências (autopilot com trilhos de segurança) — o desenho de segurança fica combinado antes de mexer em credenciais reais</li>
               </ul>
             </div>
