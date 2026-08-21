@@ -8,6 +8,7 @@ import {
 import { buildOptimalSquad } from "@/lib/optimizer";
 import { buildPriceWatch, buildNewsWatch } from "@/lib/pricewatch";
 import { getOddsImpliedProbabilities } from "@/lib/oddsapi";
+import { findScheduleAnomalies } from "@/lib/schedule";
 import { PLAYBOOK, RULES_2026_27 } from "@/lib/strategy";
 import { DEFAULT_TEAM_ID, DEFAULT_LEAGUE_ID } from "@/lib/constants";
 import CountdownTimer from "@/components/CountdownTimer";
@@ -80,6 +81,30 @@ export default async function Home() {
   const { risers, fallers } = buildPriceWatch(bootstrap, 8);
   const newsWatch = buildNewsWatch(bootstrap, 15);
 
+  // Chip-timing horizon: further out than the 5-week scoring window,
+  // since Bench Boost/Triple Captain/Free Hit planning benefits from
+  // seeing what's coming before it's actually time to act on it. Capped
+  // at gameweek 38 (the season's last).
+  const scheduleHorizon = Math.min(fromEvent + 14, 38);
+  const scheduleAnomalies = findScheduleAnomalies(
+    bootstrap.teams,
+    fixtures,
+    fromEvent,
+    scheduleHorizon
+  );
+  const teamById = new Map(bootstrap.teams.map((t) => [t.id, t]));
+  const anomaliesByEvent = new Map<number, { doubles: string[]; blanks: string[] }>();
+  for (const a of scheduleAnomalies) {
+    const team = teamById.get(a.teamId);
+    if (!team) continue;
+    if (!anomaliesByEvent.has(a.event)) {
+      anomaliesByEvent.set(a.event, { doubles: [], blanks: [] });
+    }
+    const bucket = anomaliesByEvent.get(a.event)!;
+    (a.type === "double" ? bucket.doubles : bucket.blanks).push(team.short_name);
+  }
+  const scheduleEvents = Array.from(anomaliesByEvent.keys()).sort((a, b) => a - b);
+
   const byPos = (id: number, n = 8) =>
     scored.filter((p) => p.element.element_type === id).slice(0, n);
 
@@ -148,6 +173,7 @@ export default async function Home() {
             ["shadow-team", "Shadow Team"],
             ["squad", "Equipa Sugerida"],
             ["fixtures", "Calendário"],
+            ["schedule-anomalies", "Duplas & Brancas"],
             ["picks", "Melhores Escolhas"],
             ["differentials", "Diferenciais"],
             ["price-watch", "Preços"],
@@ -277,6 +303,51 @@ export default async function Home() {
 
         <Section id="fixtures" title="Calendário — Próximas 5 Jornadas" eyebrow="Fixture Ticker">
           <FixtureTicker teams={bootstrap.teams} ticker={ticker} />
+        </Section>
+
+        <Section
+          id="schedule-anomalies"
+          title="Jornadas Duplas e Brancas"
+          eyebrow={`Próximas ${scheduleHorizon - fromEvent + 1} jornadas · timing de chips`}
+        >
+          {scheduleEvents.length === 0 ? (
+            <p className="text-sm text-text-muted">
+              Nenhuma jornada dupla ou em branco confirmada ainda nas próximas
+              jornadas. É normal no início da época — reagendamentos de taças
+              e competições europeias só costumam ser confirmados algumas
+              semanas antes; esta secção preenche-se sozinha assim que a FPL
+              atualizar o calendário.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {scheduleEvents.map((event) => {
+                const bucket = anomaliesByEvent.get(event)!;
+                return (
+                  <div
+                    key={event}
+                    className="rounded-lg border border-border px-3 py-2 text-sm flex flex-wrap items-center gap-x-4 gap-y-1"
+                  >
+                    <span className="font-display tracking-wide">GW{event}</span>
+                    {bucket.doubles.length > 0 && (
+                      <span className="text-success">
+                        Dupla: {bucket.doubles.join(", ")}
+                      </span>
+                    )}
+                    {bucket.blanks.length > 0 && (
+                      <span className="text-danger">
+                        Branca: {bucket.blanks.join(", ")}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <p className="text-xs text-text-muted opacity-70 mt-3">
+            Duplas são o momento clássico para Bench Boost/Triple Captain;
+            brancas são o motivo mais comum para usar o Free Hit. Ver Playbook
+            para o racional completo.
+          </p>
         </Section>
 
         <Section id="picks" title="Melhores Escolhas por Posição" eyebrow="Top Picks">
@@ -456,6 +527,7 @@ export default async function Home() {
                 <li>✓ Preditor de mudanças de preço e monitor de notícias/lesões</li>
                 <li>✓ Modelo de golos esperados por equipa (Poisson), substituindo o dígito de calendário genérico</li>
                 <li>✓ Odds de mercado como sinal de contexto (opcional — ver ODDS_API_KEY no README), para captar fatores não estatísticos e opinião especializada</li>
+                <li>✓ Deteção de jornadas duplas/brancas e pontuação sensível ao calendário (uma dupla vale mais, não é diluída numa média)</li>
               </ul>
             </div>
             <div>

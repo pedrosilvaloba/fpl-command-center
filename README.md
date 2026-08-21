@@ -41,6 +41,7 @@ lib/
   recommend.ts    Motor de pontuação, onze ideal, capitão e heurística de recurso
   matchmodel.ts   Modelo de golos esperados por equipa/jogo (Poisson) e clean sheets
   oddsapi.ts      Cliente da The Odds API — probabilidades de mercado (opcional)
+  schedule.ts     Deteção de jornadas duplas e em branco por equipa
   optimizer.ts    Otimizador real (programação linear) da equipa sugerida
   pricewatch.ts   Preditor de mudanças de preço e monitor de notícias/lesões
   strategy.ts     Playbook e regras 2026/27 (conteúdo da investigação)
@@ -54,7 +55,7 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
-## O que já funciona (v1.6)
+## O que já funciona (v1.7)
 
 - Dados 100% reais e ao vivo — preço, forma, posse, pontos, calendário —
   vindos diretamente da API oficial, sem qualquer valor inventado ou
@@ -79,6 +80,19 @@ components/
   sheet do seu jogo específico; médios/avançados pelos golos esperados da
   própria equipa nesse jogo — não pelo mesmo número genérico de calendário
   que todos os colegas de equipa recebiam antes. Ver `lib/matchmodel.ts`.
+- **Deteção de jornadas duplas e em branco (novo)** — a app varre o
+  calendário oficial e identifica, por equipa, quando vai ter dois jogos
+  na mesma jornada (dupla) ou nenhum (em branco), numa nova secção
+  "Jornadas Duplas e Brancas". Isto alimenta diretamente a pontuação: a
+  janela de próximas jornadas usada para pontuar deixou de ser uma média
+  simples (que dilui uma dupla e esconde uma branca) e passou a somar os
+  jogos esperados dentro da janela — uma dupla vale agora o dobro, uma
+  branca vale zero nessa jornada, tal como no jogo real. Jogadores
+  afetados recebem uma nota explícita ("inclui jornada dupla/em branco
+  nas próximas N jornadas") nas razões da pontuação. Como as duplas/brancas
+  só costumam ficar confirmadas a algumas semanas de distância, é normal
+  esta secção aparecer vazia no início da época — não é um erro. Ver
+  `lib/schedule.ts` e `windowExpectation` em `lib/matchmodel.ts`.
 - **A Minha Equipa** — introduz o teu Team ID (guardado neste browser, com
   o teu por omissão) e vês o teu plantel real, capitão, banco, valor e
   rank, com sugestões de transferência calculadas contra o teu plantel
@@ -239,3 +253,8 @@ Para incluir odds de mercado no modelo de golos esperados:
   aproximação — se uma equipa não corresponder por algum motivo (ex.: um
   nome mudou), essa equipa simplesmente fica sem o ajuste de mercado nessa
   jornada, em vez de arriscar aplicar o sinal errado a outra equipa.
+- Os multiplicadores da pontuação por clean sheets/golos esperados foram
+  recalibrados para a janela por omissão de 5 jornadas (ver comentários em
+  `lib/recommend.ts`) — se algum dia mudares o tamanho dessa janela, vale a
+  pena rever esses números, porque deixam de estar calibrados para o total
+  esperado numa janela de outro tamanho.

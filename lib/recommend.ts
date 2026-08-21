@@ -106,7 +106,12 @@ export function buildScoredPlayers(
       fromEvent,
       fixtureWindow
     );
+    // Display fields stay per-fixture averages (readable as "~X/jogo");
+    // the score itself is driven by the WINDOW TOTAL below, so a double
+    // gameweek inside the window correctly counts as more opportunity
+    // rather than being averaged away.
     const { avgGoalsFor: expectedGoalsFor, avgCleanSheetProbability: cleanSheetProbability } = window;
+    const { totalGoalsFor, totalCleanSheetProbability } = window;
 
     // Availability penalty: doubtful/injured players get scored down hard
     // even if their underlying numbers are great — a great player who
@@ -124,15 +129,17 @@ export function buildScoredPlayers(
     if (isPreseason) {
       // Price is the market's own pre-season valuation of quality;
       // ownership is the collective wisdom of everyone else who has
-      // already looked at press-conference/preseason signals. Weights
-      // below are tuned so the fixture-context term contributes roughly
-      // the same magnitude the old single-digit FDR bump used to — see
-      // lib/matchmodel.ts for how these probabilities/goals are derived.
+      // already looked at press-conference/preseason signals. The
+      // fixture-context term uses the WINDOW TOTAL (not the average), so
+      // a double gameweek inside the window is worth more, not diluted —
+      // multipliers below are calibrated for the default 5-gameweek
+      // window (see lib/matchmodel.ts for how these numbers are derived;
+      // re-tune if fixtureWindow changes materially from 5).
       raw =
         priceM * 1.6 +
         Math.log10(ownershipPct + 1) * 6 +
-        (isDefensive ? cleanSheetProbability * 10 : 0) +
-        (isAttacking ? expectedGoalsFor * 2 : 0) +
+        (isDefensive ? totalCleanSheetProbability * 2 : 0) +
+        (isAttacking ? totalGoalsFor * 0.4 : 0) +
         ictNum * 0.02;
       if (ownershipPct >= 25) reasons.push("escolha consensual do mercado (template)");
       if (ownershipPct < 10 && priceM >= 6) reasons.push("possível diferencial de qualidade");
@@ -140,8 +147,8 @@ export function buildScoredPlayers(
       raw =
         formNum * 2.2 +
         ppg * 1.4 +
-        (isDefensive ? cleanSheetProbability * 8 : 0) +
-        (isAttacking ? expectedGoalsFor * 1.6 : 0) +
+        (isDefensive ? totalCleanSheetProbability * 1.6 : 0) +
+        (isAttacking ? totalGoalsFor * 0.32 : 0) +
         ictNum * 0.015 +
         Math.log10(ownershipPct + 1) * 1.5;
       if (formNum >= 5) reasons.push("em grande forma recente");
@@ -157,8 +164,15 @@ export function buildScoredPlayers(
         `equipa com golos esperados altos nas próximas ${fixtureWindow} jornadas (~${expectedGoalsFor.toFixed(2)}/jogo)`
       );
     }
-    if (window.fixtureCount === 0) {
-      reasons.push("sem jogos previstos na janela considerada (semana em branco?)");
+    if (window.hasDoubleGameweek) {
+      reasons.push(`inclui jornada dupla nas próximas ${fixtureWindow} jornadas`);
+    }
+    if (window.hasBlankGameweek || window.fixtureCount === 0) {
+      reasons.push(
+        window.fixtureCount === 0
+          ? "sem jogos previstos na janela considerada (semana em branco?)"
+          : `inclui possível jornada em branco nas próximas ${fixtureWindow} jornadas`
+      );
     }
     if (window.anyMarketAdjusted) {
       reasons.push("ajustado com odds de mercado");

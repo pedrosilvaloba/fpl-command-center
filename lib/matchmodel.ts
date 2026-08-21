@@ -215,10 +215,31 @@ export function buildFixtureExpectations(
 }
 
 export interface WindowExpectation {
+  // Per-fixture averages — "how good is a typical game in this window",
+  // for display (e.g. "~1.8 golos/jogo").
   avgGoalsFor: number;
   avgGoalsAgainst: number;
   avgCleanSheetProbability: number;
+  // Totals across every fixture in the window — "how much output is there
+  // to get in this window, in total". A double gameweek inside the window
+  // means MORE total fixtures than gameweeks, which correctly increases
+  // these totals instead of just averaging in another data point — this
+  // is what the scoring engine should actually optimize for, since a team
+  // playing twice genuinely offers roughly double the opportunity that
+  // gameweek, not the same opportunity as everyone else.
+  totalGoalsFor: number;
+  totalCleanSheetProbability: number;
   fixtureCount: number;
+  gameweeksInWindow: number;
+  hasDoubleGameweek: boolean; // fixtureCount > gameweeksInWindow
+  // fixtureCount < gameweeksInWindow (this team missing at least one GW).
+  // Simple count-based check — the rare case of a blank AND a double both
+  // landing in the same window can net out to a "normal" fixtureCount and
+  // hide both from this flag. lib/schedule.ts's findScheduleAnomalies
+  // does an exact per-gameweek scan and is the source of truth for the
+  // dedicated schedule section; this flag is a fast approximation used
+  // only to nudge the scoring engine, not to render anything as fact.
+  hasBlankGameweek: boolean;
   anyMarketAdjusted: boolean;
 }
 
@@ -226,13 +247,19 @@ const EMPTY_WINDOW: WindowExpectation = {
   avgGoalsFor: 0,
   avgGoalsAgainst: 0,
   avgCleanSheetProbability: 0,
+  totalGoalsFor: 0,
+  totalCleanSheetProbability: 0,
   fixtureCount: 0,
+  gameweeksInWindow: 0,
+  hasDoubleGameweek: false,
+  hasBlankGameweek: false,
   anyMarketAdjusted: false,
 };
 
-/** Averages a team's per-fixture expectations over an upcoming window —
+/** Aggregates a team's per-fixture expectations over an upcoming window —
  * same fromEvent/windowSize shape as lib/fdr.ts's ticker, but carrying
- * real numbers instead of FPL's 1-5 difficulty digit. */
+ * real numbers instead of FPL's 1-5 difficulty digit, and both an average
+ * (per-fixture) and a total (window-wide, DGW-aware) view of each. */
 export function windowExpectation(
   expectations: FixtureExpectation[] | undefined,
   fromEvent: number,
@@ -244,12 +271,21 @@ export function windowExpectation(
   );
   if (inWindow.length === 0) return EMPTY_WINDOW;
   const n = inWindow.length;
+  const totalGoalsFor = inWindow.reduce((s, e) => s + e.expectedGoalsFor, 0);
+  const totalCleanSheetProbability = inWindow.reduce(
+    (s, e) => s + e.cleanSheetProbability,
+    0
+  );
   return {
-    avgGoalsFor: inWindow.reduce((s, e) => s + e.expectedGoalsFor, 0) / n,
+    avgGoalsFor: totalGoalsFor / n,
     avgGoalsAgainst: inWindow.reduce((s, e) => s + e.expectedGoalsAgainst, 0) / n,
-    avgCleanSheetProbability:
-      inWindow.reduce((s, e) => s + e.cleanSheetProbability, 0) / n,
+    avgCleanSheetProbability: totalCleanSheetProbability / n,
+    totalGoalsFor,
+    totalCleanSheetProbability,
     fixtureCount: n,
+    gameweeksInWindow: windowSize,
+    hasDoubleGameweek: n > windowSize,
+    hasBlankGameweek: n < windowSize,
     anyMarketAdjusted: inWindow.some((e) => e.marketAdjusted),
   };
 }
