@@ -42,10 +42,11 @@ import type { FplElement } from "./types";
  * at the player's blended per-90 rate scaled by expected minutes; it does
  * not model the correlation between a team keeping a clean sheet and that
  * team's attackers scoring, it does not model cards or penalty misses
- * (small and near-unpredictable), and it does not model goalkeeper save
- * points at all because FPL's bootstrap payload does not carry a `saves`
- * field. Each of those is a known, bounded understatement rather than a
- * silent error — see the comments on the individual terms.
+ * (small and near-unpredictable). Goalkeeper save points ARE modelled as
+ * of v1.24 — see the saves term below; before that, keepers were priced on
+ * clean sheets alone, which cannot distinguish a busy shot-stopper from a
+ * spectator at a better club. Each remaining gap is a known, bounded
+ * understatement rather than a silent error.
  */
 
 function toNum(value: unknown): number {
@@ -172,6 +173,8 @@ export interface ExpectedPointsBreakdown {
   concededPenalty: number;
   defensiveContribution: number;
   bonus: number;
+  /** Goalkeeper save points (1 per 3 saves). Zero for outfielders. */
+  saves: number;
   total: number;
 }
 
@@ -180,8 +183,11 @@ export interface PlayerRates {
   xg90: number;
   /** Blended expected assists per 90. */
   xa90: number;
-  /** Realised bonus points per 90. */
+  /** Expected bonus points per 90, predicted from BPS rate rather than
+   * from realised bonus alone — see computePlayerRates. */
   bonus90: number;
+  /** Goalkeeper saves per 90. */
+  saves90: number;
   /** Defensive-contribution actions per 90. */
   dc90: number;
   /** Extra goal involvement per 90 attributable to set-piece duty. */
@@ -225,12 +231,44 @@ export function computePlayerRates(el: FplElement): PlayerRates {
     );
   }
 
-  // Bonus points: a real, highly predictable points source (roughly
-  // 0.5-1.5 per gameweek for a premium) that the previous model fetched
-  // and then ignored entirely.
-  const bonus90 = per90(toNum(el.bonus));
+  // BONUS POINTS, PREDICTED FROM BPS RATHER THAN FROM PAST BONUS.
+  //
+  // Bonus is decided by the Bonus Points System: the top three BPS scores
+  // in a match collect 3, 2 and 1 points. Modelling bonus from a player's
+  // REALISED bonus — as this did until v1.24 — predicts a lumpy,
+  // all-or-nothing outcome from a handful of past all-or-nothing outcomes,
+  // which is about the noisiest estimator available. His BPS RATE is the
+  // underlying quantity that actually produces those outcomes, and it
+  // accumulates every match whether or not he finishes top three.
+  //
+  // The mapping below is a calibration, not a derivation: a BPS rate
+  // around 12/90 almost never reaches the podium, ~25 gets there
+  // occasionally, and 40+ is the territory of players who collect bonus
+  // most weeks. Capped because no one earns 3 bonus points every match.
+  const bps90 = per90(toNum(el.bps));
+  const bonusFromBps = Math.min(2.2, Math.max(0, (bps90 - 12) / 18));
+  const bonusRealised = per90(toNum(el.bonus));
+  // Blend, favouring the more stable BPS-derived figure but letting a
+  // player who genuinely converts BPS into bonus better than the curve
+  // suggests be recognised.
+  const bonus90 =
+    bps90 > 0 ? bonusFromBps * 0.7 + bonusRealised * 0.3 : bonusRealised;
   if (bonus90 >= 0.5) {
-    reasons.push(`acumula bónus com regularidade (~${bonus90.toFixed(2)}/90min)`);
+    reasons.push(
+      `forte candidato a pontos de bónus (~${bps90.toFixed(0)} BPS/90min)`
+    );
+  }
+
+  // GOALKEEPER SAVE POINTS — 1 point per 3 saves.
+  //
+  // Until v1.24 keepers were scored on clean sheets alone, which cannot
+  // express the single most useful goalkeeper archetype in FPL: the busy
+  // shot-stopper at a mid-table club, who concedes more but faces far more
+  // shots and banks save points every week. Two keepers with identical
+  // clean-sheet odds are NOT equivalent assets.
+  const saves90 = per90(toNum(el.saves));
+  if (saves90 >= 3) {
+    reasons.push(`guarda-redes muito solicitado (~${saves90.toFixed(1)} defesas/90min)`);
   }
 
   const dc90 = per90(toNum(el.defensive_contribution));
@@ -251,7 +289,7 @@ export function computePlayerRates(el: FplElement): PlayerRates {
     if (fkOrder === 1) reasons.push("responsável por bolas paradas");
   }
 
-  return { xg90, xa90, bonus90, dc90, setPieceXg90, reasons };
+  return { xg90, xa90, bonus90, saves90, dc90, setPieceXg90, reasons };
 }
 
 /**
@@ -307,8 +345,17 @@ export function expectedPointsForFixture(
 
   const bonus = rates.bonus90 * minuteShare;
 
+  // Saves scale with how much shooting the opponent does, so a harder
+  // fixture RAISES a keeper's save points even as it lowers his clean-sheet
+  // points — the two move in opposite directions, which is exactly why
+  // clean sheets alone misprice the position.
+  const saveRateAdjustment =
+    ctx.expectedGoalsAgainst > 0 ? Math.min(1.8, Math.max(0.5, ctx.expectedGoalsAgainst / 1.35)) : 1;
+  const saves =
+    elementType === 1 ? (rates.saves90 * saveRateAdjustment * minuteShare) / 3 : 0;
+
   const total =
-    appearance + goals + assists + cleanSheet + concededPenalty + defensiveContribution + bonus;
+    appearance + goals + assists + cleanSheet + concededPenalty + defensiveContribution + bonus + saves;
 
   return {
     appearance,
@@ -318,6 +365,7 @@ export function expectedPointsForFixture(
     concededPenalty,
     defensiveContribution,
     bonus,
+    saves,
     total,
   };
 }
@@ -332,6 +380,7 @@ export function scaleBreakdown(b: ExpectedPointsBreakdown, n: number): ExpectedP
     concededPenalty: b.concededPenalty * n,
     defensiveContribution: b.defensiveContribution * n,
     bonus: b.bonus * n,
+    saves: b.saves * n,
     total: b.total * n,
   };
 }

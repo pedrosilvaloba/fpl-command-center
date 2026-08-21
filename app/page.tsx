@@ -22,6 +22,7 @@ import {
 import { loadActiveInsights, getLastResearchRun } from "@/lib/managerinsights";
 import { isStorageConfigured } from "@/lib/kv";
 import { computeSquadRisk } from "@/lib/correlation";
+import { computeSquadRankProfile } from "@/lib/rankvalue";
 import { PLAYBOOK, RULES_2026_27 } from "@/lib/strategy";
 import { DEFAULT_TEAM_ID, DEFAULT_LEAGUE_ID } from "@/lib/constants";
 import CountdownTimer from "@/components/CountdownTimer";
@@ -155,6 +156,9 @@ export default async function Home() {
   // sheet is ONE event shared by every defender), so two squads with equal
   // expected points can carry very different variance. See lib/correlation.ts.
   const squadRisk = computeSquadRisk(starters);
+  // Rank-relative view: FPL is a rank game, so points your rivals also
+  // banked do not move you up. See lib/rankvalue.ts.
+  const rankProfile = computeSquadRankProfile(starters, scored);
   const differentials = findDifferentials(scored, 10, 8);
   const { risers, fallers } = buildPriceWatch(bootstrap, 8);
   const newsWatch = buildNewsWatch(bootstrap, 15);
@@ -488,6 +492,52 @@ export default async function Home() {
               frente, queres o contrário. &quot;Concentração&quot; compara
               este onze com os mesmos jogadores espalhados por clubes
               diferentes — 1.00× é totalmente diversificado.
+            </p>
+          </div>
+
+          <div className="mb-5 rounded-lg border border-border bg-surface-2 p-4">
+            <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 mb-2">
+              <span className="text-xs uppercase tracking-widest text-text-muted">
+                Valor de ranking
+              </span>
+              <span className="text-sm">
+                Pontos esperados:{" "}
+                <strong className="font-mono tabular">{rankProfile.totalExpectedPoints}</strong>
+              </span>
+              <span className="text-sm">
+                Ganho esperado sobre o rival médio:{" "}
+                <strong className="font-mono tabular text-accent">
+                  {rankProfile.totalRankValue}
+                </strong>
+              </span>
+              <span className="text-sm">
+                Posse média do onze:{" "}
+                <strong className="font-mono tabular">{rankProfile.weightedOwnership}%</strong>
+              </span>
+            </div>
+            <p className="text-sm text-text-muted mb-2">{rankProfile.verdict}</p>
+            {rankProfile.missingTemplate.length > 0 && (
+              <p className="text-sm text-warn mb-2">
+                <strong>Template que não tens:</strong>{" "}
+                {rankProfile.missingTemplate
+                  .map(
+                    (m) =>
+                      `${m.player.element.web_name} (${Math.round(m.player.ownershipPct)}%)`
+                  )
+                  .join(" · ")}
+                . Se estes pontuarem, o pelotão ganha-te terreno e não tens nada
+                que compense.
+              </p>
+            )}
+            <p className="text-xs text-text-muted">
+              A FPL é um jogo de <strong>ranking</strong>: pontos que os teus
+              rivais também fizeram não te fazem subir. Um jogador com 65% de
+              posse é quase neutro — se pontua, quase toda a gente pontua
+              contigo. O &quot;ganho sobre o rival médio&quot; desconta a
+              parte dos pontos que o pelotão já leva por também o ter. Não
+              substitui os pontos esperados: são duas perguntas diferentes, e
+              qual delas pesa mais depende de estares à frente ou atrás na tua
+              liga.
             </p>
           </div>
 

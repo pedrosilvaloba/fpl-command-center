@@ -62,8 +62,18 @@ export interface FplElement {
   assists: number;
   clean_sheets: number;
   bonus: number;
-  bps: number;
   defensive_contribution?: number;
+  /** Goalkeeper saves. 1 FPL point per 3 saves — a real, separately-paid
+   * scoring mechanism that this app fetched nothing for until v1.24, which
+   * meant keepers were priced on clean sheets alone. That systematically
+   * misprices the shot-stopper behind a leaky defence, who can out-score a
+   * keeper at a better club on save points alone. */
+  saves?: number;
+  /** Bonus Points System score — the raw ranking that DECIDES bonus points
+   * (top three in a match get 3/2/1). Far more stable than realised bonus,
+   * which is lumpy and small-sample by construction. Fetched but unused
+   * until v1.24. */
+  bps: number;
   transfers_in_event: number;
   transfers_out_event: number;
   cost_change_event: number;

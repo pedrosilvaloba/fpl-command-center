@@ -45,6 +45,8 @@ lib/
   schedule.ts     Deteção de jornadas duplas e em branco por equipa
   playerthreat.ts Ameaça de golo/assistência individual, fiabilidade de utilização (incl. padrão de substituição cedo), bolas paradas, contribuição defensiva
   oddsmodel.ts    Inverte odds em golos esperados e deriva forças de equipa a partir do mercado
+  correlation.ts  Risco de correlação — variância de empilhar jogadores do mesmo clube
+  rankvalue.ts    Valor de ranking — desconta a posse, porque a FPL é um jogo de ranking
   expectedpoints.ts Modelo de pontos esperados — minutos, golos, assistências, clean sheets, bónus, contribuição defensiva
   managerinsights.ts Ajustes qualitativos/táticos — lista permanente manual + camada dinâmica auto-aplicada (resolução de nomes, validação, expiração, limite)
   teamrating.ts   Rating de equipa dinâmico (Elo + taxa de golos), calibrado com os resultados reais desta época
@@ -65,7 +67,7 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
-## O que já funciona (v1.23)
+## O que já funciona (v1.24)
 
 - Dados 100% reais e ao vivo — preço, forma, posse, pontos, calendário —
   vindos diretamente da API oficial, sem qualquer valor inventado ou

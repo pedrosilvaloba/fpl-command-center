@@ -28,9 +28,14 @@ import {
   pickCaptain,
   type ScoredPlayer,
 } from "../lib/recommend";
-import { computeMinutesModel, computePlayerRates } from "../lib/expectedpoints";
+import {
+  computeMinutesModel,
+  computePlayerRates,
+  expectedPointsForFixture,
+} from "../lib/expectedpoints";
 import { buildOptimalSquad } from "../lib/optimizer";
 import { computeSquadRisk, computeTeamExposures } from "../lib/correlation";
+import { computeRankValue, computeSquadRankProfile } from "../lib/rankvalue";
 import {
   validateInsightInput,
   resolveInsightTarget,
@@ -184,7 +189,7 @@ function testCaptainUsesNextGameweek() {
       expectedPoints: 0, expectedPointsNext: 0,
       breakdown: {
         appearance: 0, goals: 0, assists: 0, cleanSheet: 0,
-        concededPenalty: 0, defensiveContribution: 0, bonus: 0, total: 0,
+        concededPenalty: 0, defensiveContribution: 0, bonus: 0, saves: 0, total: 0,
       },
       score: 0, isDifferential: false, isPreseason: false, reasons: [],
       ...over,
@@ -215,7 +220,7 @@ function testSquadValidity() {
       expectedPoints: score, expectedPointsNext: score / 5,
       breakdown: {
         appearance: 0, goals: 0, assists: 0, cleanSheet: 0,
-        concededPenalty: 0, defensiveContribution: 0, bonus: 0, total: score,
+        concededPenalty: 0, defensiveContribution: 0, bonus: 0, saves: 0, total: score,
       },
       score, isDifferential: false, isPreseason: false, reasons: [],
     }) as ScoredPlayer;
@@ -348,7 +353,7 @@ function testBestXI() {
       expectedPoints: pts * 5, expectedPointsNext: pts,
       breakdown: {
         appearance: 0, goals: 0, assists: 0, cleanSheet: 0,
-        concededPenalty: 0, defensiveContribution: 0, bonus: 0, total: 0,
+        concededPenalty: 0, defensiveContribution: 0, bonus: 0, saves: 0, total: 0,
       },
       score: pts * 5, isDifferential: false, isPreseason: false, reasons: [],
     }) as ScoredPlayer;
@@ -848,7 +853,7 @@ function testOptimizerBenchSpend() {
           fixtureAvgDifficulty: 3, nextOpponents: "", expectedGoalsFor: 1.4,
           cleanSheetProbability: 0.3, individualExpectedGI: 0, ceilingGI: 0, floorGI: 0,
           expectedPoints: Math.round(pts * 10) / 10, expectedPointsNext: pts / 5,
-          breakdown: { appearance: 0, goals: 0, assists: 0, cleanSheet: 0, concededPenalty: 0, defensiveContribution: 0, bonus: 0, total: pts },
+          breakdown: { appearance: 0, goals: 0, assists: 0, cleanSheet: 0, concededPenalty: 0, defensiveContribution: 0, bonus: 0, saves: 0, total: pts },
           score: Math.round(pts * 10) / 10, isDifferential: false, isPreseason: false, reasons: [],
         } as ScoredPlayer);
         id++;
@@ -908,7 +913,7 @@ function testCorrelationRisk() {
       ownershipPct: 5, formNum: 0, fixtureAvgDifficulty: 3, nextOpponents: "",
       expectedGoalsFor: 1.4, cleanSheetProbability: cs, individualExpectedGI: 0,
       ceilingGI: 0, floorGI: 0, expectedPoints: pts * 5, expectedPointsNext: pts,
-      breakdown: { appearance: 0, goals: 0, assists: 0, cleanSheet: 0, concededPenalty: 0, defensiveContribution: 0, bonus: 0, total: 0 },
+      breakdown: { appearance: 0, goals: 0, assists: 0, cleanSheet: 0, concededPenalty: 0, defensiveContribution: 0, bonus: 0, saves: 0, total: 0 },
       score: pts * 5, isDifferential: false, isPreseason: false, reasons: [],
     }) as ScoredPlayer;
 
@@ -977,6 +982,129 @@ function testCorrelationRisk() {
     `${t1.cleanSheetPlayers.length}`);
 }
 
+// ---------------------------------------------------------------------
+// Valor de ranking — posse é risco, não qualidade
+// ---------------------------------------------------------------------
+function testRankValue() {
+  const mk = (id: number, own: number, pts: number): ScoredPlayer =>
+    ({
+      element: makeElement({ id, element_type: 3, selected_by_percent: String(own) }),
+      team: makeTeam(1), positionShort: "MID", priceM: 8, ownershipPct: own,
+      formNum: 0, fixtureAvgDifficulty: 3, nextOpponents: "", expectedGoalsFor: 1.5,
+      cleanSheetProbability: 0.3, individualExpectedGI: 0, ceilingGI: 0, floorGI: 0,
+      expectedPoints: pts * 5, expectedPointsNext: pts,
+      breakdown: { appearance: 0, goals: 0, assists: 0, cleanSheet: 0, concededPenalty: 0, defensiveContribution: 0, bonus: 0, saves: 0, total: 0 },
+      score: pts * 5, isDifferential: own < 10, isPreseason: false, reasons: [],
+    }) as ScoredPlayer;
+
+  // Dois jogadores com pontos esperados IDÊNTICOS mas posses opostas.
+  const template = computeRankValue(mk(1, 65, 6));
+  const differential = computeRankValue(mk(2, 4, 6));
+
+  check(
+    "pontos esperados são iguais nos dois",
+    template.expectedPoints === differential.expectedPoints
+  );
+  check(
+    "mas o diferencial vale muito mais em ranking",
+    differential.rankValue > template.rankValue * 2,
+    `template ${template.rankValue} vs diferencial ${differential.rankValue}`
+  );
+  check(
+    "o template quase não faz subir (posse alta desconta quase tudo)",
+    template.rankValue < template.expectedPoints * 0.4,
+    `${template.rankValue} de ${template.expectedPoints}`
+  );
+  check(
+    "mas NÃO ter o template é um risco real e quantificado",
+    template.templateRisk > differential.templateRisk * 5,
+    `template ${template.templateRisk} vs diferencial ${differential.templateRisk}`
+  );
+
+  // Perfil de onze: um todo-template vs um todo-diferencial.
+  const templateXI = Array.from({ length: 11 }, (_, i) => mk(100 + i, 60, 5));
+  const diffXI = Array.from({ length: 11 }, (_, i) => mk(200 + i, 5, 5));
+  const pT = computeSquadRankProfile(templateXI, templateXI);
+  const pD = computeSquadRankProfile(diffXI, diffXI);
+
+  check(
+    "os dois onzes têm os MESMOS pontos esperados",
+    Math.abs(pT.totalExpectedPoints - pD.totalExpectedPoints) < 1e-6,
+    `${pT.totalExpectedPoints} vs ${pD.totalExpectedPoints}`
+  );
+  check(
+    "mas ganhos de ranking radicalmente diferentes",
+    pD.totalRankValue > pT.totalRankValue * 2,
+    `template ${pT.totalRankValue} vs diferencial ${pD.totalRankValue}`
+  );
+  check("onze template é identificado como tal", pT.verdict.includes("template"));
+  check("onze diferencial é identificado como tal", pD.verdict.includes("diferencial"));
+  check("posse média ponderada é calculada", pT.weightedOwnership > 50 && pD.weightedOwnership < 15,
+    `template ${pT.weightedOwnership}% diferencial ${pD.weightedOwnership}%`);
+
+  // Template em falta: jogador muito possuído que NÃO está no onze.
+  const universe = [...diffXI, mk(999, 70, 7)];
+  const profile = computeSquadRankProfile(diffXI, universe);
+  check(
+    "template que não tens é sinalizado como risco",
+    profile.missingTemplate.length === 1 && profile.missingTemplate[0].player.element.id === 999,
+    `${profile.missingTemplate.length} sinalizados`
+  );
+}
+
+// ---------------------------------------------------------------------
+// Bónus via BPS e pontos de defesas dos guarda-redes
+// ---------------------------------------------------------------------
+function testBpsAndSaves() {
+  // Dois jogadores com o MESMO bónus já ganho, mas taxas de BPS opostas.
+  const highBps = computePlayerRates(makeElement({ minutes: 900, bonus: 5, bps: 400 }));
+  const lowBps = computePlayerRates(makeElement({ minutes: 900, bonus: 5, bps: 120 }));
+  check(
+    "BPS alto prevê mais bónus que BPS baixo, com o mesmo bónus passado",
+    highBps.bonus90 > lowBps.bonus90 * 1.5,
+    `alto ${highBps.bonus90.toFixed(2)} vs baixo ${lowBps.bonus90.toFixed(2)}`
+  );
+  check("previsão de bónus não explode", highBps.bonus90 <= 2.2);
+  check(
+    "jogador com BPS forte é assinalado ao utilizador",
+    highBps.reasons.some((r) => r.includes("bónus"))
+  );
+
+  // Guarda-redes: defesas contam.
+  const busyKeeper = computePlayerRates(makeElement({ minutes: 900, saves: 45 }));
+  check("defesas por 90 são calculadas", busyKeeper.saves90 > 4, `${busyKeeper.saves90}`);
+  check(
+    "guarda-redes muito solicitado é assinalado",
+    busyKeeper.reasons.some((r) => r.includes("defesas"))
+  );
+
+  const mins = computeMinutesModel(makeElement({ minutes: 900, starts: 10 }), 10, false);
+  // O mesmo guarda-redes num jogo difícil (mais remates) vs fácil.
+  const hard = expectedPointsForFixture(1, busyKeeper, mins, {
+    teamAttackRatio: 1, cleanSheetProbability: 0.15, expectedGoalsAgainst: 2.2,
+  });
+  const easy = expectedPointsForFixture(1, busyKeeper, mins, {
+    teamAttackRatio: 1, cleanSheetProbability: 0.55, expectedGoalsAgainst: 0.7,
+  });
+  check("pontos de defesas são contabilizados", hard.saves > 0, `${hard.saves}`);
+  check(
+    "jogo difícil dá MAIS pontos de defesas que um jogo fácil",
+    hard.saves > easy.saves,
+    `difícil ${hard.saves.toFixed(2)} vs fácil ${easy.saves.toFixed(2)}`
+  );
+  check(
+    "mas o jogo fácil continua a valer mais no total (clean sheet pesa mais)",
+    easy.total > hard.total,
+    `fácil ${easy.total.toFixed(2)} vs difícil ${hard.total.toFixed(2)}`
+  );
+
+  // Jogadores de campo não recebem pontos de defesas.
+  const outfield = expectedPointsForFixture(3, busyKeeper, mins, {
+    teamAttackRatio: 1, cleanSheetProbability: 0.3, expectedGoalsAgainst: 1.4,
+  });
+  check("jogadores de campo não recebem pontos de defesas", outfield.saves === 0);
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testDefenceInversion();
 testMissingTeamStrengths();
@@ -989,6 +1117,8 @@ testPreseasonSetPieces();
 testStaticInsightSeeds();
 testOptimizerBenchSpend();
 testCorrelationRisk();
+testRankValue();
+testBpsAndSaves();
 testPoissonQuantile();
 testLateSeasonWindow();
 testExpectedPointsScale();
