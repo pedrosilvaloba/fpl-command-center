@@ -12,7 +12,12 @@
  */
 
 import { computeDynamicTeamFactors } from "../lib/teamrating";
-import { poissonQuantile, windowExpectation } from "../lib/matchmodel";
+import {
+  poissonQuantile,
+  windowExpectation,
+  buildFixtureExpectations,
+  teamStrengthsUsable,
+} from "../lib/matchmodel";
 import type { FixtureExpectation } from "../lib/matchmodel";
 import {
   buildScoredPlayers,
@@ -405,8 +410,82 @@ function testCorruptDataIsContained() {
 
 // ---------------------------------------------------------------------
 
+// ---------------------------------------------------------------------
+// C-06 — forças da FPL a zero não podem colapsar o modelo inteiro
+// (confirmado ao vivo em 2026-08-21: strength_* = 0, strength = null)
+// ---------------------------------------------------------------------
+function testMissingTeamStrengths() {
+  const zeroed = Array.from({ length: 6 }, (_, i) => ({
+    ...makeTeam(i + 1),
+    strength_attack_home: 0,
+    strength_attack_away: 0,
+    strength_defence_home: 0,
+    strength_defence_away: 0,
+  }));
+  const fixtures = [
+    makeFixture({ id: 1, event: 1, team_h: 1, team_a: 2 }),
+    makeFixture({ id: 2, event: 2, team_h: 3, team_a: 1 }),
+  ];
+
+  check("forças em falta são detetadas", !teamStrengthsUsable(zeroed));
+
+  const exp = buildFixtureExpectations(zeroed, fixtures, null, null);
+  const rows = exp.get(1) ?? [];
+  check("ainda são produzidas expectativas por jogo", rows.length === 2);
+  for (const r of rows) {
+    check(
+      "golos esperados não colapsam para zero sem as forças da FPL",
+      r.expectedGoalsFor > 0.5,
+      `obtido ${r.expectedGoalsFor}`
+    );
+    check(
+      "probabilidade de clean sheet não fica em 100%",
+      r.cleanSheetProbability < 0.95,
+      `obtido ${r.cleanSheetProbability}`
+    );
+  }
+  // Casa continua a valer mais do que fora, mesmo no modo neutro.
+  const home = rows.find((r) => r.isHome);
+  const away = rows.find((r) => !r.isHome);
+  check(
+    "vantagem caseira mantém-se no modo neutro",
+    !!home && !!away && home!.expectedGoalsFor > away!.expectedGoalsFor
+  );
+
+  // Com forças reais, o modelo tem de voltar a diferenciar equipas.
+  const real = Array.from({ length: 6 }, (_, i) => ({
+    ...makeTeam(i + 1),
+    strength_attack_home: 1000 + i * 200,
+    strength_attack_away: 1000 + i * 200,
+    strength_defence_home: 1000 + i * 200,
+    strength_defence_away: 1000 + i * 200,
+  }));
+  check("forças reais são reconhecidas como utilizáveis", teamStrengthsUsable(real));
+  const realExp = buildFixtureExpectations(real, fixtures, null, null);
+  const strongRow = (realExp.get(6) ?? [])[0];
+  const weakRow = (realExp.get(1) ?? [])[0];
+  check(
+    "com forças reais, equipas diferentes têm números diferentes",
+    !strongRow || !weakRow || strongRow.expectedGoalsFor !== weakRow.expectedGoalsFor
+  );
+
+  // Campo ausente por completo (não apenas zero) também não pode dar NaN.
+  const missing = zeroed.map((t) => {
+    const copy = { ...t } as Partial<typeof t>;
+    delete copy.strength_attack_home;
+    return copy as typeof t;
+  });
+  const missingExp = buildFixtureExpectations(missing, fixtures, null, null);
+  const missingRows = missingExp.get(1) ?? [];
+  check(
+    "campo ausente não produz NaN nos golos esperados",
+    missingRows.every((r) => Number.isFinite(r.expectedGoalsFor))
+  );
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testDefenceInversion();
+testMissingTeamStrengths();
 testPoissonQuantile();
 testLateSeasonWindow();
 testExpectedPointsScale();

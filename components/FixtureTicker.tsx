@@ -24,10 +24,14 @@ export default function FixtureTicker({
   teams,
   ticker,
   oddsActive,
+  strengthsUsable = true,
 }: {
   teams: FplTeam[];
   ticker: Record<number, ModelFixtureRow[]>;
   oddsActive: boolean;
+  /** False when FPL has not published its team strength ratings, so every
+   * team is running on the same neutral baseline (see lib/matchmodel.ts). */
+  strengthsUsable?: boolean;
 }) {
   const rows = teams
     .map((t) => ({ team: t, fixtures: ticker[t.id] ?? [] }))
@@ -38,6 +42,18 @@ export default function FixtureTicker({
 
   return (
     <div className="overflow-x-auto">
+      {!strengthsUsable && (
+        <div className="mb-4 rounded-lg border border-[color-mix(in_srgb,var(--warn)_40%,var(--border))] bg-[color-mix(in_srgb,var(--warn)_10%,var(--surface))] px-4 py-3 text-sm text-warn">
+          <strong>A FPL ainda não publicou as forças das equipas.</strong> Os
+          campos de força de ataque/defesa vêm todos a zero da API oficial
+          neste momento, por isso o modelo não consegue distinguir uma equipa
+          da outra e está a tratar todas como equipas médias. Os números
+          abaixo são um valor de referência (vantagem caseira e pouco mais),
+          não uma previsão real jogo a jogo — vão passar a diferenciar
+          equipas assim que a FPL preencher esses dados, normalmente nos
+          primeiros dias da época.
+        </div>
+      )}
       <table className="w-full border-collapse text-sm min-w-[680px]">
         <thead>
           <tr className="text-left text-text-muted uppercase text-xs tracking-wide">

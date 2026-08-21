@@ -21,6 +21,27 @@ export interface FixtureExpectation {
 export const BASE_HOME_GOALS = 1.5;
 export const BASE_AWAY_GOALS = 1.2;
 
+/**
+ * Has FPL actually published its team strength ratings yet?
+ *
+ * These are the input the whole Poisson model differentiates teams with.
+ * FPL leaves them at 0 (and `strength` at null) at times — confirmed live
+ * on 2026-08-21, hours before the GW1 deadline. When they are missing the
+ * model still produces numbers, but every team gets the same neutral
+ * baseline, so the output is a league-average placeholder rather than a
+ * real read on each fixture. The UI should say so instead of presenting
+ * identical numbers as if they were a genuine forecast.
+ */
+export function teamStrengthsUsable(teams: FplTeam[]): boolean {
+  if (teams.length === 0) return false;
+  return (
+    average(teams, "strength_attack_home") > 0 &&
+    average(teams, "strength_attack_away") > 0 &&
+    average(teams, "strength_defence_home") > 0 &&
+    average(teams, "strength_defence_away") > 0
+  );
+}
+
 function poissonZeroProb(lambda: number): number {
   return Math.exp(-lambda);
 }
@@ -119,7 +140,14 @@ export function applyMarketTilt(
 }
 
 function average(teams: FplTeam[], key: keyof FplTeam): number {
-  const sum = teams.reduce((s, t) => s + (t[key] as number), 0);
+  // Non-numeric / missing values contribute 0 rather than turning the whole
+  // average into NaN — FPL leaves these fields null or absent at times (see
+  // teamStrengthsUsable), and a NaN average would propagate into every
+  // fixture's expected goals and out to the rendered page.
+  const sum = teams.reduce((s, t) => {
+    const v = t[key];
+    return s + (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  }, 0);
   return sum / (teams.length || 1);
 }
 
@@ -174,6 +202,38 @@ export function buildFixtureExpectations(
   const avgDefenceHome = average(teams, "strength_defence_home");
   const avgDefenceAway = average(teams, "strength_defence_away");
 
+  // FPL does not always publish its team strength ratings. Confirmed
+  // against the live API on 2026-08-21, hours before the GW1 deadline:
+  // every team had `strength: null` and all four strength_* fields at 0.
+  //
+  // The arithmetic below divides a team's rating by the league average of
+  // that rating, so all-zero input produced `0 / 0`, guarded to `0 / 1`,
+  // and the whole model collapsed silently: every fixture came out at
+  // exactly 0.00 expected goals, and clean-sheet probability — which is
+  // exp(-expectedGoalsAgainst) — came out at exp(0) = 100% for all twenty
+  // teams. That is what the Calendário was showing.
+  //
+  // It looked like plausible output rather than an obvious failure, which
+  // is why it survived: the panel only started displaying these numbers in
+  // v1.10 (before that it showed FPL's own 1-5 digit, which hid it).
+  //
+  // The honest fallback is a NEUTRAL factor of 1: with no information
+  // about relative team strength, every team is treated as league-average
+  // and the model degrades to its base rates (1.5 home / 1.2 away) instead
+  // of to zero. Callers can detect this state with `teamStrengthsUsable`
+  // and tell the user the numbers are un-differentiated rather than
+  // presenting them as a real read on each fixture.
+  const ratingsUsable =
+    avgAttackHome > 0 && avgAttackAway > 0 && avgDefenceHome > 0 && avgDefenceAway > 0;
+
+  /** Team rating relative to the league, or a neutral 1 when the rating
+   * is missing, zero or otherwise unusable. */
+  const ratio = (value: number | undefined, avg: number): number => {
+    if (!ratingsUsable) return 1;
+    if (!Number.isFinite(value) || (value ?? 0) <= 0) return 1;
+    return (value as number) / avg;
+  };
+
   const oddsTeamNames = oddsMatches
     ? Array.from(new Set(oddsMatches.flatMap((m) => [m.homeTeam, m.awayTeam])))
     : [];
@@ -201,15 +261,15 @@ export function buildFixtureExpectations(
     const awayDynamic = teamFactors?.get(away.id);
 
     const attackFactorHome =
-      (home.strength_attack_home / (avgAttackHome || 1)) * (homeDynamic?.attackFactor ?? 1);
+      ratio(home.strength_attack_home, avgAttackHome) * (homeDynamic?.attackFactor ?? 1);
     const defenceFactorAway =
-      (away.strength_defence_away / (avgDefenceAway || 1)) * (awayDynamic?.defenceFactor ?? 1);
+      ratio(away.strength_defence_away, avgDefenceAway) * (awayDynamic?.defenceFactor ?? 1);
     let xgHome = (BASE_HOME_GOALS * attackFactorHome) / (defenceFactorAway || 1);
 
     const attackFactorAway =
-      (away.strength_attack_away / (avgAttackAway || 1)) * (awayDynamic?.attackFactor ?? 1);
+      ratio(away.strength_attack_away, avgAttackAway) * (awayDynamic?.attackFactor ?? 1);
     const defenceFactorHome =
-      (home.strength_defence_home / (avgDefenceHome || 1)) * (homeDynamic?.defenceFactor ?? 1);
+      ratio(home.strength_defence_home, avgDefenceHome) * (homeDynamic?.defenceFactor ?? 1);
     let xgAway = (BASE_AWAY_GOALS * attackFactorAway) / (defenceFactorHome || 1);
 
     let marketAdjusted = false;

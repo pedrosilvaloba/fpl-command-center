@@ -4,7 +4,11 @@ import {
   pickCaptain,
   findDifferentials,
 } from "@/lib/recommend";
-import { buildFixtureExpectations, buildModelTicker } from "@/lib/matchmodel";
+import {
+  buildFixtureExpectations,
+  buildModelTicker,
+  teamStrengthsUsable,
+} from "@/lib/matchmodel";
 import { computeDynamicTeamFactors } from "@/lib/teamrating";
 import { buildOptimalSquad } from "@/lib/optimizer";
 import { buildPriceWatch, buildNewsWatch } from "@/lib/pricewatch";
@@ -112,6 +116,12 @@ export default async function Home() {
     teamFactorsForDisplay
   );
   const ticker = buildModelTicker(bootstrap.teams, expectationsByTeamForDisplay, fromEvent, 5);
+  // FPL sometimes leaves its team strength ratings at zero (confirmed live
+  // on the 2026/27 GW1 deadline day). The model falls back to neutral
+  // league-average teams in that case, which is the honest thing to do —
+  // but the numbers are then identical for everyone and must be labelled
+  // as a placeholder rather than shown as a real per-fixture forecast.
+  const strengthsUsable = teamStrengthsUsable(bootstrap.teams);
   const scored = buildScoredPlayers(bootstrap, fixtures, fromEvent, 5, oddsMatches, activeInsights);
   const oddsActive = Array.isArray(oddsMatches) && oddsMatches.length > 0;
   const { squad, starters, totalCost, method: squadMethod } = buildOptimalSquad(scored, 100);
@@ -370,7 +380,12 @@ export default async function Home() {
           title="Calendário — Próximas 5 Jornadas"
           eyebrow="Modelo próprio, não o dígito 1-5 da FPL"
         >
-          <FixtureTicker teams={bootstrap.teams} ticker={ticker} oddsActive={oddsActive} />
+          <FixtureTicker
+            teams={bootstrap.teams}
+            ticker={ticker}
+            oddsActive={oddsActive}
+            strengthsUsable={strengthsUsable}
+          />
         </Section>
 
         <Section
