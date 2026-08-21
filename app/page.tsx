@@ -67,7 +67,7 @@ function Section({
 }
 
 export default async function Home() {
-  const [bootstrap, fixtures, oddsResult, activeInsights] = await Promise.all([
+  const [bootstrap, fixtures, oddsResult] = await Promise.all([
     getBootstrap(),
     // Full season (past + future), not just upcoming — the dynamic team-
     // rating model (lib/teamrating.ts) needs finished fixtures' actual
@@ -82,11 +82,14 @@ export default async function Home() {
     // rejects (see lib/oddsapi.ts), so it can't take the whole page
     // down; it only ever resolves to real data or null.
     getOddsStatus(),
-    // Static (hand-curated) + dynamic (weekly-research, Redis-backed)
-    // qualitative adjustments — see lib/managerinsights.ts. Never throws
-    // and degrades to just the static list without Redis configured.
-    loadActiveInsights(),
   ]);
+
+  // Static (hand-curated) + dynamic (weekly-research, Redis-backed)
+  // qualitative adjustments — see lib/managerinsights.ts. Needs `bootstrap`
+  // because the hand-curated entries identify players BY NAME and are
+  // resolved against live FPL data, so a name that no longer matches a real
+  // player is dropped instead of landing on somebody else.
+  const activeInsights = await loadActiveInsights(bootstrap);
 
   const nextEvent =
     bootstrap.events.find((e) => e.is_next) ??

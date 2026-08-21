@@ -29,7 +29,12 @@ import {
   type ScoredPlayer,
 } from "../lib/recommend";
 import { computeMinutesModel, computePlayerRates } from "../lib/expectedpoints";
-import { validateInsightInput, resolveInsightTarget } from "../lib/managerinsights";
+import {
+  validateInsightInput,
+  resolveInsightTarget,
+  resolveStaticInsights,
+  MANAGER_INSIGHT_SEEDS,
+} from "../lib/managerinsights";
 import {
   expectedGoalsFromMarket,
   totalGoalsFromOverProb,
@@ -781,6 +786,46 @@ function testPreseasonSetPieces() {
   );
 }
 
+// ---------------------------------------------------------------------
+// Notas curadas à mão — identificadas por nome, resolvidas contra a FPL
+// ---------------------------------------------------------------------
+function testStaticInsightSeeds() {
+  check("existem notas curadas", MANAGER_INSIGHT_SEEDS.length > 0);
+
+  for (const seed of MANAGER_INSIGHT_SEEDS) {
+    check(
+      `fator de "${seed.label}" está dentro de ±20%`,
+      seed.factor >= 0.8 && seed.factor <= 1.2,
+      `fator ${seed.factor}`
+    );
+    check(`"${seed.label}" tem fonte`, seed.source.length > 10);
+    check(`"${seed.label}" tem data`, /^\d{4}-\d{2}-\d{2}$/.test(seed.addedDate));
+    check(
+      `"${seed.label}" identifica o alvo por nome, não por id`,
+      Boolean(seed.playerName || seed.teamShortName || seed.teamName)
+    );
+  }
+
+  // Uma nota cujo jogador não existe nos dados da FPL tem de ser DESCARTADA,
+  // nunca aplicada a outro jogador.
+  const { bootstrap } = makeBootstrap({ teamCount: 2 });
+  bootstrap.teams = [makeTeam(1, "NFO"), makeTeam(2, "CRY")];
+  bootstrap.elements = [
+    makeElement({ id: 500, web_name: "Neco Williams", first_name: "Neco", second_name: "Williams", team: 1 }),
+  ];
+  const resolved = resolveStaticInsights(bootstrap);
+  check(
+    "só resolve as notas cujo jogador existe mesmo",
+    resolved.length === 1 && resolved[0].id === 500,
+    `resolvidas ${resolved.length}`
+  );
+  check("a nota resolvida mantém o fator da seed", resolved[0].factor > 1);
+
+  // Sem qualquer jogador correspondente, nada é aplicado.
+  const empty = resolveStaticInsights({ ...bootstrap, elements: [] });
+  check("sem correspondências, nenhuma nota é aplicada", empty.length === 0);
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testDefenceInversion();
 testMissingTeamStrengths();
@@ -790,6 +835,7 @@ testPartialMarketCoverage();
 testRedisCredentialNames();
 testPreseasonDifferentiation();
 testPreseasonSetPieces();
+testStaticInsightSeeds();
 testPoissonQuantile();
 testLateSeasonWindow();
 testExpectedPointsScale();

@@ -87,6 +87,177 @@ export interface ManagerInsight {
 //   addedDate: "2026-08-28",
 //   source: "confirmado manualmente após várias semanas de sinal dinâmico consistente",
 // },
+/**
+ * A hand-curated entry that identifies its target BY NAME rather than by
+ * FPL's numeric id.
+ *
+ * Nobody can look up FPL element ids by hand reliably, and guessing one is
+ * how a note silently lands on the wrong player. These are resolved at
+ * read time against the live bootstrap by `resolveInsightTarget`, the same
+ * deterministic matcher the weekly research endpoint uses — so a name that
+ * does not unambiguously match a real, current player is dropped rather
+ * than applied to somebody else.
+ */
+export interface StaticInsightSeed {
+  scope: "player" | "team";
+  playerName?: string;
+  teamShortName?: string;
+  teamName?: string;
+  label: string;
+  factor: number;
+  reason: string;
+  addedDate: string;
+  source: string;
+}
+
+/**
+ * WHAT BELONGS HERE, AND WHAT DOES NOT.
+ *
+ * The bar is not "is this true" — it is "is this true AND invisible to the
+ * quantitative model". Several genuinely correct findings were deliberately
+ * left out of this list because including them would count the same thing
+ * twice:
+ *
+ *   - "Man Utd face Hull and Ipswich in GW1-2, so start Bruno" is real, but
+ *     it is FIXTURE QUALITY, which the odds-derived match model already
+ *     prices per fixture.
+ *   - "Hull's defence is the weakest of the promoted sides" is real, but it
+ *     is TEAM STRENGTH, which the market-derived team ratings already
+ *     capture.
+ *
+ * What survives is what no data source in this app can express:
+ *
+ *   1. FORMATION AND ROLE. The model has no concept of a back three. A
+ *      wing-back is registered as a defender by FPL and scores clean-sheet
+ *      points as one, while producing attacking returns like a midfielder.
+ *      Nothing in the data says so.
+ *   2. MINUTES RISK BEFORE ANY MINUTES EXIST. In preseason `minutes` and
+ *      `starts` are zero for everyone, so the minutes model necessarily
+ *      assumes a full-time starter. A player who has not trained since a
+ *      summer tournament is a real risk the data cannot yet show.
+ *   3. SET-PIECE CHANGES FPL HAS NOT PUBLISHED YET. Partial overlap: the
+ *      model does read `penalties_order`, so where FPL has already updated
+ *      it these are double-counted. Factors here are therefore deliberately
+ *      smaller than the research proposed, and are the first entries to
+ *      remove once FPL's own field catches up.
+ *
+ * Every entry below is dated and sourced. Prune anything stale — a
+ * substitution habit or a set-piece hierarchy is not a permanent fact.
+ */
+export const MANAGER_INSIGHT_SEEDS: StaticInsightSeed[] = [
+  // --- 1. Formation and role: wing-backs in a back three -----------------
+  {
+    scope: "player", playerName: "Neco Williams", teamShortName: "NFO",
+    label: "Neco Williams (NFO)", factor: 1.12,
+    reason: "ala no 3-4-3 que Glasner instalou na pré-época — pontua como defesa mas produz como médio",
+    addedDate: "2026-08-21",
+    source: "Premier League — lições de pré-época de cada clube (2026-08)",
+  },
+  {
+    scope: "player", playerName: "Aina", teamShortName: "NFO",
+    label: "Ola Aina (NFO)", factor: 1.10,
+    reason: "ala direito no 3-4-3 de Glasner, com liberdade ofensiva que a posição de defesa na FPL não reflete",
+    addedDate: "2026-08-21",
+    source: "Premier League — lições de pré-época de cada clube (2026-08)",
+  },
+  {
+    scope: "player", playerName: "Muñoz", teamShortName: "CRY",
+    label: "Daniel Muñoz (CRY)", factor: 1.10,
+    reason: "Sage adotou linha de três na pré-época; ala com participação ofensiva regular",
+    addedDate: "2026-08-21",
+    source: "Premier League — lições de pré-época de cada clube (2026-08)",
+  },
+  {
+    scope: "player", playerName: "Mitchell", teamShortName: "CRY",
+    label: "Tyrick Mitchell (CRY)", factor: 1.08,
+    reason: "ala esquerdo na linha de três do Palace, mesma lógica de produção acima do esperado para um defesa",
+    addedDate: "2026-08-21",
+    source: "Premier League — lições de pré-época de cada clube (2026-08)",
+  },
+
+  // --- 2. Minutes risk the data cannot yet show --------------------------
+  {
+    scope: "player", playerName: "Solanke", teamShortName: "TOT",
+    label: "Solanke (TOT)", factor: 0.88,
+    reason: "apenas 45min desde 1 de agosto após regresso tardio do Mundial — risco de minutos que os dados a zero da pré-época não conseguem mostrar",
+    addedDate: "2026-08-21",
+    source: "Fantasy Football Scout — team news GW1 (2026-08-17)",
+  },
+  {
+    scope: "player", playerName: "Watkins", teamShortName: "AVL",
+    label: "Watkins (AVL)", factor: 0.92,
+    reason: "zero minutos de pré-época após o Mundial e despromovido a segunda opção de penáltis",
+    addedDate: "2026-08-21",
+    source: "Premier League — lições de pré-época; Squawka — executores de bolas paradas (2026-08)",
+  },
+
+  // --- 3. Set-piece duty FPL may not have published yet ------------------
+  // Smaller than the research proposed, because `penalties_order` partially
+  // covers this already — see the note above.
+  {
+    scope: "player", playerName: "Buendia", teamShortName: "AVL",
+    label: "Buendía (AVL)", factor: 1.10,
+    reason: "assume os penáltis do Villa com a saída de Tielemans; melhor jogador da equipa na pré-época",
+    addedDate: "2026-08-21",
+    source: "Squawka e Premier League — executores de bolas paradas 2026/27",
+  },
+  {
+    scope: "player", playerName: "Gross", teamShortName: "BHA",
+    label: "Pascal Gross (BHA)", factor: 1.08,
+    reason: "recuperou os penáltis do Brighton e converteu na pré-época",
+    addedDate: "2026-08-21",
+    source: "Premier League — Scout Selection 2026/27",
+  },
+  {
+    scope: "player", playerName: "Ndiaye", teamShortName: "EVE",
+    label: "Ndiaye (EVE)", factor: 1.08,
+    reason: "confirmado como executor único de penáltis do Everton; converteu dois na pré-época",
+    addedDate: "2026-08-21",
+    source: "Premier League — lições de pré-época; Squawka (2026-08)",
+  },
+  {
+    scope: "player", playerName: "Tavernier", teamShortName: "BOU",
+    label: "Tavernier (BOU)", factor: 1.08,
+    reason: "assume penáltis, livres e cantos com Kroupi operado ao pé",
+    addedDate: "2026-08-21",
+    source: "Premier League — lições de pré-época de cada clube (2026-08)",
+  },
+  {
+    scope: "player", playerName: "Gibbs-White", teamShortName: "NFO",
+    label: "Gibbs-White (NFO)", factor: 1.08,
+    reason: "passa a primeiro executor de penáltis do Forest, à frente de Chris Wood",
+    addedDate: "2026-08-21",
+    source: "Squawka e allaboutfpl — executores de bolas paradas 2026/27",
+  },
+];
+
+/** Resolved at read time against the live bootstrap — see StaticInsightSeed. */
+export function resolveStaticInsights(bootstrap: FplBootstrap): ManagerInsight[] {
+  const out: ManagerInsight[] = [];
+  for (const seed of MANAGER_INSIGHT_SEEDS) {
+    const resolution = resolveInsightTarget(bootstrap, seed.scope, {
+      playerName: seed.playerName,
+      teamShortName: seed.teamShortName,
+      teamName: seed.teamName,
+    });
+    // A seed that cannot be matched to exactly one real player is dropped
+    // in silence-by-design: applying it to the wrong player would be worse
+    // than not applying it at all.
+    if (!resolution.ok) continue;
+    out.push({
+      scope: seed.scope,
+      id: resolution.id,
+      label: resolution.label,
+      factor: seed.factor,
+      reason: seed.reason,
+      addedDate: seed.addedDate,
+      source: seed.source,
+    });
+  }
+  return out;
+}
+
+/** Kept for callers that have no bootstrap to resolve names against. */
 export const MANAGER_INSIGHTS: ManagerInsight[] = [];
 
 export function filterInsights(
@@ -136,9 +307,12 @@ export async function loadDynamicInsights(): Promise<DynamicInsight[]> {
 }
 
 /** Static + dynamic, merged — this is what lib/recommend.ts should be given. */
-export async function loadActiveInsights(): Promise<ManagerInsight[]> {
+export async function loadActiveInsights(
+  bootstrap?: FplBootstrap
+): Promise<ManagerInsight[]> {
   const dynamic = await loadDynamicInsights();
-  return [...MANAGER_INSIGHTS, ...dynamic];
+  const staticResolved = bootstrap ? resolveStaticInsights(bootstrap) : MANAGER_INSIGHTS;
+  return [...staticResolved, ...dynamic];
 }
 
 // Guardrails on the dynamic (auto-applied, AI-researched) layer — see the
