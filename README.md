@@ -65,7 +65,7 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
-## O que já funciona (v1.16)
+## O que já funciona (v1.17)
 
 - Dados 100% reais e ao vivo — preço, forma, posse, pontos, calendário —
   vindos diretamente da API oficial, sem qualquer valor inventado ou
@@ -478,7 +478,14 @@ por ligar. Para sincronizar entre telemóvel/computador e ativar o painel:
    escolhe a integração **Upstash** (ou procura "Redis" no Marketplace) →
    plano gratuito.
 2. A Vercel liga automaticamente as variáveis de ambiente necessárias ao
-   projeto — não precisas de copiar nada à mão.
+   projeto — não precisas de copiar nada à mão. Nota: a integração da
+   Vercel injeta-as com o prefixo `KV_` (`KV_REST_API_URL`,
+   `KV_REST_API_TOKEN`), herdado do antigo Vercel KV, enquanto as
+   credenciais tiradas diretamente de upstash.com chamam-se
+   `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`. `lib/kv.ts`
+   aceita as duas convenções — até à v1.17 só reconhecia a segunda, o que
+   fazia uma base de dados corretamente criada e ligada parecer
+   desconfigurada.
 3. No deploy seguinte, a Shadow Team passa a mostrar "Sincronizado entre
    dispositivos" em vez de "Guardado só neste browser", e a secção
    "Precisão do Modelo" começa a guardar as escolhas de cada jornada

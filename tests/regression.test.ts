@@ -37,6 +37,7 @@ import {
   deriveTeamRatingsFromMarket,
 } from "../lib/oddsmodel";
 import type { OddsMatch } from "../lib/oddsapi";
+import { isStorageConfigured } from "../lib/kv";
 import {
   check,
   report,
@@ -623,12 +624,64 @@ function testPartialMarketCoverage() {
     brow?.source === "neutral", `fonte=${brow?.source}`);
 }
 
+// ---------------------------------------------------------------------
+// Redis — a integração da Vercel injeta nomes KV_*, não UPSTASH_*
+// ---------------------------------------------------------------------
+function testRedisCredentialNames() {
+  const keys = [
+    "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN",
+    "KV_REST_API_URL", "KV_REST_API_TOKEN",
+  ];
+  const saved: Record<string, string | undefined> = {};
+  for (const k of keys) saved[k] = process.env[k];
+  const clear = () => { for (const k of keys) delete process.env[k]; };
+
+  // `isStorageConfigured` memoiza o cliente, por isso testa-se aqui a
+  // MESMA regra de leitura de credenciais que ele usa, sem depender da
+  // ordem de importação do módulo.
+  const configured = () => {
+    const url =
+      process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+    const token =
+      process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+    return Boolean(url && token);
+  };
+
+  clear();
+  check("sem credenciais nenhumas, o armazenamento é reportado como desligado",
+    configured() === false);
+
+  clear();
+  process.env.KV_REST_API_URL = "https://exemplo.upstash.io";
+  process.env.KV_REST_API_TOKEN = "token-de-teste";
+  check("nomes KV_* da integração da Vercel são reconhecidos",
+    configured() === true);
+
+  clear();
+  process.env.UPSTASH_REDIS_REST_URL = "https://exemplo.upstash.io";
+  process.env.UPSTASH_REDIS_REST_TOKEN = "token-de-teste";
+  check("nomes UPSTASH_* (credenciais coladas à mão) continuam a funcionar",
+    configured() === true);
+
+  clear();
+  process.env.KV_REST_API_URL = "https://exemplo.upstash.io";
+  check("url sem token não conta como configurado", configured() === false);
+
+  // E o módulo real tem de concordar com esta regra no estado atual.
+  clear();
+  check("lib/kv concorda: sem credenciais, desligado", isStorageConfigured() === false);
+
+  clear();
+  for (const k of keys) if (saved[k] !== undefined) process.env[k] = saved[k]!;
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testDefenceInversion();
 testMissingTeamStrengths();
 testMarketInversion();
 testMarketDerivedRatings();
 testPartialMarketCoverage();
+testRedisCredentialNames();
 testPoissonQuantile();
 testLateSeasonWindow();
 testExpectedPointsScale();

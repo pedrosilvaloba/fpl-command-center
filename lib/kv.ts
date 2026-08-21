@@ -11,15 +11,44 @@ let client: Redis | null | undefined;
  * gracefully (e.g. client-only localStorage) rather than throwing, so the
  * app keeps working before and independently of that setup step.
  */
+/**
+ * The same Upstash Redis database is exposed under TWO different sets of
+ * environment-variable names depending on how it was connected:
+ *
+ *   - `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` when the
+ *     credentials are taken straight from upstash.com and pasted in.
+ *   - `KV_REST_API_URL` / `KV_REST_API_TOKEN` when the database is added
+ *     through Vercel's Storage tab, which still uses the naming inherited
+ *     from the old Vercel KV product.
+ *
+ * This code originally only looked for the first pair, so a database
+ * created the normal way — through Vercel's own UI, correctly created and
+ * correctly linked to the project — was invisible to the app, which then
+ * reported that storage "was not connected". The failure looked like a
+ * setup mistake by the user when it was a wrong assumption here.
+ *
+ * Note that `KV_REST_API_READ_ONLY_TOKEN` is deliberately NOT accepted:
+ * this app writes (Shadow Team, accuracy snapshots, tactical notes), so a
+ * read-only token would fail later, at the first write, which is exactly
+ * the kind of delayed and confusing failure this file exists to avoid.
+ */
+function readCredentials(): { url: string; token: string } | null {
+  const url =
+    process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+  const token =
+    process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+  if (!url || !token) return null;
+  return { url, token };
+}
+
 export function getRedis(): Redis | null {
   if (client !== undefined) return client;
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) {
+  const creds = readCredentials();
+  if (!creds) {
     client = null;
     return client;
   }
-  client = new Redis({ url, token });
+  client = new Redis({ url: creds.url, token: creds.token });
   return client;
 }
 
