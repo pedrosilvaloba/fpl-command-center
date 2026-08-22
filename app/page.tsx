@@ -86,32 +86,31 @@ function Section({
   title,
   eyebrow,
   intro,
+  primary = false,
   children,
 }: {
   id: string;
   title: string;
   eyebrow?: string;
   intro?: React.ReactNode;
+  /** The one section carrying the decision. Everything else is reference. */
+  primary?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <section id={id} className="scroll-mt-28">
-      <div className="mb-3">
-        {eyebrow && (
-          <p className="mb-1 text-[11px] font-bold uppercase tracking-[0.16em] text-accent">
-            {eyebrow}
-          </p>
-        )}
-        <h2 className="text-balance font-display text-2xl font-bold tracking-tight text-text md:text-3xl">
+    <section id={id} className="scroll-mt-24">
+      <div className="mb-2.5">
+        {eyebrow && <p className="eyebrow mb-1 text-accent">{eyebrow}</p>}
+        <h2 className="text-balance font-display text-xl font-bold tracking-tight text-text md:text-2xl">
           {title}
         </h2>
         {intro && (
-          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-text-muted">
+          <p className="mt-1.5 max-w-3xl text-[13px] leading-relaxed text-text-muted">
             {intro}
           </p>
         )}
       </div>
-      <div className="card p-4 md:p-6">{children}</div>
+      <div className={`${primary ? "card-primary" : "card"} p-4 md:p-5`}>{children}</div>
     </section>
   );
 }
@@ -124,42 +123,42 @@ function SubHeading({ children }: { children: React.ReactNode }) {
   );
 }
 
-function StatTile({
+/** One inline label/value pair. Deliberately NOT a box: four bordered tiles
+ * of internal model state were eating 150px at the top of every page load to
+ * report things like a variance coefficient of 0.00. */
+function Fact({
   label,
   value,
-  hint,
-  tone = "default",
+  tone,
 }: {
   label: string;
   value: string;
-  hint?: string;
-  tone?: "default" | "accent" | "warn" | "danger";
+  tone?: "accent" | "warn" | "danger";
 }) {
   const color =
     tone === "accent"
-      ? "var(--brand-green)"
+      ? "var(--accent)"
       : tone === "warn"
-        ? "var(--brand-cyan)"
+        ? "var(--warn)"
         : tone === "danger"
-          ? "var(--brand-pink)"
-          : "var(--text-on-brand)";
+          ? "var(--danger)"
+          : "var(--text)";
   return (
-    <div className="rounded-xl border border-white/12 bg-white/8 px-3 py-2.5">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/60">
-        {label}
-      </p>
-      <p
-        className="mt-1 font-display text-lg font-bold leading-tight tracking-tight md:text-xl"
-        style={{ color }}
-      >
+    <span className="flex items-baseline gap-1.5">
+      <span className="eyebrow text-text-muted">{label}</span>
+      <strong className="font-display text-[15px] font-bold tracking-tight" style={{ color }}>
         {value}
-      </p>
-      {hint && <p className="mt-0.5 text-[11px] leading-snug text-white/55">{hint}</p>}
-    </div>
+      </strong>
+    </span>
   );
 }
 
-function Alert({
+/** A single-line alert with a coloured spine.
+ *
+ * The previous version was a full-width tinted paragraph, which gave "two
+ * fixtures have no odds yet" the same visual weight as the squad itself.
+ * That is how you train someone to stop reading warnings. */
+function AlertStrip({
   tone,
   title,
   children,
@@ -172,15 +171,15 @@ function Alert({
     tone === "danger" ? "var(--danger)" : tone === "warn" ? "var(--warn)" : "var(--cyan)";
   return (
     <div
-      className="rounded-xl border px-4 py-3 text-sm leading-relaxed"
-      style={{
-        borderColor: `color-mix(in srgb, ${color} 45%, var(--border))`,
-        background: `color-mix(in srgb, ${color} 9%, var(--surface))`,
-        color,
-      }}
+      className="alert-strip"
+      style={{ ["--tone" as string]: color } as React.CSSProperties}
     >
-      <strong className="mb-1 block">{title}</strong>
-      <span className="text-text-muted">{children}</span>
+      <span aria-hidden className="mt-[3px] shrink-0 font-bold" style={{ color }}>
+        {tone === "info" ? "i" : "!"}
+      </span>
+      <span className="text-text-muted">
+        <strong style={{ color }}>{title}</strong> {children}
+      </span>
     </div>
   );
 }
@@ -211,6 +210,8 @@ export default async function Home() {
 
   const currentEventForPicks = bootstrap.events.find((e) => e.is_current);
   const picksEvent = currentEventForPicks?.id ?? Math.max(1, fromEvent - 1);
+  // (see lastPublishedEvent below — MyTeamPanel keeps its own client-side
+  // fetch and its own gameweek choice, unchanged.)
 
   const teamFactorsForDisplay = computeDynamicTeamFactors(bootstrap.teams, fixtures);
   const expectationsByTeamForDisplay = buildFixtureExpectations(
@@ -226,8 +227,24 @@ export default async function Home() {
     5
   );
   const sourceCounts = new Map<string, number>();
+  // Separated on purpose. A fixture with no usable data in the NEXT gameweek
+  // is a real problem — it is a match you are about to pick a team for. A
+  // fixture four gameweeks out with no data is normal and self-correcting:
+  // bookmakers only price matches a week or two ahead, and the results-based
+  // team ratings need results that have not happened yet. Counting both into
+  // one red alert made a routine early-season state look like a broken app,
+  // which is exactly the kind of false alarm that teaches you to ignore the
+  // real ones.
+  let neutralNextEvent = 0;
+  let neutralLater = 0;
   for (const rows of Object.values(ticker)) {
-    for (const r of rows) sourceCounts.set(r.source, (sourceCounts.get(r.source) ?? 0) + 1);
+    for (const r of rows) {
+      sourceCounts.set(r.source, (sourceCounts.get(r.source) ?? 0) + 1);
+      if (r.source === "neutral") {
+        if (r.event === fromEvent) neutralNextEvent++;
+        else neutralLater++;
+      }
+    }
   }
   const strengthsUsable = teamStrengthsUsable(bootstrap.teams);
   const oddsActive = oddsResult.status === "ok";
@@ -272,10 +289,32 @@ export default async function Home() {
   const myTeamIdNum = Number(DEFAULT_TEAM_ID);
 
   // ---- Camada 2: simulation against the real rivals ---------------------
-  const finishedEvents = bootstrap.events.filter((e) => e.finished);
-  const finishedEventIds = finishedEvents.map((e) => e.id);
-  const lastFinishedEvent =
-    finishedEventIds.length > 0 ? Math.max(...finishedEventIds) : 0;
+  // `finished` (bonus confirmed, stats final) is the right gate for the
+  // learning layers, which must never settle a gameweek on provisional
+  // points. It is the WRONG gate for reading squads — see lastPublishedEvent.
+  const finishedEventIds = bootstrap.events.filter((e) => e.finished).map((e) => e.id);
+
+  // The gameweek whose squads FPL is actually serving.
+  //
+  // This used to be `lastFinishedEvent`, which is a different and later
+  // thing: `finished` is only set once FPL has confirmed bonus points and
+  // final stats, days after the last whistle. Picks become public the moment
+  // a DEADLINE passes. Gating on `finished` therefore blacked out the whole
+  // transfer planner from every Friday evening until the following Tuesday —
+  // which is precisely the window in which a manager plans transfers.
+  //
+  // Using the deadline is also strictly better information: during a live
+  // gameweek it returns the squad including any transfers already made this
+  // week, which is the one thing the planner would otherwise be blind to.
+  // eslint-disable-next-line react-hooks/purity
+  const nowForPicks = Date.now();
+  const publishedEvents = bootstrap.events.filter(
+    (e) => new Date(e.deadline_time).getTime() <= nowForPicks
+  );
+  const lastPublishedEvent =
+    publishedEvents.length > 0
+      ? Math.max(...publishedEvents.map((e) => e.id))
+      : 0;
 
   let outlook: LeagueOutlook = {
     available: false,
@@ -288,15 +327,15 @@ export default async function Home() {
     rivals: [],
     posture: NEUTRAL_POSTURE,
   };
-  if (lastFinishedEvent >= 1 && leagueStandingsRaw) {
+  if (lastPublishedEvent >= 1 && leagueStandingsRaw) {
     const squads = await fetchRivalSquads(
       leagueStandingsRaw.standings.results,
-      lastFinishedEvent,
+      lastPublishedEvent,
       myTeamIdNum
     );
     outlook = simulateLeague(squads, scored, {
       currentEvent: fromEvent,
-      squadsFromEvent: lastFinishedEvent,
+      squadsFromEvent: lastPublishedEvent,
     });
   }
 
@@ -316,8 +355,8 @@ export default async function Home() {
   // In a running season the budget is the squad's own value plus the bank,
   // and the freedom to change it is one transfer a week.
   const squadState =
-    lastFinishedEvent >= 1
-      ? await loadSquadState(myTeamIdNum, bootstrap, lastFinishedEvent)
+    lastPublishedEvent >= 1
+      ? await loadSquadState(myTeamIdNum, bootstrap, lastPublishedEvent)
       : EMPTY_SQUAD_STATE;
   const budgetM = squadState.available ? squadState.totalBudgetM : 100;
 
@@ -341,7 +380,7 @@ export default async function Home() {
   });
 
   // ---- how the last/current gameweek actually went ---------------------
-  const reviewEvent = currentEventForPicks?.id ?? lastFinishedEvent;
+  const reviewEvent = lastPublishedEvent;
   const gwReview =
     reviewEvent >= 1
       ? await reviewGameweek(myTeamIdNum, reviewEvent, bootstrap)
@@ -406,105 +445,60 @@ export default async function Home() {
   const byPos = (id: number, n = 8) =>
     scored.filter((p) => p.element.element_type === id).slice(0, n);
 
+  // The one sentence the whole page exists to produce. Kept short enough to
+  // read at a glance; the full reasoning lives in the panel below it.
+  const decisionCaptain =
+    transferAdvice.recommended?.captain ?? captain;
+  const decisionHeadline = transferAdvice.recommended
+    ? transferAdvice.recommended.transfers === 0
+      ? "Não faças nenhuma transferência esta jornada."
+      : transferAdvice.recommended.moves
+          .map((m) => `${m.out.element.web_name} → ${m.in.element.web_name}`)
+          .join("  ·  ")
+    : "Ainda sem plantel teu publicado — este é o onze que o modelo escolheria hoje.";
+
   const isPreseason = scored[0]?.isPreseason ?? true;
   const bench = squad.filter((p) => !starters.includes(p));
   const xiExpected = starters.reduce((s, p) => s + p.expectedPointsNext, 0);
 
   return (
     <div className="min-h-full bg-bg text-text">
-      {/* ================= header ================= */}
-      <header className="sticky top-0 z-30 brand-bar">
-        <div className="mx-auto max-w-6xl px-4 pb-3 pt-4 md:px-6">
-          <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/55">
+      {/* ================= top bar =================
+          One compact row plus the navigation. The previous header was 370px
+          tall — a third of a laptop viewport — of which 150px was four
+          bordered tiles reporting internal model state. Nothing above the
+          fold answered a question anyone had. */}
+      <header className="sticky top-0 z-30 topbar">
+        <div className="mx-auto max-w-6xl px-4 md:px-6">
+          <div className="flex items-center justify-between gap-4 py-2.5">
+            <div className="flex min-w-0 items-baseline gap-2.5">
+              <span className="eyebrow hidden text-white/40 sm:inline">
                 FPL Command Center
-              </p>
-              <h1 className="font-display text-2xl font-extrabold tracking-tight md:text-3xl">
+              </span>
+              <h1 className="truncate font-display text-lg font-bold tracking-tight md:text-xl">
                 {nextEvent?.name ?? "Gameweek"}
               </h1>
             </div>
             {nextEvent?.deadline_time && (
-              <div className="text-right">
-                <p className="mb-0.5 text-[10px] font-bold uppercase tracking-[0.18em] text-white/55">
-                  Deadline em
-                </p>
+              <div className="flex shrink-0 items-center gap-3">
+                <div className="hidden text-right sm:block">
+                  <p className="eyebrow text-white/40">Deadline</p>
+                  <p className="font-mono text-[11px] leading-tight text-white/55">
+                    {new Date(nextEvent.deadline_time).toLocaleString("pt-PT", {
+                      timeZone: "Europe/Lisbon",
+                      day: "2-digit",
+                      month: "short",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </p>
+                </div>
                 <CountdownTimer deadlineIso={nextEvent.deadline_time} />
-                <p className="mt-0.5 font-mono text-[11px] tabular text-white/55">
-                  {new Date(nextEvent.deadline_time).toLocaleString("pt-PT", {
-                    timeZone: "Europe/Lisbon",
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                  })}
-                </p>
               </div>
             )}
           </div>
 
-          {/* Decision strip — the four numbers worth knowing before anything
-              else on the page. */}
-          <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
-            <StatTile
-              label="Postura"
-              value={posture.label}
-              hint={`β ${posture.beta.toFixed(2)} · ${posture.source}`}
-              tone={
-                posture.label === "atacar"
-                  ? "danger"
-                  : posture.label === "proteger"
-                    ? "warn"
-                    : "accent"
-              }
-            />
-            <StatTile
-              label="A fazer"
-              value={
-                transferAdvice.recommended
-                  ? transferAdvice.recommended.transfers === 0
-                    ? "Manter"
-                    : `${transferAdvice.recommended.transfers} transf.`
-                  : `${xiExpected.toFixed(1)} pts`
-              }
-              hint={
-                transferAdvice.recommended
-                  ? `${squadState.freeTransfers} livre${squadState.freeTransfers === 1 ? "" : "s"}` +
-                    (transferAdvice.recommended.hitCost > 0
-                      ? ` · −${transferAdvice.recommended.hitCost} de hit`
-                      : "") +
-                    (transferAdvice.recommended.netGainVsHold !== 0
-                      ? ` · ${transferAdvice.recommended.netGainVsHold >= 0 ? "+" : ""}${transferAdvice.recommended.netGainVsHold.toFixed(1)} pts`
-                      : "")
-                  : `±${squadRisk.stdDev.toFixed(1)} · £${totalCost.toFixed(1)}m`
-              }
-              tone="accent"
-            />
-            <StatTile
-              label="Capitão"
-              value={
-                transferAdvice.recommended?.captain?.element.web_name ??
-                captain?.element.web_name ??
-                "—"
-              }
-              hint={
-                captain
-                  ? `${captain.expectedPointsNext.toFixed(1)} pts · ${captain.ownershipPct.toFixed(0)}% posse`
-                  : undefined
-              }
-            />
-            <StatTile
-              label="Liga"
-              value={
-                effectiveOutlook.me ? `${effectiveOutlook.me.rank}º` : leagueName ? "—" : "—"
-              }
-              hint={
-                effectiveOutlook.available && effectiveOutlook.rivals[0]
-                  ? `${Math.round(effectiveOutlook.rivals[0].pAheadAtSeasonEnd * 100)}% de acabar à frente do 1º`
-                  : "sem jornadas jogadas"
-              }
-            />
-          </div>
-
-          <nav className="pill-scroller mt-3 -mx-1 px-1">
+          <nav className="pill-scroller -mx-1 px-1 pb-2">
             {NAV.map(([href, label]) => (
               <a key={href} href={`#${href}`} className="pill">
                 {label}
@@ -515,60 +509,122 @@ export default async function Home() {
         <div className="brand-rule" />
       </header>
 
-      <main className="mx-auto flex max-w-6xl flex-col gap-10 px-4 py-8 md:px-6">
-        {/* ================= alerts ================= */}
-        {(oddsProblem ||
-          !storageConfigured ||
-          sourceCounts.get("neutral") ||
-          isPreseason) && (
-          <div className="flex flex-col gap-3">
-            {oddsProblem && (
-              <Alert tone="danger" title="As odds de mercado não estão a ser usadas.">
-                {oddsProblem} As odds são a fonte mais forte que esta app tem para
-                avaliar dificuldade de calendário — bastante melhor do que os
-                ratings da própria FPL, que são grosseiros e por vezes vêm a zero.
-                Sem elas, a Equipa Sugerida apoia-se numa leitura de calendário
-                muito mais fraca. Ver &quot;Deploy&quot; no README.
-              </Alert>
-            )}
-            {!storageConfigured && (
-              <Alert tone="danger" title="O armazenamento persistente não está ligado.">
-                Sem a integração Upstash Redis, quatro coisas não funcionam e
-                nenhuma delas o diria por si: a Shadow Team fica guardada só neste
-                browser, o painel de precisão não regista nada, a investigação
-                semanal faz a pesquisa toda e falha na gravação, e a{" "}
-                <strong>Camada 3 não consegue aprender</strong> — não há
-                &quot;antes&quot; guardado para comparar com o resultado real.
-              </Alert>
-            )}
-            {sourceCounts.get("neutral") ? (
-              <Alert tone="danger" title="O modelo de calendário está sem dados.">
-                {sourceCounts.get("neutral")} jogos das próximas jornadas não têm
-                odds, nem resultados desta época, nem ratings utilizáveis da FPL —
-                estão a ser tratados como jogos entre equipas médias e não devem
-                ser usados para decidir.
-              </Alert>
-            ) : null}
-            {isPreseason && (
-              <Alert tone="warn" title="Época ainda não começou (ou está entre jornadas).">
-                Os dados de forma ainda não existem, por isso as pontuações
-                apoiam-se na estimativa da própria FPL e no calendário. Assim que
-                houver jogos concluídos, o motor passa a usar o seu próprio modelo
-                de pontos esperados — e as Camadas 2 e 3 arrancam automaticamente.
-              </Alert>
-            )}
-          </div>
-        )}
-
+      <main className="mx-auto flex max-w-6xl flex-col gap-8 px-4 py-6 md:px-6">
         {/* ================= 1. o que fazer ================= */}
         <Section
           id="fazer"
-          eyebrow="A decisão · dentro das regras que tens"
+          eyebrow="A decisão"
           title="O Que Fazer Antes do Deadline"
-          intro="Parte da equipa que já tens, do dinheiro que tens e das transferências que tens. O plantel ideal continua mais abaixo como referência — mas isto é o que dá para fazer esta semana."
+          primary
         >
-          <TransferPlanPanel advice={transferAdvice} state={squadState} />
+          {/* The headline answer, then the handful of facts that qualify it —
+              as inline pairs, not as bordered tiles. */}
+          <div className="mb-4 border-b border-border pb-4">
+            <p className="font-display text-lg font-bold leading-snug tracking-tight sm:text-xl md:text-2xl">
+              {decisionHeadline}
+            </p>
+            <div className="mt-2.5 flex flex-wrap items-baseline gap-x-5 gap-y-2">
+              <Fact
+                label="Capitão"
+                value={decisionCaptain?.element.web_name ?? "—"}
+                tone="accent"
+              />
+              {squadState.available ? (
+                <>
+                  <Fact
+                    label="Livres"
+                    value={String(squadState.freeTransfers)}
+                  />
+                  <Fact
+                    label="Orçamento"
+                    value={`£${squadState.totalBudgetM.toFixed(1)}m`}
+                  />
+                  {transferAdvice.recommended &&
+                    transferAdvice.recommended.netGainVsHold !== 0 && (
+                      <Fact
+                        label="Ganho"
+                        value={`${transferAdvice.recommended.netGainVsHold >= 0 ? "+" : ""}${transferAdvice.recommended.netGainVsHold.toFixed(1)} pts`}
+                        tone={
+                          transferAdvice.recommended.netGainVsHold >= 0
+                            ? "accent"
+                            : "danger"
+                        }
+                      />
+                    )}
+                </>
+              ) : (
+                <Fact label="Onze ideal" value={`${xiExpected.toFixed(1)} pts`} />
+              )}
+              {posture.beta !== 0 && (
+                <Fact
+                  label="Postura"
+                  value={posture.label}
+                  tone={posture.label === "atacar" ? "danger" : "warn"}
+                />
+              )}
+              {effectiveOutlook.me && (
+                <Fact label="Liga" value={`${effectiveOutlook.me.rank}º`} />
+              )}
+            </div>
+          </div>
+
+          <TransferPlanPanel
+            advice={transferAdvice}
+            state={squadState}
+            fallback={
+              <PitchView
+                starters={starters}
+                bench={bench}
+                captainId={captain?.element.id}
+                viceCaptainId={viceCaptain?.element.id}
+              />
+            }
+          />
         </Section>
+
+        {/* ================= alerts =================
+            Below the decision, not above it. A missing odds feed is worth
+            knowing; it is not worth putting between a manager and the reason
+            he opened the page. */}
+        {(oddsProblem ||
+          !storageConfigured ||
+          neutralNextEvent > 0 ||
+          neutralLater > 0 ||
+          isPreseason) && (
+          <div className="-mt-4 flex flex-col gap-1.5">
+            {oddsProblem && (
+              <AlertStrip tone="danger" title="Sem odds de mercado.">
+                {oddsProblem} É a fonte mais forte para avaliar calendário — sem
+                ela o modelo apoia-se numa leitura bastante mais fraca.
+              </AlertStrip>
+            )}
+            {!storageConfigured && (
+              <AlertStrip tone="danger" title="Armazenamento não ligado.">
+                Sem Upstash Redis nada é guardado: a Shadow Team, o painel de
+                precisão, a investigação semanal e a Camada 3 ficam todos inertes.
+              </AlertStrip>
+            )}
+            {neutralNextEvent > 0 ? (
+              <AlertStrip tone="danger" title={`Jornada ${fromEvent} sem dados de calendário.`}>
+                {neutralNextEvent} jogo{neutralNextEvent === 1 ? "" : "s"} sem
+                odds nem resultados — tratados como equipas médias. É a jornada
+                para a qual estás a escolher equipa.
+              </AlertStrip>
+            ) : null}
+            {neutralLater > 0 && neutralNextEvent === 0 ? (
+              <AlertStrip tone="info" title="Jornadas distantes ainda sem odds.">
+                Normal: as casas de apostas só abrem mercados uma a duas semanas
+                antes. A próxima jornada está coberta.
+              </AlertStrip>
+            ) : null}
+            {isPreseason && (
+              <AlertStrip tone="warn" title="Sem dados de forma ainda.">
+                As pontuações apoiam-se na estimativa da FPL e no calendário até
+                haver jogos concluídos.
+              </AlertStrip>
+            )}
+          </div>
+        )}
 
         {/* ================= 2. revisão da jornada ================= */}
         <Section

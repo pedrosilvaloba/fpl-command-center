@@ -80,6 +80,69 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.27 — redesenho
+
+O feedback foi que a interface ocupava muito espaço com pouco conteúdo, que
+as quatro caixas de estatísticas no topo não pareciam relevantes, e que a
+tipografia podia ser mais moderna. Todas as três críticas estavam certas, e
+duas delas apontavam para o mesmo problema de fundo.
+
+**O topo comia um terço do ecrã sem responder a nada.** O cabeçalho tinha
+370px de altura — dos quais 150px eram quatro caixas com bordas a reportar
+estado interno do modelo (um coeficiente de variância a 0.00, um desvio-padrão,
+uma etiqueta "predefinição"). A seguir vinha um alerta a ocupar a largura toda
+e um título de secção com mais 150px. Num portátil, mais de metade do primeiro
+ecrã passava sem uma única informação acionável.
+
+- A barra de topo passou a **uma linha** (~90px com a navegação): jornada à
+  esquerda, relógio do deadline à direita. O relógio é o único número
+  relevante em todas as visitas, por isso ganhou tipo de display e a cor da
+  marca, e fica vermelho nas últimas 24 horas.
+- As quatro caixas desapareceram. No lugar delas há **um cartão de decisão**
+  logo no início do conteúdo, que diz a jogada em texto grande e a qualifica
+  com pares `etiqueta: valor` em linha — sem bordas, sem grelha.
+- Os alertas passaram a **tiras de uma linha** com uma barra de cor lateral, e
+  mudaram-se para **depois** da decisão. Um aviso de "dois jogos ainda sem
+  odds" tinha o mesmo peso visual que o plantel; é assim que se ensina alguém
+  a ignorar avisos.
+- Quando ainda não há plantel publicado, a secção principal deixou de mostrar
+  um pedido de desculpas e passa a **desenhar o onze** que o modelo escolheria.
+
+**Tipografia.** Space Grotesk para display, Inter para texto, DM Mono para
+números. O conjunto anterior (Archivo + Barlow + JetBrains Mono) era competente
+e completamente anónimo, e o JetBrains Mono é uma fonte de *código* — usá-la em
+todos os preços e pontuações fazia a app parecer uma ferramenta de programador
+em vez de um produto de desporto.
+
+**Cor.** O corpo da página deixou de ser tingido de roxo. Um cabeçalho roxo
+sobre um fundo roxo-acinzentado lê-se como uma só mancha e a cor da marca deixa
+de significar seja o que for. Com o fundo neutro, o roxo e o verde voltam a
+registar-se.
+
+**Densidade.** Títulos de secção um degrau mais pequenos, cartões mais
+compactos, o relvado limitado a 620px e centrado (um 3-4-3 esticado por 1200px
+lê-se como um campo vazio com um ajuntamento no meio), e a duplicação removida —
+a jogada recomendada aparecia três vezes no mesmo ecrã.
+
+## Novo na v1.26.1
+
+Duas correções encontradas ao verificar a app em produção:
+
+- **A janela cega do planeador.** O estado do plantel estava condicionado a
+  `finished` — a marca que a FPL só põe depois de confirmar bónus e estatísticas
+  finais, dias depois do último apito. Mas os plantéis passam a ser públicos
+  assim que um **deadline** passa. O resultado é que o planeador de
+  transferências ficava às escuras de sexta à noite até terça — exatamente a
+  janela em que se planeiam transferências. Passou a usar o deadline, o que
+  além de corrigir a janela dá informação melhor: durante uma jornada a decorrer
+  devolve o plantel já com as transferências feitas esta semana.
+- **O alarme falso do calendário.** O aviso vermelho "modelo de calendário sem
+  dados" contava todos os jogos das 5 jornadas seguintes. No início da época
+  isso dispara sempre, porque as casas de apostas só abrem mercados uma ou duas
+  semanas antes. Agora só é vermelho se a falha for na **próxima** jornada — a
+  que interessa para escolher equipa; as jornadas mais distantes ficam numa nota
+  informativa que explica que se preenche sozinha.
+
 ## Novo na v1.26
 
 ### 1. A app deixou de sugerir equipas impossíveis

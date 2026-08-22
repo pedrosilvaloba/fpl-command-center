@@ -1,28 +1,32 @@
 import type { Metadata, Viewport } from "next";
-import { Archivo, Barlow, JetBrains_Mono } from "next/font/google";
+import { Space_Grotesk, Inter, DM_Mono } from "next/font/google";
 import "./globals.css";
 
-// Archivo and Barlow are the closest freely-licensed stand-ins for the
-// Premier League's own PremierSans: a tight, slightly condensed grotesque
-// for headings and a humanist workhorse for body copy. Oswald (used until
-// v1.24) is far more condensed than anything the PL actually uses, and read
-// as a newspaper masthead rather than a scoreboard.
-const display = Archivo({
+// Space Grotesk for display, Inter for text, DM Mono for figures.
+//
+// The previous set (Archivo + Barlow + JetBrains Mono) was competent and
+// completely anonymous — it could have been any dashboard. JetBrains Mono in
+// particular is a CODE face, and using it for every price and points total
+// made the app read as a developer tool rather than a sports product. Space
+// Grotesk has an actual voice at display sizes, Inter is the most legible UI
+// text face available, and DM Mono keeps figures aligned in tables without
+// the terminal connotation.
+const display = Space_Grotesk({
   variable: "--font-display",
   subsets: ["latin"],
-  weight: ["600", "700", "800"],
+  weight: ["500", "600", "700"],
 });
 
-const body = Barlow({
+const body = Inter({
   variable: "--font-body",
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
 });
 
-const mono = JetBrains_Mono({
+const mono = DM_Mono({
   variable: "--font-mono",
   subsets: ["latin"],
-  weight: ["400", "500", "600"],
+  weight: ["400", "500"],
 });
 
 export const metadata: Metadata = {

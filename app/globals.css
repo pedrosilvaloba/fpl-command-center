@@ -1,82 +1,85 @@
 @import "tailwindcss";
 
 /* ==========================================================================
-   FPL Command Center — design tokens
+   FPL Command Center — design system
    ==========================================================================
-   The palette is the Premier League's own, not an invented one:
+   PALETTE. The Premier League's own, used sparingly rather than everywhere:
 
-     Purple  #37003C   the PL/FPL primary. Headers, chrome, dark surfaces.
-     Green   #00FF87   the FPL accent. Positive numbers, captaincy, CTAs.
-     Cyan    #04F5FF   the secondary accent. Differentials, "special" states.
+     Purple  #37003C   the PL primary. The top bar and accents ONLY.
+     Green   #00FF87   the FPL accent. Positive numbers, the deadline clock.
+     Cyan    #04F5FF   secondary accent. Differentials, "special" states.
      Pink    #E90052   the PL alert colour. Danger, injuries, falling prices.
 
-   Two practical constraints shape how they are used:
+   The v1.25-26 build tinted the whole page purple, which flattened it: a
+   purple header on a purple-grey body reads as one undifferentiated slab and
+   the brand colour stops meaning anything. The body is now neutral, so the
+   purple bar and the green accents actually register.
 
-   1. #00FF87 and #04F5FF are electric. They are legible as TEXT only on a
-      dark ground, and as BACKGROUND only with dark text on top. So each has
-      two tokens: the vivid brand value for surfaces/chips, and a darkened
-      variant that passes contrast as text on white. Never use the vivid one
-      for body text in light mode.
+   TYPOGRAPHY. Space Grotesk for display, Inter for text, DM Mono for
+   figures. The previous pairing (Archivo + Barlow + JetBrains Mono) was
+   competent and anonymous, and JetBrains Mono in particular made every
+   number look like a code listing rather than a scoreboard.
 
-   2. The page must work in both themes without either looking like an
-      afterthought. Light mode is a white-card layout on a faintly
-      purple-tinted grey; dark mode is the same layout on deep aubergine.
-      Every colour is defined on bare :root first, then overridden — so no
-      token exists only inside a media query.
+   DENSITY. The single biggest usability defect in the previous build was
+   vertical waste: a 370px header, then a full-width alert, then a 150px
+   section heading — over half the viewport before one useful pixel. The bar
+   below is ~96px, alerts are single-line strips, and headings are one step
+   smaller throughout.
    ========================================================================== */
 
 :root {
   /* Brand constants — identical in both themes. They ARE the brand. */
   --brand: #37003c;
-  --brand-2: #22002a;
+  --brand-2: #25002b;
+  --brand-3: #4a0a52;
   --brand-green: #00ff87;
   --brand-cyan: #04f5ff;
   --brand-pink: #e90052;
 
-  /* Light theme */
-  --bg: #f3f0f5;
+  /* Light theme — neutral, so the brand colour has somewhere to land. */
+  --bg: #fafafa;
   --surface: #ffffff;
-  --surface-2: #f7f4f9;
-  --surface-3: #efe9f2;
-  --border: #e3dae8;
-  --border-strong: #cfc0d6;
-  --text: #1f0026;
-  --text-muted: #6a5872;
+  --surface-2: #f5f5f7;
+  --surface-3: #ececf0;
+  --border: #e5e5ea;
+  --border-strong: #c8c8d0;
+  --text: #14101a;
+  --text-muted: #6c6676;
   --text-on-brand: #ffffff;
 
-  --accent: #00875a; /* readable green for text on light surfaces */
-  --accent-vivid: #00ff87; /* brand green, for chips/fills only */
+  --accent: #00784f; /* readable green for text on light surfaces */
+  --accent-vivid: #00ff87; /* brand green, for fills only */
   --accent-contrast: #14002a; /* text placed ON accent-vivid */
-  --cyan: #067a8c;
+  --cyan: #06697a;
   --cyan-vivid: #04f5ff;
-  --gold: #9a6b00;
-  --danger: #c8004a;
-  --warn: #a35d00;
-  --success: #00875a;
+  --gold: #8a5d00;
+  --danger: #c4004a;
+  --warn: #955200;
+  --success: #00784f;
 
   /* Pitch (see components/PitchView.tsx) */
   --pitch-1: #0b6b3a;
   --pitch-2: #0f8547;
   --pitch-line: rgba(255, 255, 255, 0.32);
 
-  --font-display: "Archivo", "Oswald", "Arial Narrow", sans-serif;
-  --font-body: "Barlow", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, "SFMono-Regular", monospace;
 
-  --shadow-card: 0 1px 2px rgba(31, 0, 38, 0.06), 0 4px 16px rgba(31, 0, 38, 0.05);
+  --shadow-card: 0 1px 1px rgba(20, 16, 26, 0.04), 0 2px 8px rgba(20, 16, 26, 0.04);
+  --shadow-raised: 0 2px 4px rgba(20, 16, 26, 0.06), 0 12px 32px rgba(20, 16, 26, 0.07);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #150019;
-    --surface: #230a2a;
-    --surface-2: #2c0f34;
-    --surface-3: #371542;
-    --border: #3d1c47;
-    --border-strong: #552b62;
-    --text: #f7f0f9;
-    --text-muted: #b79fc1;
-    --text-on-brand: #ffffff;
+    --bg: #0d0a10;
+    --surface: #16121b;
+    --surface-2: #1d1824;
+    --surface-3: #262030;
+    --border: #2b2534;
+    --border-strong: #453d52;
+    --text: #f6f3f8;
+    --text-muted: #a69eb0;
 
     --accent: #00ff87;
     --accent-vivid: #00ff87;
@@ -84,28 +87,28 @@
     --cyan: #04f5ff;
     --cyan-vivid: #04f5ff;
     --gold: #f0b429;
-    --danger: #ff4d84;
+    --danger: #ff5087;
     --warn: #ffb454;
     --success: #00ff87;
 
     --pitch-1: #08512c;
     --pitch-2: #0b6b3a;
-    --pitch-line: rgba(255, 255, 255, 0.24);
+    --pitch-line: rgba(255, 255, 255, 0.22);
 
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.28);
+    --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.3);
+    --shadow-raised: 0 2px 4px rgba(0, 0, 0, 0.5), 0 12px 32px rgba(0, 0, 0, 0.4);
   }
 }
 
 :root[data-theme="dark"] {
-  --bg: #150019;
-  --surface: #230a2a;
-  --surface-2: #2c0f34;
-  --surface-3: #371542;
-  --border: #3d1c47;
-  --border-strong: #552b62;
-  --text: #f7f0f9;
-  --text-muted: #b79fc1;
-  --text-on-brand: #ffffff;
+  --bg: #0d0a10;
+  --surface: #16121b;
+  --surface-2: #1d1824;
+  --surface-3: #262030;
+  --border: #2b2534;
+  --border-strong: #453d52;
+  --text: #f6f3f8;
+  --text-muted: #a69eb0;
 
   --accent: #00ff87;
   --accent-vivid: #00ff87;
@@ -113,15 +116,16 @@
   --cyan: #04f5ff;
   --cyan-vivid: #04f5ff;
   --gold: #f0b429;
-  --danger: #ff4d84;
+  --danger: #ff5087;
   --warn: #ffb454;
   --success: #00ff87;
 
   --pitch-1: #08512c;
   --pitch-2: #0b6b3a;
-  --pitch-line: rgba(255, 255, 255, 0.24);
+  --pitch-line: rgba(255, 255, 255, 0.22);
 
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.28);
+  --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-raised: 0 2px 4px rgba(0, 0, 0, 0.5), 0 12px 32px rgba(0, 0, 0, 0.4);
 }
 
 @theme inline {
@@ -152,7 +156,6 @@
 
 html {
   color-scheme: light dark;
-  /* Anchor links land under the sticky header rather than behind it. */
   scroll-behavior: smooth;
 }
 
@@ -160,23 +163,33 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-body);
-  /* iOS Safari: stop the page from bouncing horizontally when a table
-     inside a scroll container is dragged. */
+  font-feature-settings: "cv05" 1, "ss01" 1;
   overflow-x: hidden;
 }
 
 .font-display {
   font-family: var(--font-display);
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
 }
 
 .font-mono {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+/* Section eyebrows, tile labels, chips. One class instead of repeating the
+   same four utilities in thirty places. */
+.eyebrow {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  line-height: 1.2;
 }
 
 ::selection {
@@ -184,16 +197,19 @@ body {
   color: var(--accent-contrast);
 }
 
-/* --- Brand chrome --------------------------------------------------- */
+/* --- top bar -------------------------------------------------------- */
 
-.brand-bar {
-  background: linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%);
+.topbar {
+  background:
+    radial-gradient(120% 180% at 88% -40%, rgba(0, 255, 135, 0.16) 0%, transparent 55%),
+    linear-gradient(105deg, var(--brand-2) 0%, var(--brand) 45%, var(--brand-3) 100%);
   color: var(--text-on-brand);
 }
 
-/* The three-stripe rule under the header — the PL's own device. */
+/* The three-stripe rule — the PL's own device, at 2px so it reads as a
+   detail rather than a border. */
 .brand-rule {
-  height: 3px;
+  height: 2px;
   background: linear-gradient(
     90deg,
     var(--brand-green) 0%,
@@ -205,18 +221,40 @@ body {
   );
 }
 
+/* --- surfaces -------------------------------------------------------- */
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 12px;
   box-shadow: var(--shadow-card);
 }
 
-/* Horizontal pill navigation. Scrolls on narrow screens instead of
-   wrapping into a five-line block of links. */
+/* The one section that carries the decision. Everything else on the page is
+   reference material; this is the answer, and it should not look like a
+   sibling of the rules cheat-sheet. */
+.card-primary {
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 14px;
+  box-shadow: var(--shadow-raised);
+  position: relative;
+  overflow: hidden;
+}
+
+.card-primary::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--brand-green), var(--brand-cyan));
+}
+
+/* --- navigation ------------------------------------------------------ */
+
 .pill-scroller {
   display: flex;
-  gap: 0.4rem;
+  gap: 0.3rem;
   overflow-x: auto;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
@@ -230,14 +268,12 @@ body {
 .pill {
   flex: 0 0 auto;
   scroll-snap-align: start;
-  padding: 0.4rem 0.8rem;
-  border-radius: 999px;
-  font-size: 0.8125rem;
-  font-weight: 600;
+  padding: 0.3rem 0.7rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
   white-space: nowrap;
-  color: rgba(255, 255, 255, 0.72);
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.68);
   transition: background 120ms ease, color 120ms ease;
 }
 
@@ -245,11 +281,27 @@ body {
 .pill:focus-visible {
   color: var(--brand);
   background: var(--brand-green);
-  border-color: var(--brand-green);
 }
 
-/* Any wide block (table, ticker) scrolls inside itself. The page body
-   never scrolls sideways. */
+/* --- alerts ----------------------------------------------------------- */
+
+/* One line, a coloured spine, no box. The previous full-width tinted
+   paragraph gave a missing odds feed the same visual weight as the squad
+   itself, which is how you teach someone to ignore warnings. */
+.alert-strip {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--tone, var(--border-strong));
+  background: color-mix(in srgb, var(--tone, var(--border-strong)) 7%, var(--surface));
+  border-radius: 0 8px 8px 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+/* --- misc -------------------------------------------------------------- */
+
 .scroll-x {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;

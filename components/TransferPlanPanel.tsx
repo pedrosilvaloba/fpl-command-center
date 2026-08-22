@@ -156,34 +156,28 @@ function PlanCard({
   );
 }
 
-function Fact({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <div className="rounded-lg border border-border bg-surface-2 px-3 py-2">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-muted">
-        {label}
-      </p>
-      <p className="mt-0.5 font-display text-lg font-bold tracking-tight">{value}</p>
-      {hint && <p className="mt-0.5 text-[11px] leading-snug text-text-muted">{hint}</p>}
-    </div>
-  );
-}
-
 export default function TransferPlanPanel({
   advice,
   state,
+  fallback,
 }: {
   advice: TransferAdvice;
   state: SquadState;
+  /** What to show when there is no real squad to plan from. Showing the
+   * eleven the model would pick is far more useful than an apology, and it
+   * keeps the most valuable thing on the page above the fold instead of
+   * burying it under a paragraph explaining what is missing. */
+  fallback?: React.ReactNode;
 }) {
   if (!advice.available || !advice.recommended) {
     return (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-text-muted">{advice.reason}</p>
-        <p className="text-xs leading-relaxed text-text-muted">
-          Enquanto não houver plantel real, a app mostra o plantel ideal para o
-          orçamento inicial — útil como referência, mas não é um plano: numa
-          época a decorrer partes sempre da equipa que já tens, com o número
-          de transferências que tens.
+      <div className="flex flex-col gap-4">
+        {fallback}
+        <p className="rounded-lg border border-border bg-surface-2 p-3 text-xs leading-relaxed text-text-muted">
+          <strong className="text-text">Porque não há plano de transferências:</strong>{" "}
+          {advice.reason} Assim que houver, esta secção passa a dizer
+          exatamente que trocas fazer, quantos pontos valem e se compensa
+          pagar um hit.
         </p>
       </div>
     );
@@ -193,40 +187,31 @@ export default function TransferPlanPanel({
 
   return (
     <div className="flex flex-col gap-5">
-      {/* --- the instruction ---------------------------------------------- */}
-      <div className="rounded-xl border border-[color-mix(in_srgb,var(--accent)_50%,var(--border))] bg-[color-mix(in_srgb,var(--accent)_10%,var(--surface))] p-4">
-        <p className="mb-1 text-[11px] font-bold uppercase tracking-[0.16em] text-accent">
-          Curto prazo · esta jornada
-        </p>
-        <p className="text-base font-semibold leading-relaxed">{advice.shortTerm}</p>
-      </div>
-
-      {/* --- squad facts --------------------------------------------------- */}
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-        <Fact
-          label="Transferências livres"
-          value={String(state.freeTransfers)}
-          hint={`Máx. 5 acumuláveis`}
-        />
-        <Fact
-          label="Valor + saldo"
-          value={`£${state.totalBudgetM.toFixed(1)}m`}
-          hint={`£${state.squadValueM.toFixed(1)}m equipa · £${state.bankM.toFixed(1)}m banco`}
-        />
-        <Fact
-          label="Plantel lido de"
-          value={state.fromEvent ? `GW${state.fromEvent}` : "—"}
-          hint="A FPL só publica depois do fecho"
-        />
-        <Fact
-          label="Chips por usar"
-          value={chipsLeft.length > 0 ? String(chipsLeft.reduce((s, c) => s + c.remaining, 0)) : "0"}
-          hint={
-            chipsLeft.length > 0
-              ? chipsLeft.map((c) => `${c.label}${c.remaining > 1 ? `×${c.remaining}` : ""}`).join(", ")
-              : "Todos gastos"
-          }
-        />
+      {/* --- squad facts ----------------------------------------------------
+          One inline row, not four bordered tiles. Two of those tiles repeated
+          numbers the decision card above already states, and the other two are
+          context rather than headlines. */}
+      <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1.5 text-[13px] text-text-muted">
+        <span>
+          Plantel lido da{" "}
+          <strong className="text-text">
+            {state.fromEvent ? `jornada ${state.fromEvent}` : "—"}
+          </strong>
+        </span>
+        <span>
+          Saldo <strong className="text-text">£{state.bankM.toFixed(1)}m</strong> em £
+          {state.squadValueM.toFixed(1)}m de equipa
+        </span>
+        <span>
+          Chips por usar:{" "}
+          <strong className="text-text">
+            {chipsLeft.length > 0
+              ? chipsLeft
+                  .map((c) => `${c.label}${c.remaining > 1 ? ` \u00d7${c.remaining}` : ""}`)
+                  .join(", ")
+              : "nenhum"}
+          </strong>
+        </span>
       </div>
 
       {/* --- the options --------------------------------------------------- */}

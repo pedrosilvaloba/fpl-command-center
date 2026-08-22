@@ -64,10 +64,13 @@ function PlayerChip({
         isKeeper={player.element.element_type === 1}
         size={34}
       />
-      <span className="w-full truncate rounded bg-white/95 px-1 text-center text-[10px] font-semibold leading-tight text-[#1f0026] sm:text-[11px]">
+      <span className="w-full truncate rounded-[3px] bg-white px-1 py-px text-center text-[11px] font-semibold leading-tight text-[#14101a]">
         {player.element.web_name}
       </span>
-      <span className="w-full truncate rounded bg-[color-mix(in_srgb,#1f0026_78%,transparent)] px-1 text-center font-mono text-[10px] leading-tight text-[var(--brand-green)]">
+      {/* Near-opaque backing, not a wash. At 78% opacity over a mid-green
+          pitch the brand green came out muddy and the number — the whole
+          point of the chip — was the least legible thing on it. */}
+      <span className="w-full truncate rounded-[3px] bg-[#12071a]/92 px-1 py-px text-center font-mono text-[11px] font-medium leading-tight text-[var(--brand-green)]">
         {value}
       </span>
     </div>
@@ -97,12 +100,16 @@ export default function PitchView({
     p.element.id === captainId ? "C" : p.element.id === viceCaptainId ? "V" : null;
 
   return (
-    <div className="flex flex-col gap-3">
+    // Constrained and centred rather than stretched. A 3-4-3 spread across a
+    // 1200px card reads as an empty field with a huddle in the middle; at
+    // roughly 600px it reads as a pitch, which is the whole point of drawing
+    // one instead of listing names.
+    <div className="mx-auto flex w-full max-w-[620px] flex-col gap-3">
       <div
-        className="relative overflow-hidden rounded-xl px-2 py-4 sm:px-4 sm:py-6"
+        className="relative overflow-hidden rounded-xl px-2 py-3 sm:px-4 sm:py-4"
         style={{
           background:
-            "repeating-linear-gradient(to bottom, var(--pitch-1) 0 34px, var(--pitch-2) 34px 68px)",
+            "repeating-linear-gradient(to bottom, var(--pitch-1) 0 30px, var(--pitch-2) 30px 60px)",
         }}
       >
         {/* Pitch markings — decorative only, hidden from assistive tech. */}
@@ -125,11 +132,11 @@ export default function PitchView({
           />
         </div>
 
-        <div className="relative flex flex-col gap-4 sm:gap-6">
+        <div className="relative flex flex-col gap-3 sm:gap-4">
           {rows.map((row) => (
             <div
               key={row.type}
-              className="flex flex-wrap items-start justify-center gap-x-2 gap-y-3 sm:gap-x-4"
+              className="flex flex-wrap items-start justify-center gap-x-2 gap-y-2.5 sm:gap-x-4"
             >
               {row.players.map((p) => (
                 <PlayerChip
@@ -145,11 +152,11 @@ export default function PitchView({
       </div>
 
       {bench.length > 0 && (
-        <div className="rounded-xl border border-border bg-surface-2 px-2 py-3 sm:px-4">
-          <p className="mb-2 text-center text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
+        <div className="rounded-xl border border-border bg-surface-2 px-2 py-2.5 sm:px-4">
+          <p className="mb-2 text-center eyebrow text-text-muted">
             Banco
           </p>
-          <div className="flex flex-wrap items-start justify-center gap-x-2 gap-y-3 sm:gap-x-4">
+          <div className="flex flex-wrap items-start justify-center gap-x-2 gap-y-2.5 sm:gap-x-4">
             {bench.map((p) => (
               <PlayerChip key={p.element.id} player={p} metric={metric} />
             ))}
