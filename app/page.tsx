@@ -36,6 +36,9 @@ import {
   getLearningState,
   applyCalibration,
 } from "@/lib/strategylearning";
+import { loadSquadState, EMPTY_SQUAD_STATE } from "@/lib/squadstate";
+import { planTransfers } from "@/lib/transferplan";
+import { snapshotPredictions, reviewGameweek } from "@/lib/gwreview";
 import { PLAYBOOK, RULES_2026_27 } from "@/lib/strategy";
 import { DEFAULT_TEAM_ID, DEFAULT_LEAGUE_ID } from "@/lib/constants";
 import CountdownTimer from "@/components/CountdownTimer";
@@ -46,6 +49,8 @@ import MyTeamPanel from "@/components/MyTeamPanel";
 import ShadowTeamPanel from "@/components/ShadowTeamPanel";
 import LeagueSimPanel from "@/components/LeagueSimPanel";
 import StrategyPanel from "@/components/StrategyPanel";
+import TransferPlanPanel from "@/components/TransferPlanPanel";
+import GameweekReviewPanel from "@/components/GameweekReviewPanel";
 
 // Rendered per-request (not at build time): this sandbox's build
 // environment has no route to the FPL API to prerender against, and in
@@ -64,9 +69,10 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const NAV: [string, string][] = [
-  ["decisao", "A Decisão"],
+  ["fazer", "O Que Fazer"],
+  ["revisao", "Revisão"],
   ["liga", "A Liga"],
-  ["minha-equipa", "A Minha Equipa"],
+  ["ideal", "Plantel Ideal"],
   ["shadow", "Shadow Team"],
   ["calendario", "Calendário"],
   ["escolhas", "Escolhas"],
@@ -305,9 +311,19 @@ export default async function Home() {
   );
   const effectiveOutlook: LeagueOutlook = { ...outlook, posture };
 
+  // ---- the real team, not a hypothetical one ---------------------------
+  // Every recommendation before v1.26 was built for a £100.0m blank slate.
+  // In a running season the budget is the squad's own value plus the bank,
+  // and the freedom to change it is one transfer a week.
+  const squadState =
+    lastFinishedEvent >= 1
+      ? await loadSquadState(myTeamIdNum, bootstrap, lastFinishedEvent)
+      : EMPTY_SQUAD_STATE;
+  const budgetM = squadState.available ? squadState.totalBudgetM : 100;
+
   const { squad, starters, totalCost, method: squadMethod } = buildOptimalSquad(
     scored,
-    100,
+    budgetM,
     posture.beta
   );
   const { captain, viceCaptain } = pickCaptain(starters, posture.beta);
@@ -316,6 +332,37 @@ export default async function Home() {
   const differentials = findDifferentials(scored, 10, 8);
   const { risers, fallers } = buildPriceWatch(bootstrap, 8);
   const newsWatch = buildNewsWatch(bootstrap, 15);
+
+  // ---- what to actually do before the deadline -------------------------
+  const transferAdvice = planTransfers(scored, squadState, {
+    beta: posture.beta,
+    likelyRisers: risers.map((r) => r.element.id),
+    likelyFallers: fallers.map((r) => r.element.id),
+  });
+
+  // ---- how the last/current gameweek actually went ---------------------
+  const reviewEvent = currentEventForPicks?.id ?? lastFinishedEvent;
+  const gwReview =
+    reviewEvent >= 1
+      ? await reviewGameweek(myTeamIdNum, reviewEvent, bootstrap)
+      : {
+          available: false,
+          reason:
+            "A época ainda não começou — não há jornada para rever. Esta secção preenche-se sozinha depois da primeira bola rolar.",
+          event: null,
+          finished: false,
+          hadStoredPredictions: false,
+          predictedTotal: 0,
+          actualTotal: 0,
+          delta: 0,
+          averageScore: null,
+          players: [],
+          benchPoints: 0,
+          transfersMade: 0,
+          transferCost: 0,
+          captain: null,
+          verdict: "",
+        };
 
   // ---- tracking (all optional, all no-ops without Redis) ----------------
   // eslint-disable-next-line react-hooks/purity
@@ -326,6 +373,10 @@ export default async function Home() {
   await Promise.all([
     upcomingEvent ? snapshotIfMissing(rawScored, upcomingEvent.id) : Promise.resolve(),
     upcomingEvent ? snapshotStrategies(rawScored, upcomingEvent.id) : Promise.resolve(),
+    // Per-player predictions for the gameweek review. Written BEFORE the
+    // deadline because reconstructing them afterwards is not a test the
+    // model could ever fail.
+    upcomingEvent ? snapshotPredictions(rawScored, upcomingEvent.id) : Promise.resolve(),
     recordOutcomesForFinishedEvents(finishedEventIds),
     settleStrategies(finishedEventIds),
   ]);
@@ -406,14 +457,34 @@ export default async function Home() {
               }
             />
             <StatTile
-              label="Onze sugerido"
-              value={`${xiExpected.toFixed(1)} pts`}
-              hint={`±${squadRisk.stdDev.toFixed(1)} · £${totalCost.toFixed(1)}m`}
+              label="A fazer"
+              value={
+                transferAdvice.recommended
+                  ? transferAdvice.recommended.transfers === 0
+                    ? "Manter"
+                    : `${transferAdvice.recommended.transfers} transf.`
+                  : `${xiExpected.toFixed(1)} pts`
+              }
+              hint={
+                transferAdvice.recommended
+                  ? `${squadState.freeTransfers} livre${squadState.freeTransfers === 1 ? "" : "s"}` +
+                    (transferAdvice.recommended.hitCost > 0
+                      ? ` · −${transferAdvice.recommended.hitCost} de hit`
+                      : "") +
+                    (transferAdvice.recommended.netGainVsHold !== 0
+                      ? ` · ${transferAdvice.recommended.netGainVsHold >= 0 ? "+" : ""}${transferAdvice.recommended.netGainVsHold.toFixed(1)} pts`
+                      : "")
+                  : `±${squadRisk.stdDev.toFixed(1)} · £${totalCost.toFixed(1)}m`
+              }
               tone="accent"
             />
             <StatTile
               label="Capitão"
-              value={captain?.element.web_name ?? "—"}
+              value={
+                transferAdvice.recommended?.captain?.element.web_name ??
+                captain?.element.web_name ??
+                "—"
+              }
               hint={
                 captain
                   ? `${captain.expectedPointsNext.toFixed(1)} pts · ${captain.ownershipPct.toFixed(0)}% posse`
@@ -489,16 +560,44 @@ export default async function Home() {
           </div>
         )}
 
-        {/* ================= 1. a decisão ================= */}
+        {/* ================= 1. o que fazer ================= */}
         <Section
-          id="decisao"
-          eyebrow={`Otimizador (${squadMethod}) · £${totalCost.toFixed(1)}m de £100.0m`}
-          title="A Decisão desta Jornada"
+          id="fazer"
+          eyebrow="A decisão · dentro das regras que tens"
+          title="O Que Fazer Antes do Deadline"
+          intro="Parte da equipa que já tens, do dinheiro que tens e das transferências que tens. O plantel ideal continua mais abaixo como referência — mas isto é o que dá para fazer esta semana."
+        >
+          <TransferPlanPanel advice={transferAdvice} state={squadState} />
+        </Section>
+
+        {/* ================= 2. revisão da jornada ================= */}
+        <Section
+          id="revisao"
+          eyebrow={
+            gwReview.event
+              ? `Jornada ${gwReview.event}${gwReview.finished ? "" : " · ainda a decorrer"}`
+              : "Ainda sem jornadas"
+          }
+          title="Como Correu a Minha Equipa"
+          intro="Previsto contra real, jogador a jogador. Ordenado por desvio face à previsão, não por pontos: um jogador que fez o que era esperado não é notícia; um que ficou muito abaixo, é."
+        >
+          <GameweekReviewPanel review={gwReview} />
+        </Section>
+
+        {/* ================= 3. plantel ideal ================= */}
+        <Section
+          id="ideal"
+          eyebrow={`Referência (${squadMethod}) · £${totalCost.toFixed(1)}m de £${budgetM.toFixed(1)}m`}
+          title="O Plantel Ideal"
           intro={
             <>
-              O onze é escolhido por programação linear inteira sobre pontos
-              esperados reais, corrigidos pela postura que a simulação da liga
-              impõe. Capitão sugerido:{" "}
+              O melhor plantel que{" "}
+              {squadState.available ? "o teu dinheiro" : "£100m"} compra hoje,
+              ignorando o custo de lá chegar. Não é um plano —{" "}
+              <strong className="text-text">
+                é o alvo contra o qual o plano acima mede a distância
+              </strong>
+              . Capitão:{" "}
               <strong className="text-text">{captain?.element.web_name}</strong> ·
               Vice: <strong className="text-text">{viceCaptain?.element.web_name}</strong>.{" "}
               {oddsActive
@@ -600,7 +699,7 @@ export default async function Home() {
           </div>
         </Section>
 
-        {/* ================= 2. a liga ================= */}
+        {/* ================= 4. a liga ================= */}
         <Section
           id="liga"
           eyebrow={`Camada 2 · Liga privada #${DEFAULT_LEAGUE_ID}`}
@@ -659,16 +758,16 @@ export default async function Home() {
           )}
         </Section>
 
-        {/* ================= 3. a minha equipa ================= */}
+        {/* ================= 5. a minha equipa ================= */}
         <Section
           id="minha-equipa"
-          title="A Minha Equipa"
+          title="A Minha Equipa na FPL"
           eyebrow="Ligado ao teu Team ID"
         >
           <MyTeamPanel scored={scored} eventId={picksEvent} isPreseason={isPreseason} />
         </Section>
 
-        {/* ================= 4. shadow team ================= */}
+        {/* ================= 6. shadow team ================= */}
         <Section
           id="shadow"
           title="Shadow Team"
@@ -680,7 +779,7 @@ export default async function Home() {
           />
         </Section>
 
-        {/* ================= 5. calendário ================= */}
+        {/* ================= 7. calendário ================= */}
         <Section
           id="calendario"
           title="Calendário"
@@ -734,7 +833,7 @@ export default async function Home() {
           </div>
         </Section>
 
-        {/* ================= 6. escolhas ================= */}
+        {/* ================= 8. escolhas ================= */}
         <Section
           id="escolhas"
           title="Melhores Escolhas"
@@ -761,7 +860,7 @@ export default async function Home() {
           </div>
         </Section>
 
-        {/* ================= 7. mercado ================= */}
+        {/* ================= 9. mercado ================= */}
         <Section
           id="mercado"
           title="Mercado"
@@ -866,7 +965,7 @@ export default async function Home() {
           </div>
         </Section>
 
-        {/* ================= 8. aprendizagem ================= */}
+        {/* ================= 10. aprendizagem ================= */}
         <Section
           id="aprendizagem"
           title="O Que o Modelo Já Aprendeu"
@@ -1027,7 +1126,7 @@ export default async function Home() {
           </div>
         </Section>
 
-        {/* ================= 9. referência ================= */}
+        {/* ================= 11. referência ================= */}
         <Section
           id="referencia"
           title="Referência"
@@ -1091,7 +1190,10 @@ export default async function Home() {
                 <li>✓ Valor de ranking — pontos que os rivais não fizeram</li>
                 <li>✓ <strong>Camada 2</strong> — simulação Monte Carlo contra os rivais reais da liga, a definir a postura de variância</li>
                 <li>✓ <strong>Camada 3</strong> — calibração aprendida por posição e torneio de cinco estratégias</li>
-                <li>✓ Investigação tática semanal automática, aplicada diretamente ao modelo</li>
+                <li>✓ <strong>Planeamento de transferências</strong> a partir do plantel real, com o orçamento real e o -4 avaliado ao longo de 5 jornadas</li>
+                <li>✓ Sinal de Wildcard — distância entre o plantel atual e o ideal, em transferências e em pontos</li>
+                <li>✓ Revisão da jornada: previsto vs. real jogador a jogador, avaliação do capitão e do banco</li>
+                <li>✓ Investigação tática automática duas vezes por semana, com âmbito por jornada e nível de confiança</li>
                 <li>✓ Shadow Team, preditor de preços, monitor de lesões, duplas/brancas</li>
               </ul>
             </div>
@@ -1101,11 +1203,12 @@ export default async function Home() {
               </SubHeading>
               <ul className="flex flex-col gap-1.5 text-text-muted">
                 <li>
-                  → Planeamento de transferências com hits (-4) avaliados contra
-                  pontos esperados reais — a maior fuga de pontos que ainda
-                  existe
+                  → Planeamento de transferências a mais de uma jornada de
+                  distância: hoje o plano é ótimo para esta semana, mas não
+                  antecipa que guardar duas transferências permitiria uma jogada
+                  melhor daqui a duas jornadas
                 </li>
-                <li>→ Valor esperado de cada chip, com o calendário de duplas/brancas já detetado</li>
+                <li>→ Valor esperado de cada chip (Bench Boost, Triple Captain, Free Hit), usando o calendário de duplas/brancas e a simulação da Camada 2</li>
                 <li>
                   → Login FPL + execução automática de transferências (autopilot
                   com trilhos de segurança) — o desenho de segurança fica

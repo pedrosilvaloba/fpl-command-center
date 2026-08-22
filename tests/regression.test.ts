@@ -42,12 +42,21 @@ import {
   STRATEGIES,
   type StrategyEventResult,
 } from "../lib/strategylearning";
+import {
+  reconstructFreeTransfers,
+  estimateSellingPrices,
+  summariseChips,
+  type SquadState,
+} from "../lib/squadstate";
+import { planTransfers } from "../lib/transferplan";
 import { computeSquadRisk, computeTeamExposures } from "../lib/correlation";
 import { computeRankValue, computeSquadRankProfile } from "../lib/rankvalue";
 import {
   validateInsightInput,
   resolveInsightTarget,
   resolveStaticInsights,
+  effectiveFactor,
+  insightAppliesToEvent,
   MANAGER_INSIGHT_SEEDS,
 } from "../lib/managerinsights";
 import {
@@ -1539,7 +1548,495 @@ function testCalibrationLearning() {
   );
 }
 
+// ---------------------------------------------------------------------
+// Estado real do plantel — orçamento, transferências livres, chips
+// ---------------------------------------------------------------------
+
+function hist(
+  rows: { event: number; transfers: number; cost?: number }[]
+) {
+  return rows.map((r) => ({
+    event: r.event,
+    points: 50,
+    total_points: 50 * r.event,
+    rank: 1,
+    overall_rank: 1,
+    bank: 0,
+    value: 1000,
+    event_transfers: r.transfers,
+    event_transfers_cost: r.cost ?? 0,
+    points_on_bench: 0,
+  }));
+}
+
+function testFreeTransferReconstruction() {
+  // Never transferred: the allowance banks up to the cap and stops.
+  const idle = reconstructFreeTransfers(
+    hist([1, 2, 3, 4, 5, 6, 7, 8, 9].map((event) => ({ event, transfers: 0 }))),
+    [],
+    10
+  );
+  check(
+    "sem transferências, as livres acumulam até ao limite de 5",
+    idle.freeTransfers === 5,
+    `${idle.freeTransfers}`
+  );
+
+  // One free transfer used every week: you never bank anything.
+  const steady = reconstructFreeTransfers(
+    hist([1, 2, 3, 4, 5].map((event) => ({ event, transfers: event === 1 ? 0 : 1 }))),
+    [],
+    6
+  );
+  check(
+    "uma transferência por jornada mantém sempre exatamente uma disponível",
+    steady.freeTransfers === 1,
+    `${steady.freeTransfers}`
+  );
+
+  // A -8 gameweek: three transfers, two paid for, so only ONE free was spent.
+  // Reading `event_transfers` alone would have wrongly consumed three.
+  const withHit = reconstructFreeTransfers(
+    hist([
+      { event: 1, transfers: 0 },
+      { event: 2, transfers: 0 },
+      { event: 3, transfers: 3, cost: 8 },
+    ]),
+    [],
+    4
+  );
+  check(
+    "um hit de -8 só consome UMA transferência livre, não três",
+    withHit.freeTransfers === 2,
+    `${withHit.freeTransfers}`
+  );
+
+  // Wildcard week: unlimited transfers, saved ones survive untouched.
+  const wildcard = reconstructFreeTransfers(
+    hist([
+      { event: 1, transfers: 0 },
+      { event: 2, transfers: 0 },
+      { event: 3, transfers: 11 },
+    ]),
+    [{ name: "wildcard", event: 3 }],
+    4
+  );
+  check(
+    "numa jornada de wildcard as transferências não consomem as livres",
+    wildcard.freeTransfers === 3,
+    `${wildcard.freeTransfers}`
+  );
+
+  // Gameweek 1 is the initial squad, not fifteen transfers.
+  const opening = reconstructFreeTransfers(
+    hist([{ event: 1, transfers: 15 }]),
+    [],
+    2
+  );
+  check(
+    "a montagem inicial na GW1 não conta como transferências",
+    opening.freeTransfers === 1,
+    `${opening.freeTransfers}`
+  );
+
+  check(
+    "o número nunca sai do intervalo legal 0-5",
+    [idle, steady, withHit, wildcard, opening].every(
+      (r) => r.freeTransfers >= 0 && r.freeTransfers <= 5
+    )
+  );
+}
+
+function testSellingPriceEstimation() {
+  const ids = [1, 2, 3];
+  const prices = new Map([
+    [1, 6.0],
+    [2, 5.0],
+    [3, 4.5],
+  ]);
+  // Player 1 has risen £0.4m since the season started, player 2 £0.2m,
+  // player 3 not at all. FPL takes half of each rise, rounded down.
+  const changes = new Map([
+    [1, 4],
+    [2, 2],
+    [3, 0],
+  ]);
+  const total = 6.0 + 5.0 + 4.5;
+  const result = estimateSellingPrices(ids, prices, changes, total - 0.3);
+
+  const sum =
+    Math.round(ids.reduce((s, id) => s + (result.sellingPriceM.get(id) ?? 0), 0) * 10) / 10;
+  check(
+    "a soma dos preços de venda bate certo com o total publicado pela FPL",
+    Math.abs(sum - (total - 0.3)) < 0.001,
+    `${sum} vs ${total - 0.3}`
+  );
+  check(
+    "quem não subiu de preço não leva desconto nenhum",
+    result.sellingPriceM.get(3) === 4.5,
+    `${result.sellingPriceM.get(3)}`
+  );
+  check(
+    "nenhum desconto passa do máximo que a regra da FPL permitiria",
+    ids.every((id) => {
+      const discount = (prices.get(id) ?? 0) - (result.sellingPriceM.get(id) ?? 0);
+      const cap = Math.ceil((changes.get(id) ?? 0) / 2) / 10;
+      return discount <= cap + 1e-9;
+    })
+  );
+  check("o resultado é assinalado como estimativa", result.estimated);
+
+  // No discount at all: every player sells for the listed price.
+  const exact = estimateSellingPrices(ids, prices, changes, total);
+  check(
+    "sem diferença face aos preços atuais, nada é estimado",
+    !exact.estimated && exact.sellingPriceM.get(1) === 6.0
+  );
+}
+
+function testChipSummary() {
+  const chips = summariseChips([
+    { name: "wildcard", event: 8 },
+    { name: "bboost", event: 26 },
+  ]);
+  const wc = chips.find((c) => c.name === "wildcard")!;
+  const tc = chips.find((c) => c.name === "3xc")!;
+  check(
+    "um wildcard usado deixa um por usar (regra de dois por época)",
+    wc.remaining === 1 && wc.usedAtEvents[0] === 8,
+    `${wc.remaining}`
+  );
+  check("um chip nunca usado aparece com os dois disponíveis", tc.remaining === 2);
+}
+
+// ---------------------------------------------------------------------
+// Planeador de transferências
+// ---------------------------------------------------------------------
+
+function mkTransferPool(upgradeGains: number[]) {
+  // Fifteen owned players, all equally mediocre, spread across clubs so the
+  // three-per-club rule never binds. Then a set of same-position, same-price
+  // upgrades whose window advantage is dictated by `upgradeGains`.
+  const owned: ScoredPlayer[] = [];
+  const shape: [number, number][] = [
+    [1, 2],
+    [2, 5],
+    [3, 5],
+    [4, 3],
+  ];
+  let id = 1;
+  let club = 0;
+  for (const [type, count] of shape) {
+    for (let i = 0; i < count; i++) {
+      owned.push(
+        mkSim(id++, { teamId: (club++ % 20) + 1, type, epNext: 4, price: 6, own: 15 })
+      );
+    }
+  }
+  const market: ScoredPlayer[] = [];
+  // Plenty of ordinary alternatives, so the solver has a real search space.
+  for (const [type] of shape) {
+    for (let i = 0; i < 6; i++) {
+      market.push(
+        mkSim(id++, { teamId: (club++ % 20) + 1, type, epNext: 3.6, price: 6, own: 12 })
+      );
+    }
+  }
+  // The upgrades: midfielders, same price, better by a controlled amount.
+  for (const gain of upgradeGains) {
+    market.push(
+      mkSim(id++, {
+        teamId: (club++ % 20) + 1,
+        type: 3,
+        epNext: 4 + gain / 5,
+        price: 6,
+        own: 15,
+      })
+    );
+  }
+  return { owned, scored: [...owned, ...market] };
+}
+
+function mkState(owned: ScoredPlayer[], freeTransfers: number, bankM = 0): SquadState {
+  const squadValueM =
+    Math.round(owned.reduce((s, p) => s + p.priceM, 0) * 10) / 10;
+  return {
+    available: true,
+    reason: null,
+    fromEvent: 10,
+    owned: owned.map((p, i) => ({
+      elementId: p.element.id,
+      priceM: p.priceM,
+      sellingPriceM: p.priceM,
+      wasStarter: i < 11,
+      wasCaptain: i === 0,
+      wasViceCaptain: i === 1,
+    })),
+    bankM,
+    squadValueM,
+    totalBudgetM: Math.round((squadValueM + bankM) * 10) / 10,
+    sellingPriceIsEstimated: false,
+    sellingPriceNote: "",
+    freeTransfers,
+    freeTransfersNote: "",
+    chips: summariseChips([]),
+    entryName: "Teste",
+    overallPoints: 500,
+    overallRank: 1000,
+  };
+}
+
+function testTransferPlanRespectsTheRules() {
+  const { owned, scored } = mkTransferPool([10, 2]);
+  const advice = planTransfers(scored, mkState(owned, 1));
+
+  check("o planeador produz um plano a partir do plantel real", advice.available);
+  check(
+    "'não fazer nada' está sempre entre as opções",
+    advice.plans.some((p) => p.key === "manter")
+  );
+  check(
+    "o plano recomendado nunca é pior do que não fazer nada",
+    advice.recommended!.netValue >= advice.hold!.netValue - 1e-9,
+    `${advice.recommended!.netValue} vs ${advice.hold!.netValue}`
+  );
+
+  const state = mkState(owned, 1);
+  for (const plan of advice.plans) {
+    const cost = plan.squad.reduce((sum, p) => {
+      const own = state.owned.find((o) => o.elementId === p.element.id);
+      return sum + (own ? own.sellingPriceM : p.priceM);
+    }, 0);
+    check(
+      `plano "${plan.key}" respeita o orçamento real`,
+      cost <= state.totalBudgetM + 1e-6,
+      `£${cost.toFixed(1)}m de £${state.totalBudgetM.toFixed(1)}m`
+    );
+    const counts = plan.squad.reduce<Record<number, number>>((acc, p) => {
+      acc[p.element.element_type] = (acc[p.element.element_type] ?? 0) + 1;
+      return acc;
+    }, {});
+    check(
+      `plano "${plan.key}" mantém 2-5-5-3`,
+      counts[1] === 2 && counts[2] === 5 && counts[3] === 5 && counts[4] === 3,
+      JSON.stringify(counts)
+    );
+    const perClub = plan.squad.reduce<Record<number, number>>((acc, p) => {
+      acc[p.team.id] = (acc[p.team.id] ?? 0) + 1;
+      return acc;
+    }, {});
+    check(
+      `plano "${plan.key}" respeita o máximo de 3 por clube`,
+      Object.values(perClub).every((n) => n <= 3)
+    );
+    check(
+      `plano "${plan.key}" tem um onze legal de 11`,
+      plan.xi.length === 11 && plan.bench.length === 4
+    );
+    check(
+      `plano "${plan.key}" conta as transferências que realmente mostra`,
+      plan.transfers === plan.moves.length
+    );
+  }
+}
+
+function testHitIsOnlyTakenWhenItPaysForItself() {
+  // One big upgrade and one marginal one. With a single free transfer, the
+  // big upgrade is free; the marginal one would cost 4 points and is worth
+  // about 2 over the window, so no hit should ever be recommended.
+  const cheapExtra = mkTransferPool([10, 2]);
+  const cheapAdvice = planTransfers(cheapExtra.scored, mkState(cheapExtra.owned, 1));
+  check(
+    "um segundo negócio marginal não justifica pagar -4",
+    cheapAdvice.recommended!.hitCost === 0,
+    `hit ${cheapAdvice.recommended!.hitCost}, ganho ${cheapAdvice.recommended!.netGainVsHold}`
+  );
+
+  // Now make the second upgrade clearly worth more than the four points.
+  const worthIt = mkTransferPool([10, 14]);
+  const worthAdvice = planTransfers(worthIt.scored, mkState(worthIt.owned, 1));
+  check(
+    "duas melhorias grandes com uma só livre justificam o hit",
+    worthAdvice.recommended!.hitCost > 0 && worthAdvice.recommended!.transfers === 2,
+    `hit ${worthAdvice.recommended!.hitCost}, transf ${worthAdvice.recommended!.transfers}`
+  );
+  check(
+    "e o ganho reportado já vem líquido do custo do hit",
+    worthAdvice.recommended!.netGainVsHold > 0 &&
+      worthAdvice.recommended!.netValue ===
+        Math.round(
+          (worthAdvice.recommended!.xiWindowPoints - worthAdvice.recommended!.hitCost) * 10
+        ) / 10
+  );
+
+  // Two free transfers: the same two moves should now cost nothing.
+  const twoFree = planTransfers(worthIt.scored, mkState(worthIt.owned, 2));
+  check(
+    "com duas transferências livres as mesmas jogadas deixam de custar pontos",
+    twoFree.recommended!.hitCost === 0 && twoFree.recommended!.transfers === 2,
+    `hit ${twoFree.recommended!.hitCost}, transf ${twoFree.recommended!.transfers}`
+  );
+}
+
+function testNoUpgradeMeansHold() {
+  // Everything on the market is worse than what is owned. The only correct
+  // answer is to do nothing — a planner that always finds "something to do"
+  // is worse than useless, because acting costs a transfer.
+  const { owned, scored } = mkTransferPool([-6, -8]);
+  const advice = planTransfers(scored, mkState(owned, 2));
+  check(
+    "quando não há nada melhor no mercado, a recomendação é manter",
+    advice.recommended!.key === "manter" && advice.recommended!.transfers === 0,
+    `${advice.recommended!.key} com ${advice.recommended!.transfers}`
+  );
+}
+
+function testWildcardSignal() {
+  // A squad far below what the budget could buy: many upgrades available.
+  const { owned, scored } = mkTransferPool([12, 12, 12, 12, 12, 12]);
+  const advice = planTransfers(scored, mkState(owned, 1));
+  check(
+    "o sinal de wildcard mede a distância ao plantel ideal em transferências",
+    advice.wildcard !== null && advice.wildcard.distance >= 5,
+    `distância ${advice.wildcard?.distance}`
+  );
+  check(
+    "e quantifica o que essa distância vale em pontos",
+    (advice.wildcard?.gain ?? 0) > 0,
+    `${advice.wildcard?.gain}`
+  );
+
+  // A squad already close to ideal must NOT trigger the chip.
+  const tight = mkTransferPool([1]);
+  const tightAdvice = planTransfers(tight.scored, mkState(tight.owned, 1));
+  check(
+    "um plantel já perto do ideal não dispara o wildcard",
+    tightAdvice.wildcard !== null && !tightAdvice.wildcard.advise,
+    `distância ${tightAdvice.wildcard?.distance}, ganho ${tightAdvice.wildcard?.gain}`
+  );
+}
+
+function testPlannerSurvivesAnIllegalSquad() {
+  // A squad with four players from one club cannot satisfy the three-per-club
+  // rule while also keeping fourteen of them, so every constrained solve is
+  // infeasible. That must degrade to "hold" rather than throwing or, worse,
+  // returning a squad that breaks the rules. (This is not hypothetical: it is
+  // exactly what a mis-built test fixture produced, and the failure was
+  // silent — the plans simply vanished with no explanation.)
+  const { owned, scored } = mkTransferPool([10]);
+  const stacked = owned.map((p, i) =>
+    i < 4 ? ({ ...p, team: makeTeam(99) } as ScoredPlayer) : p
+  );
+  const pool = [...stacked, ...scored.filter((p) => !owned.some((o) => o.element.id === p.element.id))];
+  const advice = planTransfers(pool, mkState(stacked, 1));
+  check(
+    "um plantel que viola o máximo por clube degrada para 'manter', sem rebentar",
+    advice.available && advice.recommended !== null,
+    `${advice.recommended?.key}`
+  );
+  check(
+    "e nenhum plano devolvido viola alguma vez as regras",
+    advice.plans.every((plan) => {
+      const perClub = plan.squad.reduce<Record<number, number>>((acc, p) => {
+        acc[p.team.id] = (acc[p.team.id] ?? 0) + 1;
+        return acc;
+      }, {});
+      // The held squad is the illegal one the manager already owns — the
+      // planner reports it as-is rather than pretending it is legal. Every
+      // squad it CONSTRUCTS must obey the rules.
+      return plan.key === "manter" || Object.values(perClub).every((n) => n <= 3);
+    })
+  );
+}
+
+function testPlannerRefusesToInvent() {
+  const { scored } = mkTransferPool([10]);
+  const advice = planTransfers(scored, {
+    ...mkState([], 1),
+    available: false,
+    owned: [],
+    reason: "sem plantel",
+  });
+  check(
+    "sem plantel real o planeador recusa-se a inventar um plano",
+    !advice.available && advice.recommended === null && advice.plans.length === 0
+  );
+}
+
+// ---------------------------------------------------------------------
+// Notas táticas v2 — confiança e âmbito por jornada
+// ---------------------------------------------------------------------
+
+function testInsightConfidenceAndScope() {
+  const base = {
+    scope: "player" as const,
+    id: 1,
+    label: "X",
+    reason: "r",
+    addedDate: "2026-08-21",
+    source: "s",
+  };
+
+  check(
+    "a confiança reduz o desvio face a 1, não o fator em si",
+    Math.abs(effectiveFactor({ ...base, factor: 1.2, confidence: 0.5 }) - 1.1) < 1e-9,
+    `${effectiveFactor({ ...base, factor: 1.2, confidence: 0.5 })}`
+  );
+  check(
+    "e funciona igualmente para notas negativas",
+    Math.abs(effectiveFactor({ ...base, factor: 0.8, confidence: 0.5 }) - 0.9) < 1e-9
+  );
+  check(
+    "sem confiança declarada, a nota aplica-se por inteiro",
+    effectiveFactor({ ...base, factor: 1.15 }) === 1.15
+  );
+
+  check(
+    "uma nota sem jornadas aplica-se a todas",
+    insightAppliesToEvent({ ...base, factor: 1 }, 7)
+  );
+  check(
+    "uma nota com jornadas só se aplica a essas",
+    insightAppliesToEvent({ ...base, factor: 1, events: [5, 6] }, 5) &&
+      !insightAppliesToEvent({ ...base, factor: 1, events: [5, 6] }, 7)
+  );
+
+  // Validation of the new fields.
+  const ok = (over: Record<string, unknown>) =>
+    validateInsightInput(
+      {
+        scope: "player",
+        id: 1,
+        label: "X",
+        factor: 1.1,
+        reason: "r",
+        source: "s",
+        ...over,
+      },
+      () => true,
+      0
+    ).ok;
+  check("jornadas válidas são aceites", ok({ events: [1, 38] }));
+  check("uma jornada 0 ou 39 é rejeitada", !ok({ events: [0] }) && !ok({ events: [39] }));
+  check("uma lista de jornadas vazia é rejeitada", !ok({ events: [] }));
+  check("confiança dentro de 0.4-1 é aceite", ok({ confidence: 0.4 }) && ok({ confidence: 1 }));
+  check(
+    "confiança fora do intervalo é rejeitada",
+    !ok({ confidence: 0.2 }) && !ok({ confidence: 1.4 })
+  );
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
+testFreeTransferReconstruction();
+testSellingPriceEstimation();
+testChipSummary();
+testTransferPlanRespectsTheRules();
+testHitIsOnlyTakenWhenItPaysForItself();
+testNoUpgradeMeansHold();
+testWildcardSignal();
+testPlannerSurvivesAnIllegalSquad();
+testPlannerRefusesToInvent();
+testInsightConfidenceAndScope();
 testLeagueSimulation();
 testPostureFollowsLeaguePosition();
 testPostureChangesTheSquad();

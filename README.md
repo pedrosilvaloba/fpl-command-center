@@ -35,6 +35,7 @@ app/
   api/fpl/league/[id]/route.ts Proxy para /leagues-classic/{id}/standings/
   api/shadow-team/route.ts    Guarda/lê a Shadow Team no Upstash Redis (quando ligado)
   api/insights/route.ts       Lê/escreve notas táticas dinâmicas (GET aberto; POST/DELETE autenticados por INSIGHTS_API_TOKEN)
+  api/insights/push/route.ts  Escrita em forma de GET — a única via que a sessão de investigação agendada consegue alcançar (ver lib/insightsintake.ts)
 lib/
   types.ts        Tipos TypeScript para as respostas da API da FPL
   fpl-client.ts   Cliente HTTP server-side para a API da FPL (com cache)
@@ -47,6 +48,10 @@ lib/
   oddsmodel.ts    Inverte odds em golos esperados e deriva forças de equipa a partir do mercado
   correlation.ts  Risco de correlação — variância de empilhar jogadores do mesmo clube
   rankvalue.ts    Valor de ranking — desconta a posse, porque a FPL é um jogo de ranking
+  squadstate.ts   Estado real da equipa — plantel atual, preços de VENDA estimados, saldo, transferências livres reconstruídas do histórico, chips
+  transferplan.ts Planeamento de transferências — ILP sobre manter/vender/comprar, com o -4 no objetivo, e o sinal de Wildcard
+  gwreview.ts     Revisão da jornada — previsão guardada antes do deadline vs. pontos reais, jogador a jogador
+  insightsintake.ts Validação partilhada pelas duas vias de escrita das notas táticas
   rivals.ts       CAMADA 2 — simulação Monte Carlo contra os plantéis reais dos rivais da liga; produz a postura de variância (beta) que o otimizador usa
   strategylearning.ts CAMADA 3 — calibração aprendida por posição (previsto vs. real) e torneio de cinco estratégias de ranking avaliadas semanalmente
   expectedpoints.ts Modelo de pontos esperados — minutos, golos, assistências, clean sheets, bónus, contribuição defensiva
@@ -67,11 +72,73 @@ components/
   PlayerTable.tsx     Lista reutilizável de jogadores — cartões em telemóvel, tabela em ecrã grande
   PitchView.tsx       O onze desenhado no relvado, ao estilo da FPL, com banco e distintivos
   ClubKit.tsx         Camisola de cada clube em SVG (a API da FPL não publica cores)
+  TransferPlanPanel.tsx O que fazer antes do deadline — planos ordenados, horizontes, e as limitações declaradas
+  GameweekReviewPanel.tsx Como correu a minha equipa — previsto vs. real, capitão, banco
   LeagueSimPanel.tsx  Camada 2 — postura, probabilidades por rival e sobreposição de plantéis
   StrategyPanel.tsx   Camada 3 — torneio de estratégias e calibração aprendida
   MyTeamPanel.tsx     A Minha Equipa — liga um Team ID real (client)
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
+
+## Novo na v1.26
+
+### 1. A app deixou de sugerir equipas impossíveis
+
+Até aqui a "Equipa Sugerida" montava os 15 melhores jogadores para £100.0m,
+do zero, todas as jornadas. É a resposta a uma pergunta que ninguém a meio de
+uma época pode executar: só se pode fazer uma transferência por semana (duas
+por -4), a partir do plantel que já se tem, com o dinheiro que se tem — que
+não é £100m, é o valor do plantel mais o saldo.
+
+- **`lib/squadstate.ts`** reconstrói o estado real: plantel atual, saldo,
+  valor, **preços de venda** por jogador, **quantas transferências livres**
+  existem (deduzidas do histórico público — `event_transfers_cost / 4` diz
+  exatamente quantas foram pagas, logo quantas livres foram gastas) e que
+  chips ainda estão por usar.
+- **`lib/transferplan.ts`** resolve o problema certo: dado ESTE plantel,
+  ESTE saldo e ESTAS transferências livres, o que fazer antes do deadline.
+  Produz quatro planos — não fazer nada, usar as livres, aceitar um hit,
+  jogar o Wildcard — ordenados pelos pontos esperados do onze **ao longo de 5
+  jornadas menos o custo do hit**. O horizonte de 5 jornadas é deliberado: um
+  -4 é um custo único pago contra um benefício que se repete.
+- **"Não fazer nada" concorre em pé de igualdade** e ganha muitas vezes.
+  Guardar transferências é das jogadas mais subvalorizadas da FPL.
+- **Sinal de Wildcard**: a distância entre o plantel atual e o ideal, medida
+  em transferências e em pontos. É o que dá sentido ao painel do plantel
+  ideal, que passou a ser explicitamente um alvo e não um plano.
+
+### 2. Revisão da jornada
+
+`lib/gwreview.ts` guarda as previsões de todos os jogadores **antes** do
+deadline e compara-as depois com os pontos reais do plantel efetivamente
+alinhado: quem superou, quem falhou, quanto custou a braçadeira, quanto ficou
+no banco, e como correu face à média da jornada. Guardar antes é obrigatório —
+reconstruir "o que o modelo teria dito" depois do facto é um teste que o
+modelo passa sempre.
+
+### 3. As notas táticas nunca tinham chegado à app — e agora sabe-se porquê
+
+A tarefa agendada disparava a horas todas as semanas e o painel continuava
+vazio. A causa, confirmada por teste direto: **o sandbox onde a investigação
+corre encaminha o tráfego de saída por um proxy com lista branca, e
+`*.vercel.app` não está nela** — qualquer `curl` devolve 403 no túnel CONNECT
+antes sequer de fazer o pedido. O desenho original ("a sessão faz POST para a
+app") nunca podia ter funcionado, em nenhuma semana. E como reportar a falha
+exigia a mesma ligação bloqueada, cada execução morria em silêncio.
+
+- **`app/api/insights/push/route.ts`** é uma via de escrita em forma de GET,
+  que é a única que a ferramenta de fetch dessas sessões consegue usar. Um GET
+  que escreve é normalmente um erro; o porquê de ser aceitável aqui, e o que
+  custa, está escrito por extenso em `lib/insightsintake.ts`.
+- As notas ganharam **âmbito por jornada** (`events`) e **nível de confiança**
+  (`confidence`). Sem o primeiro, uma notícia de uma semana só podia ser
+  aplicada às cinco, exagerando-a cinco vezes. Sem o segundo, uma declaração
+  do próprio treinador e a especulação de um comentador mexiam no modelo
+  exatamente o mesmo.
+- Passaram a existir **duas passagens semanais**: quinta-feira para a análise
+  tática de fundo, e sexta-feira para as notícias de equipa — que é quando
+  chegam as conferências de imprensa e os boletins clínicos, a informação mais
+  valiosa da semana e a que chegava sempre tarde demais.
 
 ## Novo na v1.25
 
@@ -444,17 +511,17 @@ components/
 
 ## Roadmap (próximas iterações)
 
-1. **Planeamento de transferências com hits** — a maior fuga de pontos que
-   ainda existe. Agora que a pontuação está em pontos reais (e não em
-   unidades arbitrárias), um -4 pode finalmente ser comparado com o ganho
-   esperado da transferência: passa a ser uma pergunta aritmética em vez de
-   uma questão de gosto. Precisa também de olhar para a frente mais do que
-   uma jornada, para não pagar um hit por um ganho que se evaporava na
-   jornada seguinte.
-2. **Valor esperado de cada chip** — a deteção de duplas/brancas já existe e
-   o simulador da Camada 2 já sabe produzir distribuições, não só médias.
-   Falta juntá-los: quanto vale, em pontos e em probabilidade de subir na
-   liga, gastar o Bench Boost nesta dupla em vez de esperar pela próxima.
+1. **Planeamento a mais de uma jornada de distância.** O plano atual é ótimo
+   para esta semana: escolhe a melhor jogada dado o que existe hoje. O que
+   ainda não faz é raciocinar sobre o futuro do próprio plano — que guardar
+   duas transferências permitiria, daqui a duas jornadas, uma jogada que hoje
+   não é possível. É o mesmo salto que a Camada 2 deu na dimensão dos rivais,
+   aplicado à dimensão do tempo.
+2. **Valor esperado de cada chip.** A deteção de duplas/brancas já existe e o
+   simulador da Camada 2 já produz distribuições, não só médias. Falta
+   juntá-los: quanto vale, em pontos e em probabilidade de subir na liga,
+   gastar o Bench Boost nesta dupla em vez de esperar pela próxima — e o mesmo
+   para o Triple Captain e o Free Hit.
 3. **Login FPL + autopilot de transferências** — o autopilot em si.
    Decidiste avançar com automação total (credenciais guardadas, execução
    automática). Isto usa um fluxo de login não-oficial

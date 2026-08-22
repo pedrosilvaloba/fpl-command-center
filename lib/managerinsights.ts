@@ -72,6 +72,23 @@ export interface ManagerInsight {
   // entries in MANAGER_INSIGHTS below have no expiry (a human already
   // committed to them). ISO timestamp.
   expiresAt?: string;
+  /**
+   * Gameweeks this note applies to. Undefined means "every gameweek", which
+   * is right for a durable trait ("this manager always withdraws him before
+   * 60 minutes") and WRONG for the most valuable kind of team news, which is
+   * inherently about one match ("rested for the cup replay in GW14",
+   * "suspended for GW22"). Without this field the only way to express a
+   * one-week fact was to apply it to all five, which either overstated it
+   * five-fold or forced the research to leave it out entirely.
+   */
+  events?: number[];
+  /**
+   * How sure the source is, from 0.4 to 1. Scales the DEVIATION from 1, so a
+   * factor of 1.2 at confidence 0.5 behaves as 1.1. A manager's own press
+   * conference and a pundit's speculation should not move the model by the
+   * same amount, and before this they did.
+   */
+  confidence?: number;
 }
 
 // Permanent, hand-curated entries — starts empty (nothing fabricated to
@@ -268,10 +285,38 @@ export function filterInsights(
   return insights.filter((i) => i.scope === scope && i.id === id);
 }
 
+/**
+ * The factor after confidence weighting. Confidence scales the DEVIATION
+ * from neutral, never the factor itself — halving a 1.2 would give 0.6,
+ * which is a large negative adjustment rather than a weaker positive one.
+ */
+export function effectiveFactor(insight: ManagerInsight): number {
+  const confidence =
+    typeof insight.confidence === "number" && Number.isFinite(insight.confidence)
+      ? Math.min(1, Math.max(0, insight.confidence))
+      : 1;
+  return 1 + (insight.factor - 1) * confidence;
+}
+
+/** True when this note has anything to say about the given gameweek. */
+export function insightAppliesToEvent(insight: ManagerInsight, event: number): boolean {
+  if (!insight.events || insight.events.length === 0) return true;
+  return insight.events.includes(event);
+}
+
 /** Convenience for building a reason string consistently wherever this is surfaced. */
 export function formatInsightReason(insight: ManagerInsight): string {
   const tag = insight.expiresAt ? "nota da investigação semanal" : "nota qualitativa";
-  return `${insight.reason} (${tag}, ${insight.addedDate})`;
+  const scope =
+    insight.events && insight.events.length > 0
+      ? `só GW${insight.events.join("/")}`
+      : null;
+  const confidence =
+    typeof insight.confidence === "number" && insight.confidence < 1
+      ? `confiança ${Math.round(insight.confidence * 100)}%`
+      : null;
+  const bits = [tag, scope, confidence, insight.addedDate].filter(Boolean);
+  return `${insight.reason} (${bits.join(", ")})`;
 }
 
 const RESEARCH_RUN_KEY = "fpl-command-center:insights:lastrun";
@@ -322,6 +367,10 @@ export const DYNAMIC_TTL_DAYS = 14; // Pedro's explicit choice: 2 weeks
 const FACTOR_MIN = 0.8;
 const FACTOR_MAX = 1.2;
 const REASON_MAX_LENGTH = 300;
+/** Below this a note is not worth storing at all — if the research is less
+ * than 40% sure, the honest move is to leave it out rather than to record a
+ * near-neutral nudge that clutters the panel. */
+const CONFIDENCE_MIN = 0.4;
 
 export interface NewInsightInput {
   scope: "player" | "team";
@@ -330,6 +379,10 @@ export interface NewInsightInput {
   factor: number;
   reason: string;
   source: string;
+  /** Gameweeks the note is about. Omit for a durable trait. */
+  events?: number[];
+  /** 0.4 to 1. Omit to mean "fully confident". */
+  confidence?: number;
 }
 
 export interface RejectedInsight {
@@ -497,6 +550,32 @@ export function validateInsightInput(
   if (!input.label || !input.source) {
     return { ok: false, reason: "label ou source em falta" };
   }
+  if (input.events !== undefined) {
+    if (
+      !Array.isArray(input.events) ||
+      input.events.length === 0 ||
+      input.events.length > 6 ||
+      !input.events.every((e) => Number.isInteger(e) && e >= 1 && e <= 38)
+    ) {
+      return {
+        ok: false,
+        reason: "events inválido — até 6 números de jornada entre 1 e 38, ou omitir para 'todas as jornadas'",
+      };
+    }
+  }
+  if (input.confidence !== undefined) {
+    if (
+      typeof input.confidence !== "number" ||
+      !Number.isFinite(input.confidence) ||
+      input.confidence < CONFIDENCE_MIN ||
+      input.confidence > 1
+    ) {
+      return {
+        ok: false,
+        reason: `confidence fora do intervalo permitido (${CONFIDENCE_MIN}-1)`,
+      };
+    }
+  }
   if (activeCount >= MAX_DYNAMIC_INSIGHTS) {
     return { ok: false, reason: `limite de ${MAX_DYNAMIC_INSIGHTS} notas dinâmicas ativas em simultâneo já atingido` };
   }
@@ -559,6 +638,8 @@ export async function saveDynamicInsights(
         addedDate: now.toISOString().slice(0, 10),
         source: input.source,
         expiresAt,
+        ...(input.events && input.events.length > 0 ? { events: input.events } : {}),
+        ...(typeof input.confidence === "number" ? { confidence: input.confidence } : {}),
       };
       await redis.set(DYNAMIC_ENTRY_KEY(key), entry);
       accepted.push(entry);

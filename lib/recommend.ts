@@ -16,7 +16,13 @@ import {
   modelTrust,
   type ExpectedPointsBreakdown,
 } from "./expectedpoints";
-import { MANAGER_INSIGHTS, filterInsights, formatInsightReason } from "./managerinsights";
+import {
+  MANAGER_INSIGHTS,
+  filterInsights,
+  formatInsightReason,
+  effectiveFactor,
+  insightAppliesToEvent,
+} from "./managerinsights";
 import type { ManagerInsight } from "./managerinsights";
 
 export interface ScoredPlayer {
@@ -410,19 +416,41 @@ export function buildScoredPlayers(
       ...filterInsights(managerInsights, "team", team.id),
     ];
     if (insights.length > 0) {
-      const combined = Math.min(
-        INSIGHT_MAX_COMBINED,
-        Math.max(
-          INSIGHT_MIN_COMBINED,
-          insights.reduce((acc, i) => acc * i.factor, 1)
-        )
-      );
-      expectedPoints *= combined;
-      expectedPointsNext *= combined;
+      // Two multipliers, not one. A note can now be scoped to specific
+      // gameweeks, and the two numbers this model produces answer different
+      // questions: `expectedPointsNext` is about ONE gameweek, so a note
+      // either applies to it or does not; `expectedPoints` is a five-week
+      // total, so a note covering one of those weeks should move it by
+      // roughly a fifth, not by the whole amount. Applying a one-week fact
+      // at full strength to a five-week total — which is what a single
+      // shared multiplier did — overstated it about five-fold.
+      let combinedNext = 1;
+      let combinedWindow = 1;
+      for (const insight of insights) {
+        const eff = effectiveFactor(insight);
+        if (!insight.events || insight.events.length === 0) {
+          combinedNext *= eff;
+          combinedWindow *= eff;
+          continue;
+        }
+        if (insightAppliesToEvent(insight, fromEvent)) combinedNext *= eff;
+        const coveredInWindow = insight.events.filter(
+          (e) => e >= fromEvent && e < fromEvent + fixtureWindow
+        ).length;
+        if (coveredInWindow > 0) {
+          combinedWindow *= 1 + (eff - 1) * (coveredInWindow / Math.max(1, fixtureWindow));
+        }
+      }
+      const clamp = (v: number) =>
+        Math.min(INSIGHT_MAX_COMBINED, Math.max(INSIGHT_MIN_COMBINED, v));
+      const clampedNext = clamp(combinedNext);
+      const clampedWindow = clamp(combinedWindow);
+      expectedPoints *= clampedWindow;
+      expectedPointsNext *= clampedNext;
       for (const insight of insights) reasons.push(formatInsightReason(insight));
       if (insights.length > 1) {
         reasons.push(
-          `efeito combinado das notas táticas limitado a ${Math.round((combined - 1) * 100)}%`
+          `efeito combinado das notas táticas limitado a ${Math.round((clampedNext - 1) * 100)}% nesta jornada`
         );
       }
     }

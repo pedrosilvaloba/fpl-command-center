@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRedis } from "@/lib/kv";
 
+// This route reports whether persistent storage is working. A cached
+// response here is worse than no response: an edge-cached
+// {"configured":false} from before the Upstash integration was connected
+// kept claiming storage was missing long after it was working, and sent a
+// debugging session chasing the wrong problem for an hour.
+export const dynamic = "force-dynamic";
+
 // Single-user personal deployment — one fixed key is enough; no need for
 // per-visitor keying (this app is not multi-tenant).
 const KEY = "fpl-command-center:shadow-team";

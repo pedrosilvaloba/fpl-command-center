@@ -2,166 +2,80 @@ import { NextRequest, NextResponse } from "next/server";
 import { getBootstrap } from "@/lib/fpl-client";
 import {
   loadActiveInsights,
-  saveDynamicInsights,
   deleteDynamicInsight,
-  resolveInsightTarget,
-  recordResearchRun,
   getLastResearchRun,
-  type NewInsightInput,
-  type RejectedInsight,
 } from "@/lib/managerinsights";
+import { processInsightSubmission } from "@/lib/insightsintake";
 
 /**
- * Write path for the auto-applied qualitative-insight layer (see the big
- * comment at the top of lib/managerinsights.ts for the full design and
- * why this is safe to auto-apply). Called by the weekly scheduled
- * research task — a genuinely different trust level from every other
- * route in this app (those only ever read/write this one visitor's own
- * data), because this one mutates what EVERYONE who opens the dashboard
- * sees. GET is left open (read-only, same risk level as the rest of the
- * app); POST/DELETE require a bearer token.
+ * Read and write path for the auto-applied qualitative-insight layer (see the
+ * header comment in lib/managerinsights.ts for the design, and
+ * lib/insightsintake.ts for why a second, GET-shaped write path exists at
+ * /api/insights/push).
+ *
+ * GET is open — read-only, same risk level as the rest of this single-user
+ * app. POST and DELETE require the bearer token, because they mutate what the
+ * dashboard shows and what the scoring engine applies.
  */
+
+// Reads live state; must not be served from a build-time snapshot or a stale
+// edge cache. A cached response here reported "storage not configured" long
+// after storage was working, which sent a debugging session in exactly the
+// wrong direction.
+export const dynamic = "force-dynamic";
 
 function isAuthorized(req: NextRequest): boolean {
   const token = process.env.INSIGHTS_API_TOKEN;
-  if (!token) return false; // no token configured = writes disabled, not "anything goes"
+  if (!token) return false; // no token configured = writes disabled
   const header = req.headers.get("authorization") ?? "";
   const provided = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
   return provided.length > 0 && provided === token;
 }
 
 export async function GET() {
-  // `lastRun` is what makes it possible to tell "the research ran and
-  // found nothing" apart from "the research never ran" — see
-  // ResearchRun in lib/managerinsights.ts.
+  // Loading WITH a bootstrap matters: the hand-curated notes identify their
+  // targets by name and are resolved against live FPL data. Called without
+  // one — as this route did until v1.26 — every static note silently
+  // disappeared from the response, which made the API look empty while the
+  // dashboard showed notes.
+  let bootstrap;
+  try {
+    bootstrap = await getBootstrap();
+  } catch {
+    bootstrap = undefined;
+  }
   const [insights, lastRun] = await Promise.all([
-    loadActiveInsights(),
+    loadActiveInsights(bootstrap),
     getLastResearchRun(),
   ]);
-  return NextResponse.json({ insights, lastRun });
+
+  // How long the layer has been silent. A research pass that never reaches
+  // this app leaves no trace at all, so the absence of a run is the signal
+  // — and it needs to be readable by the pass itself, not just by a human
+  // looking at the dashboard.
+  const daysSinceLastRun = lastRun
+    ? Math.floor((Date.now() - new Date(lastRun.at).getTime()) / 86_400_000)
+    : null;
+
+  return NextResponse.json({
+    insights,
+    lastRun,
+    daysSinceLastRun,
+    storageWorking: true,
+    hint:
+      lastRun === null
+        ? "Nenhuma execução alguma vez registada. Se a tarefa semanal já disparou, falhou antes de conseguir escrever — usa /api/insights/push?token=...&payload=... que funciona com um GET simples."
+        : null,
+  });
 }
 
 export async function POST(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "não autorizado" }, { status: 401 });
   }
-
   const body = await req.json().catch(() => null);
-  const rawInputs = body?.insights;
-  const note = typeof body?.note === "string" ? body.note.slice(0, 1000) : null;
-
-  if (!Array.isArray(rawInputs)) {
-    return NextResponse.json(
-      { error: "corpo inválido — esperado { insights: [...] }" },
-      { status: 400 }
-    );
-  }
-
-  // An EMPTY array is a legitimate, informative outcome: the research ran
-  // and honestly concluded there was nothing solid enough to submit. That
-  // used to be a 400, which pushed the research toward either inventing
-  // weak findings or leaving no trace at all — and "no trace" is
-  // indistinguishable from "never ran".
-  if (rawInputs.length === 0) {
-    await recordResearchRun({
-      at: new Date().toISOString(),
-      acceptedCount: 0,
-      rejectedCount: 0,
-      acceptedLabels: [],
-      rejectedReasons: [],
-      note: note ?? "A investigação correu e não encontrou nada suficientemente sustentado para submeter.",
-    });
-    return NextResponse.json({ accepted: [], rejected: [], acceptedCount: 0, rejectedCount: 0, recorded: true });
-  }
-  if (rawInputs.length > 20) {
-    return NextResponse.json(
-      { error: "demasiadas entradas num único pedido (máx 20) — prioriza as de maior confiança" },
-      { status: 400 }
-    );
-  }
-
-  // Real, live data to resolve names/ids against — never trust the caller
-  // about a player/team actually existing, and never make an LLM read
-  // through this ~700-player payload itself to pick an id by hand (see
-  // resolveInsightTarget's own comment in lib/managerinsights.ts — same
-  // "don't let a model parse bulk JSON" principle as the rest of this
-  // project). The research agent submits names; this route resolves them.
-  let bootstrap;
-  try {
-    bootstrap = await getBootstrap();
-  } catch {
-    return NextResponse.json({ error: "falha a carregar dados da FPL para validação" }, { status: 502 });
-  }
-
-  // Two passes: first resolve each candidate's name/id to a real FPL id
-  // (rejecting anything that doesn't deterministically match one), then
-  // validate the rest of the fields (factor bounds, reason length, the
-  // active-count cap) against the already-resolved candidates.
-  const resolved: { input: NewInsightInput }[] = [];
-  const rejected: RejectedInsight[] = [];
-
-  for (const r of rawInputs as Record<string, unknown>[]) {
-    const scope = r?.scope as NewInsightInput["scope"];
-    const placeholderInput: NewInsightInput = {
-      scope,
-      id: typeof r?.id === "number" ? (r.id as number) : -1,
-      label: (r?.label as string) ?? (r?.playerName as string) ?? (r?.teamName as string) ?? "?",
-      factor: r?.factor as number,
-      reason: r?.reason as string,
-      source: r?.source as string,
-    };
-    if (scope !== "player" && scope !== "team") {
-      rejected.push({ input: placeholderInput, reason: "scope inválido (tem de ser 'player' ou 'team')" });
-      continue;
-    }
-    const resolution = resolveInsightTarget(bootstrap, scope, {
-      id: typeof r?.id === "number" ? (r.id as number) : undefined,
-      playerName: r?.playerName as string | undefined,
-      teamShortName: r?.teamShortName as string | undefined,
-      teamName: r?.teamName as string | undefined,
-    });
-    if (!resolution.ok) {
-      rejected.push({ input: placeholderInput, reason: resolution.reason });
-      continue;
-    }
-    resolved.push({
-      input: {
-        scope,
-        id: resolution.id,
-        label: resolution.label,
-        factor: r?.factor as number,
-        reason: r?.reason as string,
-        source: r?.source as string,
-      },
-    });
-  }
-
-  // Every resolved id is by construction a real, current player/team —
-  // isValidId here is just defense-in-depth, not doing the real work.
-  const result = await saveDynamicInsights(
-    resolved.map((r) => r.input),
-    () => true
-  );
-  if (!result.ok) {
-    return NextResponse.json({ error: result.error ?? "falha desconhecida", rejected }, { status: 502 });
-  }
-  const allRejected = [...rejected, ...result.rejected];
-  await recordResearchRun({
-    at: new Date().toISOString(),
-    acceptedCount: result.accepted.length,
-    rejectedCount: allRejected.length,
-    acceptedLabels: result.accepted.map((a) => a.label),
-    rejectedReasons: allRejected.map((r) => `${r.input.label}: ${r.reason}`),
-    note,
-  });
-
-  return NextResponse.json({
-    accepted: result.accepted,
-    rejected: allRejected,
-    acceptedCount: result.accepted.length,
-    rejectedCount: allRejected.length,
-    recorded: true,
-  });
+  const result = await processInsightSubmission(body);
+  return NextResponse.json(result.body, { status: result.status });
 }
 
 export async function DELETE(req: NextRequest) {
