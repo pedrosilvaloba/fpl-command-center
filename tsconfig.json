@@ -22,13 +22,30 @@
       "@/*": ["./*"]
     }
   },
+  // SCOPED ON PURPOSE — do not put `**/*.ts` back here.
+  //
+  // `next build` type-checks whatever this list matches, so a stray .ts file
+  // anywhere in the repository can fail a production deploy even though it is
+  // not part of the app. That is not hypothetical: this project is deployed by
+  // uploading files through GitHub's web interface, which ADDS files and never
+  // removes them, so earlier uploads left orphan copies of the test files at
+  // the repository root. From the root, their `../lib/...` imports point
+  // outside the repository, and the v1.28 deploy died on ~200 type errors in
+  // files that no longer belonged to the project at all.
+  //
+  // Listing the real source directories makes the build check exactly what
+  // ships and nothing else. The test suite is still fully type-checked — by
+  // tsconfig.tests.json, via `npm run typecheck:tests` (and `npm run verify`).
   "include": [
     "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
+    "next.config.ts",
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "components/**/*.ts",
+    "components/**/*.tsx",
+    "lib/**/*.ts",
     ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
-    "**/*.mts"
+    ".next/dev/types/**/*.ts"
   ],
   "exclude": ["node_modules"]
 }

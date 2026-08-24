@@ -65,6 +65,8 @@ lib/
   strategy.ts     Playbook e regras 2026/27 (conteúdo da investigação)
   constants.ts    Team ID e League ID por omissão desta instalação pessoal
   kv.ts           Cliente Upstash Redis (com fallback gracioso se não ligado)
+tsconfig.json       Verificação de tipos DO QUE É PUBLICADO — lista pastas reais, nunca `**/*` (ver v1.28.1)
+tsconfig.tests.json Verificação de tipos da suite de testes
 tests/
   fixtures.ts        Dados sintéticos partilhados + micro-harness de asserções
   regression.test.ts Suite de regressão — um teste por defeito encontrado na auditoria
@@ -81,6 +83,87 @@ components/
   MyTeamPanel.tsx     A Minha Equipa — liga um Team ID real (client)
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
+
+## Novo na v1.28.2 — o orçamento estava errado, e mandava comprar o incomprável
+
+Reportado em produção: a app recomendava vender um jogador e comprar outro
+que não havia dinheiro para comprar. Confirmado nos dados reais da conta e
+corrigido.
+
+**A causa.** A FPL publica dois números de dinheiro: `last_deadline_value` e
+`last_deadline_bank`. Este ficheiro dizia, num comentário, que o `value` NÃO
+incluía o saldo — e somava o saldo por cima. O comentário estava errado e
+nunca tinha sido verificado contra nada.
+
+A prova está nos dados da jornada 1 desta conta, antes de qualquer
+transferência: `value = 1000`, `bank = 15`. Toda a gente começa com
+exatamente £100.0m. Se o `value` excluísse o saldo, os quinze jogadores
+valeriam £100.0m e o total seria £101.5m — que ninguém alguma vez teve. Logo
+o plantel vale £98.5m e o `value` é plantel + saldo.
+
+O resultado é que o planeador acreditava ter **£101.5m contra os £100.0m
+reais**. Um erro de £1.5m chega e sobra para tornar viável uma troca que não
+é. E é a pior classe de erro que este projeto pode ter: uma recomendação que
+não se consegue executar é pior do que não haver recomendação nenhuma,
+porque contamina a confiança em tudo o resto que está ao lado.
+
+O mesmo engano alimentava a estimativa dos preços de venda, que reconcilia os
+preços listados contra o valor real do plantel: medir a diferença contra um
+total £1.5m acima do verdadeiro subestimava o desconto de venda de todos os
+jogadores exatamente no valor do saldo.
+
+**A correção.** `totalBudgetM` passa a ser o `value` tal como vem (já contém
+o saldo) e o valor do plantel passa a ser `value − bank`. A aritmética saiu
+de dentro da chamada de rede para uma função própria, `deriveBudget`, por uma
+razão concreta: esteve errada tanto tempo em parte porque estava enterrada
+num sítio onde nenhum teste lhe chegava.
+
+**Os testes que faltavam.** Dois, e ambos foram validados a partir o código
+de propósito para confirmar que apanham o erro:
+
+- `deriveBudget` contra os números reais da jornada 1. Repor a soma dupla faz
+  falhar cinco verificações, com o £101.5m à vista.
+- Um plano de transferências com um alvo apetecível e £6.5m acima do que
+  existe. Este teste começou por ser inútil — todas as trocas do cenário
+  custavam o mesmo, por isso dar £25m a mais ao solver não se notava. Foi
+  reescrito até dar erro quando devia: agora, com folga a mais, falha a
+  dizer "£96.5m de £90.0m".
+
+**No painel.** A troca mostrava o preço de MERCADO de quem sai. Não é esse o
+dinheiro que entra: a FPL só devolve metade da subida desde a compra, por
+isso o preço de venda pode ser mais baixo — e é o de venda que paga a
+compra. Passa a mostrar o preço de venda e, quando os dois diferem, também o
+de mercado entre parênteses.
+
+## Novo na v1.28.1 — o deploy da v1.28 falhou, e a culpa era da configuração
+
+A v1.28 foi enviada duas vezes e o build morreu as duas, com cerca de duzentos
+erros de TypeScript em ficheiros de teste. Os ficheiros do projeto estavam
+todos certos; o problema era outro, e vale a pena ficar registado porque é
+estrutural e ia voltar a acontecer.
+
+Este projeto é publicado enviando ficheiros pela interface web do GitHub, que
+**acrescenta ficheiros e nunca remove nenhum**. Envios anteriores deixaram
+cópias órfãs de `fixtures.ts`, `perf.test.ts`, `regression.test.ts` e
+`page.tsx` na RAIZ do repositório. A partir da raiz, os `import ... from
+"../lib/..."` desses ficheiros apontam para fora do repositório — daí os
+erros. E o `tsconfig.json` mandava verificar `**/*.ts`, ou seja, tudo, incluindo
+ficheiros que já não pertenciam ao projeto.
+
+Reproduzido localmente antes de corrigir: com as três cópias colocadas na raiz,
+o `next build` falha exatamente com as mesmas linhas que o Vercel deu.
+
+A correção é a configuração passar a listar as pastas reais (`app/`,
+`components/`, `lib/`) em vez de "tudo". O build passa a verificar exatamente
+o que é publicado e mais nada, por isso nenhum ficheiro perdido no repositório
+consegue voltar a derrubar um deploy. Os testes continuam a ser verificados
+por inteiro — agora por `tsconfig.tests.json`, via `npm run typecheck:tests`,
+que também entrou no `npm run verify`.
+
+Fica a valer a pena limpar a raiz do repositório (apagar lá `fixtures.ts`,
+`perf.test.ts`, `regression.test.ts` e `page.tsx`), não porque o build precise,
+mas porque código duplicado e desatualizado é uma armadilha para quem lá for
+mexer depois.
 
 ## Novo na v1.28 — auditoria externa ao modelo
 

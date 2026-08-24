@@ -20,7 +20,7 @@ function Move({
   cashDeltaM,
   urgency,
 }: {
-  out: { name: string; team: string; type: number; price: number };
+  out: { name: string; team: string; type: number; price: number; sellingPrice?: number };
   into: { name: string; team: string; type: number; price: number };
   gain: number;
   cashDeltaM: number;
@@ -39,7 +39,17 @@ function Move({
           </span>
           <ClubKit shortName={out.team} isKeeper={out.type === 1} size={20} />
           <span className="font-semibold line-through decoration-2">{out.name}</span>
-          <span className="font-mono text-xs opacity-80">£{out.price.toFixed(1)}m</span>
+          {/* The SALE price, which is what pays for the incoming player. When
+              FPL's half-refund rule makes it lower than the listed price, both
+              are shown — hiding the gap is what makes a plan look affordable
+              when it is not. */}
+          <span className="font-mono text-xs opacity-80">
+            £{(out.sellingPrice ?? out.price).toFixed(1)}m
+            {out.sellingPrice !== undefined &&
+              Math.abs(out.sellingPrice - out.price) > 0.049 && (
+                <span className="opacity-70"> (mercado £{out.price.toFixed(1)}m)</span>
+              )}
+          </span>
         </span>
         <span aria-hidden className="hidden text-text-muted sm:inline">
           →
@@ -129,6 +139,7 @@ function PlanCard({
                 team: m.out.team.short_name,
                 type: m.out.element.element_type,
                 price: m.out.priceM,
+                sellingPrice: m.outSellingPriceM,
               }}
               into={{
                 name: m.in.element.web_name,

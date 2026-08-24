@@ -1,0 +1,19 @@
+{
+  // The test suite's own type-check.
+  //
+  // tsconfig.json deliberately scopes itself to the directories that actually
+  // ship, so that a stray file in the repository can never fail a production
+  // deploy (see the comment there). That scoping must not mean the tests go
+  // unchecked — they import the real modules and a broken test import is a
+  // real signal. This config checks them, against the same strict options.
+  //
+  // Run with: npm run typecheck:tests
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": false
+  },
+  // `next-env.d.ts` is required, not decorative: it is what augments
+  // `RequestInit` with Next's `next: { revalidate }` option, which
+  // lib/fpl-client.ts and lib/oddsapi.ts both pass.
+  "include": ["next-env.d.ts", "lib/**/*.ts", "tests/**/*.ts"]
+}

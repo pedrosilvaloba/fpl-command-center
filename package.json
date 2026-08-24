@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "tsx tests/regression.test.ts",
-    "verify": "tsc --noEmit && eslint && tsx tests/regression.test.ts && tsx tests/perf.test.ts",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",
+    "verify": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json && eslint && tsx tests/regression.test.ts && tsx tests/perf.test.ts",
     "perf": "tsx tests/perf.test.ts"
   },
   "dependencies": {

@@ -143,6 +143,11 @@ export interface TransferMove {
   gain: number;
   /** Cash freed (positive) or spent (negative) by this swap, £m. */
   cashDeltaM: number;
+  /** What selling this player ACTUALLY pays you. FPL only refunds half of
+   * any rise since you bought him, so this can be below his listed price —
+   * and it is the number the transfer has to be paid for with. Showing the
+   * listed price instead makes a move look more affordable than it is. */
+  outSellingPriceM: number;
   urgency: string | null;
 }
 
@@ -412,6 +417,7 @@ function buildMoves(
       gain: Math.round((i.expectedPoints - o.expectedPoints) * 10) / 10,
       cashDeltaM:
         Math.round(((costM.get(o.element.id) ?? o.priceM) - i.priceM) * 10) / 10,
+      outSellingPriceM: Math.round((costM.get(o.element.id) ?? o.priceM) * 10) / 10,
       urgency: urgencyParts.length > 0 ? urgencyParts.join(" · ") : null,
     });
   }

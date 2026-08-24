@@ -85,9 +85,12 @@ export interface SquadState {
   fromEvent: number | null;
   owned: OwnedPlayer[];
   bankM: number;
-  /** Sum of selling prices — FPL's own `last_deadline_value`. */
+  /** Sum of the fifteen SELLING prices — i.e. FPL's `last_deadline_value`
+   * with the bank taken back out of it. See the note in `buildSquadState`. */
   squadValueM: number;
-  /** bankM + squadValueM: what the planner may spend in total. */
+  /** What the planner may spend in total: the squad's sale value plus the
+   * bank. This is FPL's `last_deadline_value` unchanged, because that figure
+   * already contains the bank. */
   totalBudgetM: number;
   sellingPriceIsEstimated: boolean;
   sellingPriceNote: string;
@@ -191,6 +194,66 @@ export function reconstructFreeTransfers(
     (recent.length > 0 ? `Últimas: ${recent.join(" · ")}.` : "Sem transferências registadas até agora.");
 
   return { freeTransfers: Math.min(MAX_FREE_TRANSFERS, Math.max(0, ft)), note };
+}
+
+// --------------------------------------------------------------------------
+// Budget
+// --------------------------------------------------------------------------
+
+export interface BudgetBreakdown {
+  bankM: number;
+  squadValueM: number;
+  totalBudgetM: number;
+}
+
+/**
+ * Splits FPL's two money figures into the three numbers the planner needs.
+ *
+ * `last_deadline_value` INCLUDES THE BANK. Until v1.28.2 this file asserted
+ * the opposite — in a comment, never checked — and then added the bank on top,
+ * so the transfer planner was handed money that does not exist.
+ *
+ * The proof is in one real account's gameweek-1 data, before any transfer had
+ * been made: value = 1000, bank = 15. Every manager starts with exactly
+ * £100.0m. If `value` excluded the bank, the fifteen players would be worth
+ * £100.0m and the total £101.5m — which nobody has ever had. So the squad is
+ * worth £98.5m, and `value` is squad + bank.
+ *
+ * The consequence was reported from production: the planner believed it had
+ * £101.5m against a real £100.0m and recommended a transfer that could not be
+ * executed. That is the worst class of bug this project can have — advice you
+ * cannot act on is worse than no advice, because it costs trust in everything
+ * beside it.
+ *
+ * The same error fed `estimateSellingPrices` below, which reconciles listed
+ * prices against the squad's true sale value: measuring the shortfall against
+ * a total £1.5m too high understated every player's sale discount by exactly
+ * the bank.
+ *
+ * This lives in its own exported function purely so it can be tested. The
+ * arithmetic was wrong for as long as it was, in part, because it was three
+ * lines buried inside a network call with no seam a test could reach.
+ */
+export function deriveBudget(
+  lastDeadlineValueTenths: number | null | undefined,
+  lastDeadlineBankTenths: number | null | undefined
+): BudgetBreakdown {
+  const round1 = (v: number) => Math.round(v * 10) / 10;
+  const total = Number.isFinite(lastDeadlineValueTenths as number)
+    ? (lastDeadlineValueTenths as number) / 10
+    : 100;
+  const bank = Number.isFinite(lastDeadlineBankTenths as number)
+    ? Math.max(0, (lastDeadlineBankTenths as number) / 10)
+    : 0;
+  const totalBudgetM = round1(total);
+  // A bank larger than the reported total would mean the squad had negative
+  // value, which is impossible; clamp rather than propagate nonsense.
+  const bankM = round1(Math.min(bank, totalBudgetM));
+  return {
+    bankM,
+    squadValueM: round1(totalBudgetM - bankM),
+    totalBudgetM,
+  };
 }
 
 // --------------------------------------------------------------------------
@@ -373,9 +436,10 @@ export async function loadSquadState(
   }
 
   const ownedIds = picks.picks.map((p) => p.element);
-  // `last_deadline_value` is in tenths and ALREADY EXCLUDES the bank.
-  const squadValueM = Math.round((entry.last_deadline_value ?? 1000) / 10 * 10) / 10;
-  const bankM = Math.round((entry.last_deadline_bank ?? 0) / 10 * 10) / 10;
+  const { bankM, squadValueM, totalBudgetM } = deriveBudget(
+    entry.last_deadline_value,
+    entry.last_deadline_bank
+  );
 
   const selling = estimateSellingPrices(
     ownedIds,
@@ -406,7 +470,7 @@ export async function loadSquadState(
     owned,
     bankM,
     squadValueM,
-    totalBudgetM: Math.round((bankM + squadValueM) * 10) / 10,
+    totalBudgetM,
     sellingPriceIsEstimated: selling.estimated,
     sellingPriceNote: selling.note,
     freeTransfers: ft.freeTransfers,

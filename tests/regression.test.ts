@@ -53,6 +53,7 @@ import {
 import {
   reconstructFreeTransfers,
   estimateSellingPrices,
+  deriveBudget,
   summariseChips,
   type SquadState,
 } from "../lib/squadstate";
@@ -2871,6 +2872,164 @@ function testBacktestRunsEndToEnd() {
   );
 }
 
+// ---------------------------------------------------------------------
+// v1.28.2 — o orçamento. Reportado em produção: a app mandava comprar um
+// jogador que não havia dinheiro para comprar.
+//
+// A causa foi um comentário que afirmava, sem nunca ter sido verificado,
+// que `last_deadline_value` da FPL não incluía o saldo. Inclui. O saldo
+// era somado duas vezes.
+// ---------------------------------------------------------------------
+
+function testBudgetSplit() {
+  // Dados reais da equipa 2107193 na jornada 1, antes de qualquer
+  // transferência: value = 1000, bank = 15. Toda a gente começa com
+  // exatamente £100.0m, por isso o plantel vale £98.5m e o total £100.0m.
+  // Se o total desse £101.5m, seria dinheiro que não existe.
+  const gw1 = deriveBudget(1000, 15);
+  check(
+    "o valor publicado pela FPL já inclui o saldo — não se soma outra vez",
+    gw1.totalBudgetM === 100.0,
+    `£${gw1.totalBudgetM}m`
+  );
+  check(
+    "o plantel vale o total menos o saldo",
+    gw1.squadValueM === 98.5,
+    `£${gw1.squadValueM}m`
+  );
+  check("e o saldo é reportado tal como vem", gw1.bankM === 1.5, `£${gw1.bankM}m`);
+  check(
+    "as três parcelas fecham entre si",
+    Math.abs(gw1.squadValueM + gw1.bankM - gw1.totalBudgetM) < 1e-9
+  );
+
+  // Ninguém pode ter mais do que os £100.0m iniciais sem ter ganho valor.
+  check(
+    "na jornada 1 o orçamento não pode passar de £100.0m",
+    deriveBudget(1000, 15).totalBudgetM <= 100.0 &&
+      deriveBudget(1000, 0).totalBudgetM <= 100.0 &&
+      deriveBudget(1000, 40).totalBudgetM <= 100.0
+  );
+
+  // Uma equipa que valorizou.
+  const later = deriveBudget(1034, 7);
+  check(
+    "com valorização, o total é o que a FPL diz e o plantel é o resto",
+    later.totalBudgetM === 103.4 && later.squadValueM === 102.7 && later.bankM === 0.7,
+    `${later.totalBudgetM}/${later.squadValueM}/${later.bankM}`
+  );
+
+  // Robustez: campos em falta ou absurdos não podem produzir NaN nem
+  // orçamentos negativos, que entrariam direitos no solver.
+  const missing = deriveBudget(undefined, undefined);
+  check(
+    "sem dados, assume os £100.0m iniciais e saldo zero",
+    missing.totalBudgetM === 100 && missing.bankM === 0 && missing.squadValueM === 100
+  );
+  const absurd = deriveBudget(1000, 99999);
+  check(
+    "um saldo impossível não gera um plantel de valor negativo",
+    absurd.squadValueM >= 0 && absurd.totalBudgetM === 100,
+    `${absurd.squadValueM}`
+  );
+  check(
+    "nunca sai NaN de nenhuma das três parcelas",
+    [absurd, missing, gw1, later].every((b) =>
+      [b.bankM, b.squadValueM, b.totalBudgetM].every((v) => Number.isFinite(v))
+    )
+  );
+}
+
+function testPlanNeverExceedsRealMoney() {
+  // O teste que faltava e que teria apanhado o erro: qualquer plano
+  // recomendado tem de caber no dinheiro que existe mesmo — preços de
+  // VENDA para quem sai, preços de compra para quem entra.
+  const { owned, scored } = mkTransferPool([6, 5, 4]);
+  const state = mkState(owned, 2, 0.5);
+  const advice = planTransfers(scored, state, { currentEvent: 12 });
+  check("o planeador produz planos com este cenário", advice.plans.length > 0);
+
+  const priceOf = (id: number, isOwned: boolean) => {
+    if (isOwned) {
+      const o = state.owned.find((x) => x.elementId === id);
+      if (o) return o.sellingPriceM;
+    }
+    return scored.find((p) => p.element.id === id)?.priceM ?? 0;
+  };
+
+  for (const plan of advice.plans) {
+    const ownedIds = new Set(state.owned.map((o) => o.elementId));
+    const cost = plan.squad.reduce(
+      (s, p) => s + priceOf(p.element.id, ownedIds.has(p.element.id)),
+      0
+    );
+    check(
+      `o plano "${plan.label}" cabe no dinheiro real (£${cost.toFixed(1)}m de £${state.totalBudgetM.toFixed(1)}m)`,
+      cost <= state.totalBudgetM + 1e-6,
+      `excede em £${(cost - state.totalBudgetM).toFixed(1)}m`
+    );
+    check(
+      `e o saldo que sobra no plano "${plan.label}" nunca é negativo`,
+      plan.bankAfterM >= -1e-6,
+      `£${plan.bankAfterM}m`
+    );
+  }
+
+  // E o cenário que apanha mesmo o erro: um alvo caro que NÃO cabe.
+  // Sem isto o teste é vazio — todas as trocas custam o mesmo e sobrar
+  // dinheiro a mais nunca se nota.
+  const cheapOwned: ScoredPlayer[] = [];
+  const shape: [number, number][] = [[1, 2], [2, 5], [3, 5], [4, 3]];
+  let nid = 1;
+  let club = 0;
+  for (const [type, count] of shape) {
+    for (let i = 0; i < count; i++) {
+      cheapOwned.push(
+        mkSim(nid++, { teamId: (club++ % 20) + 1, type, epNext: 4, price: 6, own: 15 })
+      );
+    }
+  }
+  const market: ScoredPlayer[] = [];
+  for (const [type] of shape) {
+    for (let i = 0; i < 6; i++) {
+      market.push(
+        mkSim(nid++, { teamId: (club++ % 20) + 1, type, epNext: 3.8, price: 6, own: 12 })
+      );
+    }
+  }
+  // O engodo: muito melhor, e £6.5m acima do que existe para o comprar.
+  const unaffordable = mkSim(nid++, {
+    teamId: 19, type: 3, epNext: 12, price: 12.5, own: 40,
+  });
+  market.push(unaffordable);
+
+  // 15 x £6m = £90m de plantel, zero de saldo. Comprar o engodo custaria
+  // 90 - 6 + 12.5 = £96.5m. Não há.
+  const poor = mkState(cheapOwned, 2, 0);
+  const poorAdvice = planTransfers([...cheapOwned, ...market], poor, { currentEvent: 12 });
+  check(
+    "o cenário do teste tem mesmo um alvo apetecível e impossível de pagar",
+    unaffordable.priceM > 12 && poor.totalBudgetM === 90,
+    `£${poor.totalBudgetM}m`
+  );
+  for (const plan of poorAdvice.plans) {
+    const ownedIds2 = new Set(poor.owned.map((o) => o.elementId));
+    const cost = plan.squad.reduce((sum, p) => {
+      const o = poor.owned.find((x) => x.elementId === p.element.id);
+      return sum + (ownedIds2.has(p.element.id) && o ? o.sellingPriceM : p.priceM);
+    }, 0);
+    check(
+      `sem dinheiro, o plano "${plan.label}" não compra o que não pode pagar (£${cost.toFixed(1)}m de £${poor.totalBudgetM.toFixed(1)}m)`,
+      cost <= poor.totalBudgetM + 1e-6,
+      `excede em £${(cost - poor.totalBudgetM).toFixed(1)}m`
+    );
+    check(
+      `e o plano "${plan.label}" não contém o jogador inacessível`,
+      !plan.squad.some((p) => p.element.id === unaffordable.element.id)
+    );
+  }
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testFreeTransferReconstruction();
 testSellingPriceEstimation();
@@ -2929,6 +3088,9 @@ testBacktestDoesNotSeeTheFuture();
 testBacktestForgetsFutureResults();
 testBacktestMetrics();
 testBacktestRunsEndToEnd();
+
+testBudgetSplit();
+testPlanNeverExceedsRealMoney();
 
 report("regressão");
 const { passed, failed } = counts();
