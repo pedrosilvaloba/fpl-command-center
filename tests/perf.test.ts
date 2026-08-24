@@ -13,8 +13,8 @@ function mk(id: number, type: number, teamId: number, ep: number, price: number,
     team: makeTeam(teamId), positionShort: pos[type], priceM: price, ownershipPct: own,
     formNum: 3, fixtureAvgDifficulty: 3, nextOpponents: "", expectedGoalsFor: 1.5,
     cleanSheetProbability: 0.3, individualExpectedGI: 0.4, ceilingGI: 1, floorGI: 0,
-    expectedPoints: ep * 5, expectedPointsNext: ep,
-    breakdown: { appearance: 10, goals: 5, assists: 3, cleanSheet: 2, concededPenalty: -1, defensiveContribution: 0, bonus: 2, saves: 0, total: ep * 5 },
+    expectedPoints: ep * 5, expectedPointsNext: ep, pPlay: 1,
+    breakdown: { appearance: 10, goals: 5, assists: 3, cleanSheet: 2, concededPenalty: -1, defensiveContribution: 0, bonus: 2, saves: 0, cards: 0, total: ep * 5 },
     score: ep * 5, isDifferential: own < 10, isPreseason: false, reasons: [],
   } as ScoredPlayer;
 }

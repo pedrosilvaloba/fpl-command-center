@@ -175,6 +175,8 @@ export interface ExpectedPointsBreakdown {
   bonus: number;
   /** Goalkeeper save points (1 per 3 saves). Zero for outfielders. */
   saves: number;
+  /** Expected card cost. Always negative or zero. */
+  cards: number;
   total: number;
 }
 
@@ -190,9 +192,51 @@ export interface PlayerRates {
   saves90: number;
   /** Defensive-contribution actions per 90. */
   dc90: number;
+  /** Yellow cards per 90. */
+  yellow90: number;
+  /** Red cards per 90. */
+  red90: number;
   /** Extra goal involvement per 90 attributable to set-piece duty. */
   setPieceXg90: number;
   reasons: string[];
+}
+
+/**
+ * P(X >= k) for X ~ Poisson(lambda). The FPL scoring table is full of
+ * thresholds — 3 saves, 2 goals conceded, 10 defensive actions — and every
+ * one of them needs a tail probability rather than a ratio of averages.
+ */
+export function poissonSurvival(k: number, lambda: number): number {
+  if (!(lambda > 0)) return k <= 0 ? 1 : 0;
+  if (k <= 0) return 1;
+  let term = Math.exp(-lambda);
+  let cdf = term;
+  for (let i = 1; i < k; i++) {
+    term *= lambda / i;
+    cdf += term;
+  }
+  return Math.min(1, Math.max(0, 1 - cdf));
+}
+
+/**
+ * E[floor(X / d)] for X ~ Poisson(lambda), by the identity
+ * E[floor(X/d)] = sum over j >= 1 of P(X >= j*d).
+ *
+ * This exists because the model previously computed lambda/d, which is the
+ * function of the average rather than the average of the function. For a
+ * step payout that is not an approximation, it is a one-sided bias: with
+ * d = 2 it over-penalises every defender by a near-constant 0.23 points a
+ * fixture, and with d = 3 it over-credits every goalkeeper by 0.33.
+ */
+export function expectedFloorDivide(lambda: number, d: number, maxTerms = 12): number {
+  if (!(lambda > 0) || d <= 0) return 0;
+  let total = 0;
+  for (let j = 1; j <= maxTerms; j++) {
+    const p = poissonSurvival(j * d, lambda);
+    if (p < 1e-6) break;
+    total += p;
+  }
+  return total;
 }
 
 const PENALTY_XG90: Record<number, number> = { 1: 0.22, 2: 0.05 };
@@ -289,7 +333,43 @@ export function computePlayerRates(el: FplElement): PlayerRates {
     if (fkOrder === 1) reasons.push("responsável por bolas paradas");
   }
 
-  return { xg90, xa90, bonus90, saves90, dc90, setPieceXg90, reasons };
+  // Cards. Both fields are in the bootstrap payload and were simply never
+  // read. Shrunk like every other rate below, because a single early
+  // booking on 90 minutes played implies a 1.0/90 rate that is obviously
+  // noise.
+  const yellow90 = per90(toNum(el.yellow_cards));
+  const red90 = per90(toNum(el.red_cards));
+  if (yellow90 >= 0.3) {
+    reasons.push(
+      `propensão a cartões: ~${yellow90.toFixed(2)} amarelos por 90min`
+    );
+  }
+
+  // SMALL-SAMPLE SHRINKAGE.
+  //
+  // Every rate above is a per-90 computed from whatever minutes exist. On
+  // 90 minutes played, one 60-BPS match implies a BPS rate of 60 and one
+  // booking implies a card every game. The global trust ramp elsewhere
+  // keys off total minutes and treats all statistics alike, but they do not
+  // accumulate alike: expected goals builds shot by shot, bonus realises a
+  // handful of times a season. Each rate is therefore pulled toward a
+  // neutral prior by its own sample size, with a heavier prior on the
+  // statistics that realise rarely.
+  const matches = minutes / 90;
+  const shrink = (rate: number, k: number, prior = 0) =>
+    matches > 0 ? (rate * matches + prior * k) / (matches + k) : prior;
+
+  return {
+    xg90: shrink(xg90, 3),
+    xa90: shrink(xa90, 3),
+    bonus90: shrink(bonus90, 6),
+    saves90: shrink(saves90, 3),
+    dc90: shrink(dc90, 6),
+    yellow90: shrink(yellow90, 6, 0.12),
+    red90: shrink(red90, 10, 0.012),
+    setPieceXg90,
+    reasons,
+  };
 }
 
 /**
@@ -312,13 +392,28 @@ export function expectedPointsForFixture(
     teamAttackRatio: number;
     cleanSheetProbability: number;
     expectedGoalsAgainst: number;
+    /** The team's own average goals conceded this season. Used to scale the
+     * keeper's save rate against his own normal level rather than against a
+     * league constant — see the saves block below. Optional so callers that
+     * predate it still work. */
+    teamSeasonGoalsAgainst?: number;
   }
 ): ExpectedPointsBreakdown {
   const minuteShare = mins.expectedMinutes / 90;
 
   const appearance = mins.pPlay60 * 2 + Math.max(0, mins.pAppear - mins.pPlay60) * 1;
 
-  const goalRate = (rates.xg90 + rates.setPieceXg90) * ctx.teamAttackRatio;
+  // `rates.xg90` is blended from FPL's own expected_goals_per_90 and from
+  // realised goals. BOTH of those already contain penalties — Opta prices a
+  // penalty at ~0.79 xG and a converted one is obviously a goal. Adding
+  // `setPieceXg90` on top counted the designated taker's penalties a second
+  // time, inflating exactly the premium attackers who are captaincy
+  // candidates, where an error costs double.
+  //
+  // The set-piece rate is still computed and still surfaces as a reason,
+  // because knowing a player is on penalties is genuinely useful — it just
+  // must not be added to a number that already has it.
+  const goalRate = rates.xg90 * ctx.teamAttackRatio;
   const goals = goalRate * minuteShare * (GOAL_POINTS[elementType] ?? 4);
 
   const assists = rates.xa90 * ctx.teamAttackRatio * minuteShare * ASSIST_POINTS;
@@ -327,35 +422,85 @@ export function expectedPointsForFixture(
   const cleanSheet =
     (CLEAN_SHEET_POINTS[elementType] ?? 0) * ctx.cleanSheetProbability * mins.pPlay60;
 
-  // -1 per 2 goals conceded, for keepers and defenders, again only while
-  // on the pitch. Using expected goals against as a continuous proxy for
-  // the step function is a deliberate simplification.
+  // -1 for EVERY 2 goals conceded, keepers and defenders only.
+  //
+  // This used to be -(xGA / 2), which is the average divided by the step
+  // instead of the average OF the step. Verified numerically: at 1.35 xGA
+  // the old form charged 0.68 where the true expectation is 0.44, and the
+  // gap is near-constant (0.19 to 0.25) across the whole realistic range.
+  // Because it applies only to GK and DEF, it was a fixed tax on the
+  // defensive block that no midfielder or forward ever paid.
+  //
+  // The gate is also corrected: goals are conceded while a player is on the
+  // pitch at all, not only after 60 minutes, so the rate scales by minutes
+  // played rather than by P(reaching 60).
+  const concededLambda = Math.max(0, ctx.expectedGoalsAgainst) * minuteShare;
   const concededPenalty = CONCEDE_PENALTY_POSITIONS.has(elementType)
-    ? -(ctx.expectedGoalsAgainst / 2) * mins.pPlay60
+    ? -expectedFloorDivide(concededLambda, 2)
     : 0;
 
-  // Defensive contribution is an all-or-nothing per-match bonus, so it
-  // scales linearly with the number of fixtures — and needs close to a
-  // full match to accumulate the required actions.
+  // Defensive contribution: 2 points once a player crosses a threshold of
+  // defensive actions in a match. That is a TAIL PROBABILITY — an S-curve —
+  // and the old `(actions / threshold) * 0.5` was a straight line through
+  // the origin. Verified numerically: at 5 actions per 90 the line claimed
+  // 25% where the truth is 3%; at 15 it claimed 75% where the truth is 93%.
+  // Wrong in both directions at once, which broke exactly the cheap-defender
+  // lever this scoring rule created.
+  //
+  // The 60-minute gate is dropped too: the bonus pays on the action count,
+  // so a defender withdrawn at 55 minutes with enough actions still earns
+  // it. Scaling the rate by minutes played handles that correctly.
   const threshold = DC_THRESHOLD[elementType];
-  const pDC = threshold
-    ? Math.min(0.9, Math.max(0, (rates.dc90 / threshold) * 0.5))
+  const defensiveContribution = threshold
+    ? poissonSurvival(threshold, rates.dc90 * minuteShare) * DC_POINTS
     : 0;
-  const defensiveContribution = pDC * mins.pPlay60 * DC_POINTS;
 
   const bonus = rates.bonus90 * minuteShare;
+
+  // Cards. Previously omitted as "small and unpredictable"; the yellow-card
+  // rate is in fact one of the more stable per-player rates there is, and
+  // the omission was not neutral. It fell hardest on high-tackle centre-backs
+  // and defensive midfielders running 0.25-0.40 yellows per 90 — which is
+  // precisely the archetype the defensive-contribution bonus above rewards.
+  // The model was paying them to tackle and never charging them for the
+  // bookings tackling produces.
+  const cards = -(rates.yellow90 * 1 + rates.red90 * 3) * minuteShare;
 
   // Saves scale with how much shooting the opponent does, so a harder
   // fixture RAISES a keeper's save points even as it lowers his clean-sheet
   // points — the two move in opposite directions, which is exactly why
   // clean sheets alone misprice the position.
+  //
+  // Two corrections here. First, the fixture adjustment now divides by the
+  // team's OWN season baseline rather than by a league constant: the
+  // keeper's save rate was earned behind this defence and already contains
+  // its quality, so dividing by the league average counted team strength
+  // twice — the very error the attacking side of this function fixed and
+  // this side did not. Second, 1 point per 3 saves is a step, so it needs
+  // the same exact treatment as goals conceded; lambda/3 over-credited
+  // every keeper by a flat 0.33 points a fixture.
+  const savesBaseline = ctx.teamSeasonGoalsAgainst && ctx.teamSeasonGoalsAgainst > 0
+    ? ctx.teamSeasonGoalsAgainst
+    : 1.35;
   const saveRateAdjustment =
-    ctx.expectedGoalsAgainst > 0 ? Math.min(1.8, Math.max(0.5, ctx.expectedGoalsAgainst / 1.35)) : 1;
+    ctx.expectedGoalsAgainst > 0
+      ? Math.min(1.8, Math.max(0.5, ctx.expectedGoalsAgainst / savesBaseline))
+      : 1;
   const saves =
-    elementType === 1 ? (rates.saves90 * saveRateAdjustment * minuteShare) / 3 : 0;
+    elementType === 1
+      ? expectedFloorDivide(rates.saves90 * saveRateAdjustment * minuteShare, 3)
+      : 0;
 
   const total =
-    appearance + goals + assists + cleanSheet + concededPenalty + defensiveContribution + bonus + saves;
+    appearance +
+    goals +
+    assists +
+    cleanSheet +
+    concededPenalty +
+    defensiveContribution +
+    bonus +
+    saves +
+    cards;
 
   return {
     appearance,
@@ -366,6 +511,7 @@ export function expectedPointsForFixture(
     defensiveContribution,
     bonus,
     saves,
+    cards,
     total,
   };
 }
@@ -381,6 +527,7 @@ export function scaleBreakdown(b: ExpectedPointsBreakdown, n: number): ExpectedP
     defensiveContribution: b.defensiveContribution * n,
     bonus: b.bonus * n,
     saves: b.saves * n,
+    cards: b.cards * n,
     total: b.total * n,
   };
 }

@@ -12,6 +12,10 @@ export interface OddsMatch {
    * expected goals rather than only the home/away balance — see
    * lib/oddsmodel.ts. Null when no bookmaker priced the 2.5 line. */
   overProb: number | null;
+  /** The goals line `overProb` refers to. Null when no totals market. */
+  overLine?: number | null;
+  /** Number of bookmakers behind the 1X2 consensus. */
+  bookmakerCount?: number;
 }
 
 /**
@@ -138,29 +142,50 @@ export async function getOddsStatus(): Promise<OddsStatus> {
         });
       }
 
-      // Totals market (over/under 2.5 goals), de-vigged the same way.
-      // Without this the market can only tell us who is more likely to
-      // win, not how many goals to expect — which is exactly the half the
-      // fixture model needs for clean sheets.
-      const overs: number[] = [];
+      // Totals market, de-vigged the same way. Without this the market can
+      // only tell us who is more likely to win, not how many goals to
+      // expect — which is exactly the half the fixture model needs for
+      // clean sheets.
+      //
+      // ANY line is accepted, not just 2.5. Bookmakers move the line to 3.0
+      // on lopsided high-scoring fixtures and to 2.0 on tight ones, so
+      // demanding 2.5 exactly discarded the totals market on precisely the
+      // matches where a default total is furthest from the truth — a bias
+      // toward the mean on the fixtures a manager is trying to tell apart.
+      const overs: { prob: number; line: number }[] = [];
       for (const bm of bookmakers) {
         const totals = Array.isArray(bm?.markets)
           ? bm.markets.find((m) => m?.key === "totals")
           : undefined;
         const outcomes = Array.isArray(totals?.outcomes) ? totals.outcomes : [];
-        const over = outcomes.find(
-          (o) => o?.name === "Over" && Math.abs((o?.point ?? 0) - 2.5) < 1e-9
-        );
+        const over = outcomes.find((o) => o?.name === "Over" && o?.price);
+        if (!over) continue;
+        const line = Number(over.point);
+        if (!Number.isFinite(line) || line <= 0) continue;
         const under = outcomes.find(
-          (o) => o?.name === "Under" && Math.abs((o?.point ?? 0) - 2.5) < 1e-9
+          (o) => o?.name === "Under" && Math.abs((o?.point ?? 0) - line) < 1e-9
         );
-        if (!over?.price || !under?.price) continue;
+        if (!under?.price || !over.price) continue;
         const rawOver = 1 / over.price;
         const rawUnder = 1 / under.price;
         const total = rawOver + rawUnder;
         if (!total) continue;
-        overs.push(rawOver / total);
+        overs.push({ prob: rawOver / total, line });
       }
+      // Different bookmakers may quote different lines; averaging across
+      // them would be averaging incompatible quantities. Use the modal line
+      // and only the books that quoted it.
+      const lineCounts = new Map<number, number>();
+      for (const o of overs) lineCounts.set(o.line, (lineCounts.get(o.line) ?? 0) + 1);
+      let modalLine = 2.5;
+      let modalCount = 0;
+      for (const [line, count] of lineCounts) {
+        if (count > modalCount) {
+          modalCount = count;
+          modalLine = line;
+        }
+      }
+      const onModalLine = overs.filter((o) => Math.abs(o.line - modalLine) < 1e-9);
 
       if (implied.length === 0) continue;
       const n = implied.length;
@@ -170,7 +195,13 @@ export async function getOddsStatus(): Promise<OddsStatus> {
         homeWinProb: implied.reduce((s, x) => s + x.home, 0) / n,
         drawProb: implied.reduce((s, x) => s + x.draw, 0) / n,
         awayWinProb: implied.reduce((s, x) => s + x.away, 0) / n,
-        overProb: overs.length ? overs.reduce((s, x) => s + x, 0) / overs.length : null,
+        overProb: onModalLine.length
+          ? onModalLine.reduce((s, x) => s + x.prob, 0) / onModalLine.length
+          : null,
+        overLine: onModalLine.length ? modalLine : null,
+        /** How many bookmakers priced the 1X2 market. A single book is not a
+         * consensus, and the fixture model can downgrade its confidence. */
+        bookmakerCount: n,
         commenceTime: match.commence_time ?? "",
       });
     }

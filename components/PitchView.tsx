@@ -80,12 +80,17 @@ function PlayerChip({
 export default function PitchView({
   starters,
   bench,
+  showBenchOrder = true,
   captainId,
   viceCaptainId,
   metric = "points",
 }: {
   starters: ScoredPlayer[];
+  /** Already in FPL substitution order — see orderBench in lib/recommend.ts. */
   bench: ScoredPlayer[];
+  /** Numbers the bench 1/2/3. An unnumbered row communicates nothing about
+   * the order automatic substitutions will actually follow. */
+  showBenchOrder?: boolean;
   captainId?: number;
   viceCaptainId?: number;
   /** Which number to print under each shirt. */
@@ -157,8 +162,15 @@ export default function PitchView({
             Banco
           </p>
           <div className="flex flex-wrap items-start justify-center gap-x-2 gap-y-2.5 sm:gap-x-4">
-            {bench.map((p) => (
-              <PlayerChip key={p.element.id} player={p} metric={metric} />
+            {bench.map((p, i) => (
+              <div key={p.element.id} className="flex flex-col items-center gap-1">
+                <PlayerChip player={p} metric={metric} />
+                {showBenchOrder && (
+                  <span className="font-mono text-[10px] leading-none text-text-muted">
+                    {p.element.element_type === 1 ? "GR" : String(i)}
+                  </span>
+                )}
+              </div>
             ))}
           </div>
         </div>
@@ -171,7 +183,8 @@ export default function PitchView({
         <span className="text-[var(--brand-green)]">C</span> capitão ·{" "}
         <span className="text-[var(--brand-cyan)]">V</span> vice ·{" "}
         <span className="text-[var(--brand-pink)]">!</span> dúvida sinalizada
-        pela FPL
+        pela FPL. O banco está pela ordem em que a FPL fará as substituições
+        automáticas — 1 entra primeiro.
       </p>
     </div>
   );

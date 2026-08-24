@@ -59,7 +59,8 @@ import { matchOutcomeProbabilities, BASE_HOME_GOALS, BASE_AWAY_GOALS } from "./m
  * trustworthy. Surfaced in the UI so a number is never mistaken for a
  * better-founded number than it is. */
 export type FixtureSource =
-  | "market" // bookmakers priced this exact fixture
+  | "market" // bookmakers priced this exact fixture, total included
+  | "market-1x2" // priced, but WITHOUT a totals market — the total is assumed
   | "market-ratings" // no line for this fixture; team ratings derived from the market
   | "results" // this season's actual results (Elo + goal rates)
   | "fpl" // FPL's own published strength ratings
@@ -67,6 +68,7 @@ export type FixtureSource =
 
 export const SOURCE_LABEL: Record<FixtureSource, string> = {
   market: "odds de mercado",
+  "market-1x2": "odds só de resultado (total estimado)",
   "market-ratings": "força derivada das odds",
   results: "resultados desta época",
   fpl: "ratings da FPL",
@@ -84,25 +86,38 @@ function poissonPmf(k: number, lambda: number): number {
 }
 
 /**
- * P(total goals > 2.5) for two independent Poisson scorelines — i.e.
- * 1 - P(0) - P(1) - P(2) on the sum, which is itself Poisson with mean
- * xgHome + xgAway.
+ * P(total goals > L) for two independent Poisson scorelines. The sum of two
+ * Poissons is itself Poisson with mean xgHome + xgAway, so this is just the
+ * tail above floor(L).
+ *
+ * The line is a parameter because bookmakers do not always set it at 2.5 —
+ * and crucially, WHEN they move it is not random. A lopsided high-scoring
+ * fixture gets 3.0 or 3.5; a tight one gets 2.0 or 2.25. Accepting only the
+ * 2.5 line therefore discarded the totals market on precisely the fixtures
+ * where a default total is furthest from the truth.
  */
-export function overTwoPointFiveProbability(xgHome: number, xgAway: number): number {
+export function overProbability(xgHome: number, xgAway: number, line = 2.5): number {
   const total = xgHome + xgAway;
-  const under = poissonPmf(0, total) + poissonPmf(1, total) + poissonPmf(2, total);
+  const maxUnder = Math.floor(line);
+  let under = 0;
+  for (let k = 0; k <= maxUnder; k++) under += poissonPmf(k, total);
   return 1 - under;
 }
 
+/** Back-compatible alias for the 2.5 line. */
+export function overTwoPointFiveProbability(xgHome: number, xgAway: number): number {
+  return overProbability(xgHome, xgAway, 2.5);
+}
+
 /** Solves for the total expected goals that reproduces a market's
- * P(over 2.5). Monotonic in the total, so a bisection is exact enough and
+ * P(over L). Monotonic in the total, so a bisection is exact enough and
  * cannot fail to converge. */
-export function totalGoalsFromOverProb(overProb: number): number {
+export function totalGoalsFromOverProb(overProb: number, line = 2.5): number {
   let lo = 0.3;
   let hi = 7;
   for (let i = 0; i < 60; i++) {
     const mid = (lo + hi) / 2;
-    const p = overTwoPointFiveProbability(mid / 2, mid / 2);
+    const p = overProbability(mid / 2, mid / 2, line);
     if (p < overProb) lo = mid;
     else hi = mid;
   }
@@ -115,6 +130,9 @@ export interface MarketExpectedGoals {
   /** True when the totals market was available, so the TOTAL is market-
    * derived rather than assumed. */
   totalFromMarket: boolean;
+  /** Alias kept for the fixture model, which needs to label a fixture whose
+   * total was invented differently from one whose total was priced. */
+  totalWasPriced: boolean;
 }
 
 /**
@@ -127,11 +145,21 @@ export interface MarketExpectedGoals {
  * market's. P(home win) increases monotonically with the home share, so
  * again bisection is safe.
  */
-export function expectedGoalsFromMarket(match: OddsMatch): MarketExpectedGoals {
+export function expectedGoalsFromMarket(
+  match: OddsMatch,
+  /** Fallback total when the bookmakers priced no over/under market. Passing
+   * the two teams' own rating-implied total is far better than a league
+   * constant — the constant is furthest from the truth on exactly the
+   * lopsided fixtures where bookmakers move the line away from 2.5 and the
+   * market therefore goes missing. */
+  fallbackTotal?: number
+): MarketExpectedGoals {
   const totalFromMarket = match.overProb !== null && Number.isFinite(match.overProb);
   const total = totalFromMarket
-    ? totalGoalsFromOverProb(match.overProb as number)
-    : BASE_HOME_GOALS + BASE_AWAY_GOALS;
+    ? totalGoalsFromOverProb(match.overProb as number, match.overLine ?? 2.5)
+    : fallbackTotal && fallbackTotal > 0
+      ? fallbackTotal
+      : BASE_HOME_GOALS + BASE_AWAY_GOALS;
 
   const targetHomeWin = match.homeWinProb;
   let lo = 0.05; // home share of the total
@@ -150,6 +178,7 @@ export function expectedGoalsFromMarket(match: OddsMatch): MarketExpectedGoals {
     xgHome: clamp(total * share, MIN_GOALS, MAX_GOALS),
     xgAway: clamp(total * (1 - share), MIN_GOALS, MAX_GOALS),
     totalFromMarket,
+    totalWasPriced: totalFromMarket,
   };
 }
 

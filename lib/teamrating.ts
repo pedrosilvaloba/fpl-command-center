@@ -46,8 +46,27 @@ const K_BASE = 20;
 // attack/defence factors away from 1.0 — same defensive philosophy as
 // the market-odds tilt in matchmodel.ts: a small sample of results (one
 // freak scoreline) shouldn't be allowed to dominate the model.
-const MIN_FACTOR = 0.8;
-const MAX_FACTOR = 1.25;
+/**
+ * How far a team is allowed to sit from the league average.
+ *
+ * These were 0.8 and 1.25 — a permanent ±25% ceiling. The intent was
+ * small-sample protection, but the clamp is applied AFTER the trust ramp,
+ * so it never relaxed: in April, with a full season of evidence, the best
+ * defence in the league was still capped at 25% better than average.
+ *
+ * The real range is far wider. Arsenal conceded 0.76 goals a game in
+ * 2023/24 against a league average of 1.64 — a defence rate of 2.15, not
+ * 1.25. Clamped, their home clean-sheet probability showed as 38% when the
+ * truth was 57%: nineteen percentage points, or about 0.68 points per
+ * defender per gameweek, on the single comparison defenders exist for.
+ *
+ * The bounds are now wide enough to contain the real league and exist only
+ * to stop a degenerate rate (a team that has conceded nothing in one match)
+ * producing an absurd factor. Small-sample protection lives entirely in the
+ * trust ramp below, which is where it belongs and where it already worked.
+ */
+const MIN_FACTOR = 0.5;
+const MAX_FACTOR = 1.6;
 // Number of finished matches at which trust in the in-season signal
 // reaches its cap.
 const TRUST_RAMP_MATCHES = 8;
@@ -134,8 +153,13 @@ export function computeDynamicTeamFactors(
       continue;
     }
     const leagueAvg = leagueAvgGoalsPerMatch || 1;
-    const avgFor = (goalsFor.get(team.id) ?? 0) / n;
-    const attackRate = avgFor / leagueAvg;
+    // Attack gets the same Laplace shrinkage as defence below. Without it a
+    // team that had failed to score in its first two matches produced an
+    // attack rate of exactly 0 while the defensive side of the same function
+    // was carefully protected against its mirror image — an asymmetry with
+    // no justification.
+    const shrunkFor = ((goalsFor.get(team.id) ?? 0) + leagueAvg) / (n + 1);
+    const attackRate = shrunkFor / leagueAvg;
 
     // Higher = fewer goals conceded than a league-average defence.
     //

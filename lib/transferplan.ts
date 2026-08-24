@@ -1,7 +1,7 @@
 import solver from "javascript-lp-solver";
 import type { ScoredPlayer } from "./recommend";
-import { pickBestXI, pickCaptain } from "./recommend";
-import { strategicValue } from "./optimizer";
+import { pickBestXI, pickCaptain, orderBench } from "./recommend";
+import { strategicValue, strategicValueNext } from "./optimizer";
 import { HIT_COST_POINTS, type SquadState } from "./squadstate";
 
 /**
@@ -55,10 +55,86 @@ const CHEAP_ENABLERS_PER_POSITION = 5;
 const SOLVE_TIMEOUT_MS = 5000;
 /** Bench places carry a fraction of a starter's value — see lib/optimizer.ts. */
 const BENCH_WEIGHT = 0.12;
+
+/**
+ * How much of a transfer's value BEYOND the coming gameweek to count.
+ *
+ * This is the single most consequential number in the file, and it used to
+ * be an implicit 1.0.
+ *
+ * The old objective charged the -4 once and credited the incoming player's
+ * edge across all five gameweeks of the window, so it accepted a hit
+ * whenever 5g > 4 — from 0.8 points a gameweek. That compares against a
+ * counterfactual that does not exist. The alternative to paying four points
+ * now is not "never make this transfer". It is "make it next week with the
+ * free transfer you are about to receive anyway", which captures gameweeks
+ * two through five of the same benefit at no cost. What the hit actually
+ * buys is ONE gameweek of the edge.
+ *
+ * So the horizon has to sit on both sides of the comparison or neither.
+ * Weeks beyond the next one are still worth something — you might spend
+ * next week's transfer elsewhere, the player might rise in price, the
+ * opportunity might close — but nothing like their face value. At 0.15 a
+ * hit needs roughly 2.5 points a gameweek of edge rather than 0.8, which is
+ * close to what strong managers actually demand.
+ */
+const FUTURE_DISCOUNT = 0.15;
+
+/**
+ * What a banked free transfer is worth as an option on next week's
+ * information — injuries, team news, price moves, a fixture swing.
+ *
+ * Without this the planner spent every accumulated transfer on any positive
+ * gain, and the "do nothing" plan could never express why holding is often
+ * right, even though its own explanatory text said so.
+ */
+const FT_OPTION_VALUE = 1.5;
 /** The most transfers this planner will consider without a chip. Beyond
  * this you are not making transfers, you are rebuilding — which is what the
  * wildcard signal below is for. */
 const MAX_TRANSFERS_CONSIDERED = 3;
+/** Window points that justify burning a wildcard once the season has settled. */
+const WILDCARD_MIN_GAIN = 12;
+/** Before this gameweek, the bar rises — see the wildcard threshold below. */
+const WILDCARD_SETTLED_EVENT = 10;
+
+/**
+ * The value of one player to the SQUAD (a multi-week asset) and to the
+ * ELEVEN (a one-week decision), under the active posture.
+ *
+ * Both the integer program's objective coefficients and the ranking of the
+ * finished plans are computed from this single function. They diverged twice
+ * during development — once by horizon and once by posture — and each time
+ * the symptom was the same: the solver optimised one quantity and the plan
+ * list was sorted by another, so the recommendation shown to the user was
+ * not the one the solver had chosen.
+ */
+export function playerValue(p: ScoredPlayer, beta: number): { squad: number; xi: number } {
+  const squad = strategicValue(p, beta);
+  const next = strategicValueNext(p, beta);
+  return { squad, xi: next + FUTURE_DISCOUNT * Math.max(0, squad - next) };
+}
+
+/** The objective the integer program maximises, evaluated on a finished
+ * plan. Ranking and optimisation are therefore the same quantity by
+ * construction rather than by discipline. */
+export function planObjective(
+  squad: ScoredPlayer[],
+  xi: ScoredPlayer[],
+  beta: number,
+  hits: number,
+  transfers: number,
+  perTransferCost: number
+): number {
+  const xiIds = new Set(xi.map((p) => p.element.id));
+  let total = 0;
+  for (const p of squad) {
+    const v = playerValue(p, beta);
+    total += v.squad * BENCH_WEIGHT;
+    if (xiIds.has(p.element.id)) total += v.xi * (1 - BENCH_WEIGHT);
+  }
+  return total - hits * HIT_COST_POINTS - transfers * perTransferCost;
+}
 
 export interface TransferMove {
   out: ScoredPlayer;
@@ -89,6 +165,9 @@ export interface TransferPlan {
   xiWindowPoints: number;
   /** Expected points of the eleven in the next gameweek alone. */
   xiNextPoints: number;
+  /** The eleven's value under the active variance posture — the quantity the
+   * solver actually maximised, and therefore the one plans are ranked on. */
+  xiStrategicPoints: number;
   /** xiWindowPoints minus the hit cost — the number plans are ranked on. */
   netValue: number;
   /** Versus doing nothing. Negative means the plan is worse than holding. */
@@ -130,7 +209,9 @@ function evaluate(squad: ScoredPlayer[], beta: number) {
     // presenting next-gameweek points as the score.
     squad.map((p) => ({ ...p, score: p.expectedPointsNext }))
   ).map((p) => squad.find((q) => q.element.id === p.element.id)!);
-  const bench = squad.filter((p) => !xi.some((q) => q.element.id === p.element.id));
+  const bench = orderBench(
+    squad.filter((p) => !xi.some((q) => q.element.id === p.element.id))
+  );
   const { captain, viceCaptain } = pickCaptain(xi, beta);
   return {
     xi,
@@ -139,6 +220,14 @@ function evaluate(squad: ScoredPlayer[], beta: number) {
     viceCaptain,
     xiWindowPoints: Math.round(xi.reduce((s, p) => s + p.expectedPoints, 0) * 10) / 10,
     xiNextPoints: Math.round(xi.reduce((s, p) => s + p.expectedPointsNext, 0) * 10) / 10,
+    // The value the SOLVER was maximising, so plans are ranked on the same
+    // quantity they were built to optimise. Ranking on raw expected points
+    // while the squad had been chosen under a variance posture meant the
+    // posture picked a differential eleven and was then judged by exactly
+    // the metric it had just traded away — measured at seven window points
+    // destroyed, reported to the user as if it were the gain.
+    xiStrategicPoints:
+      Math.round(xi.reduce((s, p) => s + playerValue(p, beta).xi, 0) * 10) / 10,
   };
 }
 
@@ -186,11 +275,16 @@ function solveSquad(opts: SolveOptions): ScoredPlayer[] | null {
     const squadVar = `s${p.element.id}`;
     const xiVar = `x${p.element.id}`;
     byVarId.set(squadVar, p);
-    const value = strategicValue(p, beta);
+    // Two horizons, deliberately different. Squad membership is a
+    // multi-week asset, so it carries the window value. The starting eleven
+    // is a decision about ONE gameweek, so it carries next-gameweek value
+    // plus a discounted tail — which is also what puts the -4 hit on a
+    // comparable scale. See FUTURE_DISCOUNT above.
+    const { squad: valueSquad, xi: valueXi } = playerValue(p, beta);
     const isOwned = ownedIds.has(p.element.id);
 
     variables[squadVar] = {
-      score: value * BENCH_WEIGHT,
+      score: valueSquad * BENCH_WEIGHT,
       cost: costM.get(p.element.id) ?? p.priceM,
       [POS_KEY[p.element.element_type]]: 1,
       [`club_${p.team.id}`]: 1,
@@ -198,7 +292,7 @@ function solveSquad(opts: SolveOptions): ScoredPlayer[] | null {
       ...(isOwned ? { kept: 1 } : {}),
     };
     variables[xiVar] = {
-      score: value * (1 - BENCH_WEIGHT),
+      score: valueXi * (1 - BENCH_WEIGHT),
       xi: 1,
       [`xi_${POS_KEY[p.element.element_type]}`]: 1,
       [`link_${p.element.id}`]: 1,
@@ -206,6 +300,21 @@ function solveSquad(opts: SolveOptions): ScoredPlayer[] | null {
     constraints[`link_${p.element.id}`] = { max: 0 };
     binaries[squadVar] = 1;
     binaries[xiVar] = 1;
+  }
+
+  // Every transfer consumes a banked free transfer, and a banked transfer is
+  // an option worth roughly FT_OPTION_VALUE. Charging it makes "hold" a real
+  // competitor instead of losing automatically to any positive gain. The
+  // charge is waived once the bank is full, where the marginal transfer
+  // genuinely is free because it would otherwise be forfeited.
+  const perTransferCost = freeTransfers >= 5 ? 0 : FT_OPTION_VALUE;
+  if (perTransferCost > 0) {
+    constraints.transferbound = { min: SQUAD_SIZE };
+    variables.transfers = { score: -perTransferCost, transferbound: 1 };
+    ints.transfers = 1;
+    for (const p of pool) {
+      if (ownedIds.has(p.element.id)) variables[`s${p.element.id}`].transferbound = 1;
+    }
   }
 
   if (allowHits) {
@@ -241,7 +350,25 @@ function solveSquad(opts: SolveOptions): ScoredPlayer[] | null {
     for (const [varId, player] of byVarId) {
       if (Math.round(Number(result[varId] ?? 0)) === 1) squad.push(player);
     }
-    return squad.length === SQUAD_SIZE ? squad : null;
+    if (squad.length !== SQUAD_SIZE) return null;
+
+    // The solver's `feasible` flag is not trustworthy on larger models — it
+    // has been observed returning a squad over budget and calling it optimal
+    // (see the note in lib/optimizer.ts). Re-check the rules that matter
+    // before handing a plan to the user, because an illegal plan is worse
+    // than a missing one: FPL will simply refuse it at the deadline.
+    const spend = squad.reduce((t, p) => t + (costM.get(p.element.id) ?? p.priceM), 0);
+    if (spend > budgetM + 1e-6) return null;
+    const perClub = new Map<number, number>();
+    for (const p of squad) perClub.set(p.team.id, (perClub.get(p.team.id) ?? 0) + 1);
+    if ([...perClub.values()].some((n) => n > 3)) return null;
+    const perPos = new Map<number, number>();
+    for (const p of squad) {
+      perPos.set(p.element.element_type, (perPos.get(p.element.element_type) ?? 0) + 1);
+    }
+    if ([1, 2, 3, 4].some((t) => (perPos.get(t) ?? 0) !== NEED[t])) return null;
+
+    return squad;
   } catch {
     return null;
   }
@@ -327,7 +454,17 @@ function makePlan(
     hitCost,
     squad,
     ...evaluated,
-    netValue: Math.round((evaluated.xiWindowPoints - hitCost) * 10) / 10,
+    netValue:
+      Math.round(
+        planObjective(
+          squad,
+          evaluated.xi,
+          beta,
+          hits,
+          transfers,
+          state.freeTransfers >= 5 ? 0 : FT_OPTION_VALUE
+        ) * 10
+      ) / 10,
     netGainVsHold: 0, // filled in by the caller once the hold plan exists
     bankAfterM,
     rationale: "",
@@ -346,11 +483,15 @@ export function planTransfers(
     /** Element ids flagged as likely to rise / fall in price today. */
     likelyRisers?: number[];
     likelyFallers?: number[];
+    /** The gameweek being planned for. Used to price the option value of
+     * holding a chip — see the wildcard threshold below. */
+    currentEvent?: number;
   } = {}
 ): TransferAdvice {
   const beta = opts.beta ?? 0;
   const risers = new Set(opts.likelyRisers ?? []);
   const fallers = new Set(opts.likelyFallers ?? []);
+  const currentEvent = opts.currentEvent ?? 20;
 
   if (!state.available || state.owned.length !== SQUAD_SIZE) {
     return {
@@ -520,10 +661,28 @@ export function planTransfers(
     const gain = Math.round((plan.xiWindowPoints - hold.xiWindowPoints) * 10) / 10;
     // A wildcard is worth playing when the squad is far enough from where it
     // should be that free transfers cannot close the gap in reasonable time.
-    // Four transfers is roughly a month of holding; if the gap is bigger than
-    // that AND the prize is bigger than the hits it would take to get there
-    // the chip is the cheaper route.
-    const advise = wildcardAvailable && distance >= 5 && gain >= 12;
+    // Five transfers is over a month of holding; below that the free
+    // transfers get there on their own.
+    //
+    // But distance and points are not the whole price of the chip, and this
+    // threshold used to behave as if they were. A wildcard held is worth more
+    // than the points it would buy today, for two reasons that both bite
+    // hardest early in the season:
+    //
+    //   1. INFORMATION. After one or two gameweeks the "ideal" squad is built
+    //      almost entirely on FPL's own pre-season estimates and thin odds.
+    //      Being six transfers from that ideal is mostly measuring noise. By
+    //      October the same figure is measuring something real.
+    //   2. OPTIONALITY. A chip spent in gameweek 2 cannot be spent on the
+    //      injury crisis in gameweek 9, or on a double gameweek later. There
+    //      are only two per season and one per half.
+    //
+    // So the points bar starts very high and decays to the structural figure
+    // by around gameweek 10. At gameweek 2 it takes roughly 32 points over
+    // the window to justify the chip; at gameweek 10 onwards, 12.
+    const earlySeasonPremium = Math.max(0, WILDCARD_SETTLED_EVENT - currentEvent) * 2.5;
+    const requiredGain = WILDCARD_MIN_GAIN + earlySeasonPremium;
+    const advise = wildcardAvailable && distance >= 5 && gain >= requiredGain;
     wildcard = {
       distance,
       gain,
@@ -533,7 +692,9 @@ export function planTransfers(
         ? `O teu plantel está a ${distance} transferências do ideal (${gain >= 0 ? "+" : ""}${gain} pts em 5 jornadas), mas já não tens Wildcard disponível nesta metade da época — o caminho é por transferências livres, uma de cada vez.`
         : advise
           ? `Sinal de Wildcard: o teu plantel está a ${distance} transferências do ideal e a diferença vale ${gain} pontos em 5 jornadas. Fechar isso com transferências livres levaria cerca de ${distance} jornadas; com hits custaria ${(distance - state.freeTransfers) * HIT_COST_POINTS} pontos. O chip é o caminho mais barato.`
-          : `Plantel a ${distance} transferências do ideal (${gain >= 0 ? "+" : ""}${gain} pts em 5 jornadas) — perto o suficiente para fechar com transferências livres. Guardar o Wildcard.`,
+          : distance >= 5 && currentEvent < WILDCARD_SETTLED_EVENT
+            ? `Plantel a ${distance} transferências do ideal (${gain >= 0 ? "+" : ""}${gain} pts em 5 jornadas), mas ainda é a jornada ${currentEvent}: o "ideal" nesta altura assenta quase todo em estimativas de pré-época e em poucas odds, por isso essa distância mede sobretudo ruído. Um chip guardado vale mais do que os pontos que compraria hoje — só há dois por época e a informação melhora todas as semanas. Precisaria de ${requiredGain.toFixed(0)} pontos para compensar agora.`
+            : `Plantel a ${distance} transferências do ideal (${gain >= 0 ? "+" : ""}${gain} pts em 5 jornadas) — perto o suficiente para fechar com transferências livres. Guardar o Wildcard.`,
     };
     if (advise) {
       plan.rationale =

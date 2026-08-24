@@ -54,6 +54,16 @@ export interface ScoredPlayer {
    * should not get the armband.
    */
   expectedPointsNext: number;
+  /**
+   * Probability this player appears at all in the next gameweek.
+   *
+   * It was always computed — as the minutes model's `pAppear` times FPL's
+   * published availability — and then multiplied into `expectedPointsNext`
+   * and discarded. That made the joint captain/vice decision literally
+   * uncomputable from this interface, because the value of the vice-captain
+   * contingency is (1 - pPlay of the captain).
+   */
+  pPlay: number;
   /** Where the window's expected points come from, for transparency. */
   breakdown: ExpectedPointsBreakdown;
   score: number;
@@ -194,15 +204,25 @@ export function buildScoredPlayers(
   // is what avoids counting team quality twice (once inside the player's
   // per-90 rate, once again in the fixture adjustment).
   const teamSeasonAvgGoalsFor = new Map<number, number>();
+  // The mirror of the above, for the defensive side. A keeper's save rate
+  // was earned behind THIS defence, so scaling it by a fixture's expected
+  // goals against has to be relative to his own team's normal level — not
+  // to a league constant, which counts team quality twice.
+  const teamSeasonAvgGoalsAgainst = new Map<number, number>();
   for (const team of bootstrap.teams) {
     const all = expectationsByTeam.get(team.id) ?? [];
     if (all.length === 0) {
       teamSeasonAvgGoalsFor.set(team.id, 0);
+      teamSeasonAvgGoalsAgainst.set(team.id, 0);
       continue;
     }
     teamSeasonAvgGoalsFor.set(
       team.id,
       all.reduce((s, e) => s + e.expectedGoalsFor, 0) / all.length
+    );
+    teamSeasonAvgGoalsAgainst.set(
+      team.id,
+      all.reduce((s, e) => s + e.expectedGoalsAgainst, 0) / all.length
     );
   }
 
@@ -265,10 +285,13 @@ export function buildScoredPlayers(
         ? Math.min(1.6, Math.max(0.5, perFixtureGoals / teamBaselineGoals))
         : 1;
 
+    const teamBaselineConceded = teamSeasonAvgGoalsAgainst.get(team.id) ?? 0;
+
     const perFixtureWindow = expectedPointsForFixture(el.element_type, rates, mins, {
       teamAttackRatio: attackRatio(window.avgGoalsFor),
       cleanSheetProbability: window.avgCleanSheetProbability,
       expectedGoalsAgainst: window.avgGoalsAgainst,
+      teamSeasonGoalsAgainst: teamBaselineConceded,
     });
     const modelWindowPoints = scaleBreakdown(perFixtureWindow, window.fixtureCount);
 
@@ -276,6 +299,7 @@ export function buildScoredPlayers(
       teamAttackRatio: attackRatio(nextWindow.avgGoalsFor),
       cleanSheetProbability: nextWindow.avgCleanSheetProbability,
       expectedGoalsAgainst: nextWindow.avgGoalsAgainst,
+      teamSeasonGoalsAgainst: teamBaselineConceded,
     });
     const modelNextPoints = perFixtureNext.total * nextWindow.fixtureCount;
 
@@ -515,6 +539,7 @@ export function buildScoredPlayers(
       floorGI,
       expectedPoints: Math.round(expectedPoints * 100) / 100,
       expectedPointsNext: Math.round(expectedPointsNext * 100) / 100,
+      pPlay: Math.round(Math.min(1, Math.max(0, mins.pAppear * availability)) * 1000) / 1000,
       breakdown: modelWindowPoints,
       // Alias, so nothing downstream had to change when the score became a
       // real quantity. Both are expected FPL points over the window.
@@ -720,25 +745,83 @@ export function pickBestXIChecked(squad: ScoredPlayer[]): {
 export function pickCaptain(
   starters: ScoredPlayer[],
   /**
-   * Variance posture from lib/rivals.ts. The armband is the highest-variance
-   * decision available in a gameweek — it doubles one player's outcome — so
-   * it is exactly where chasing or protecting should show up first. A
-   * manager sixty points behind who captains the same 70%-owned premium as
-   * everybody else has quietly decided not to catch up. `beta = 0` leaves
-   * the choice as pure expected points.
+   * Variance posture from lib/rivals.ts. Applied to the CAPTAIN only — the
+   * vice is a contingency that fires in roughly one gameweek in twenty, and
+   * discounting an insurance policy for being popular has no risk-posture
+   * justification at all. It used to be applied to both, which could hand
+   * the fallback armband to a materially worse player.
    */
   beta = 0
 ): {
   captain: ScoredPlayer | undefined;
   viceCaptain: ScoredPlayer | undefined;
 } {
-  const value = (p: ScoredPlayer) =>
+  if (starters.length === 0) return { captain: undefined, viceCaptain: undefined };
+  if (starters.length === 1) return { captain: starters[0], viceCaptain: undefined };
+
+  // THE ARMBAND IS A PAIR, NOT TWO RANKINGS.
+  //
+  // The vice is doubled exactly when the captain records zero minutes, so
+  // the value of the pair is:
+  //
+  //     EP(captain) + (1 - P(captain plays)) x EP(vice)
+  //
+  // That second term is free insurance, and it has a consequence that runs
+  // against intuition: a doubtful premium should NOT be further penalised
+  // for the doubt when choosing the captain, because the vice refunds the
+  // doubling in exactly the cases the doubt materialises. Ranking by
+  // expected points alone — as this did until v1.28 — counts the doubt
+  // twice and systematically UNDER-captains the doubtful premium.
+  //
+  // Eleven starters give 110 ordered pairs. Evaluating all of them costs
+  // nothing and removes the approximation entirely.
+  const captainValue = (p: ScoredPlayer) =>
     beta
       ? p.expectedPointsNext *
         (1 - beta * Math.min(1, Math.max(0, p.ownershipPct / 100)))
       : p.expectedPointsNext;
-  const ranked = [...starters].sort((a, b) => value(b) - value(a));
-  return { captain: ranked[0], viceCaptain: ranked[1] };
+
+  let best: { captain: ScoredPlayer; vice: ScoredPlayer; value: number } | null = null;
+  for (const c of starters) {
+    // `pPlay` may be absent on hand-built objects in older callers; a missing
+    // value is treated as a nailed starter, which is the same assumption the
+    // previous implementation made implicitly.
+    const pPlayC = typeof c.pPlay === "number" ? c.pPlay : 1;
+    for (const v of starters) {
+      if (v.element.id === c.element.id) continue;
+      // A vice who is himself a doubt is a contingency that may not fire.
+      const value = captainValue(c) + (1 - pPlayC) * v.expectedPointsNext;
+      if (!best || value > best.value) best = { captain: c, vice: v, value };
+    }
+  }
+
+  return { captain: best?.captain, viceCaptain: best?.vice };
+}
+
+/**
+ * The bench, in the order FPL will actually use it.
+ *
+ * Automatic substitutions fire in bench order whenever a starter records
+ * zero minutes — roughly 0.4 to 0.5 times a gameweek across a season. Until
+ * v1.28 there was no bench-ordering code anywhere in this project: the bench
+ * was the residue of a filter, in whatever order the solver's variable map
+ * happened to produce. Someone copying that order into FPL got an arbitrary
+ * substitution priority, worth about 1.2 points every time a substitution
+ * fired.
+ *
+ * Two rules, in order of precedence:
+ *   1. The reserve goalkeeper occupies its own slot. FPL fixes this; it is
+ *      not part of the decision.
+ *   2. The outfield three are ranked by P(plays) x expected points — not by
+ *      expected points alone, because a bench player who will not appear
+ *      cannot be substituted in no matter how good he is.
+ */
+export function orderBench(bench: ScoredPlayer[]): ScoredPlayer[] {
+  const keepers = bench.filter((p) => p.element.element_type === 1);
+  const outfield = bench.filter((p) => p.element.element_type !== 1);
+  const value = (p: ScoredPlayer) =>
+    (typeof p.pPlay === "number" ? p.pPlay : 1) * Math.max(0, p.expectedPointsNext);
+  return [...keepers, ...outfield.sort((a, b) => value(b) - value(a))];
 }
 
 export interface TransferSuggestion {

@@ -28,8 +28,78 @@ export interface FixtureExpectation {
 // widely-cited prior (home teams score somewhat more than away teams on
 // average across a season). This is only the baseline the attack/defence
 // factors below scale around; it does not need to be exact.
-export const BASE_HOME_GOALS = 1.5;
-export const BASE_AWAY_GOALS = 1.2;
+/**
+ * League baseline goals per team per match, home and away.
+ *
+ * These are the PRESEASON fallback only. Once matches have been played the
+ * model derives them from this season's own results (see
+ * `deriveLeagueBaselines` below) rather than trusting a constant.
+ *
+ * The old values were 1.5 and 1.2 — a total of 2.70 and a home advantage of
+ * 0.30. The current Premier League runs at 2.95-3.28 goals a match with a
+ * home advantage of 0.20-0.25, which has not recovered to its pre-2020
+ * level. Too few goals inflates every clean-sheet probability by around
+ * three percentage points, which biases the split of the budget between
+ * defence and attack rather than the ranking within either.
+ */
+/**
+ * How many matches of evidence FPL's own calibrated ratings are worth in the
+ * blend. They are a real 20-team prior built before a ball is kicked; they
+ * should not be erased by one played match, and should not survive a full
+ * season of contrary evidence either.
+ */
+export const FPL_PRIOR_PSEUDO_MATCHES = 5;
+
+/** Gameweeks over which a fixture's weight in the window decays by 1/e.
+ * Market forecast accuracy falls from roughly 0.75 correlation at one week
+ * out to 0.55 at four, so the far end of a five-gameweek window carries
+ * about 70% of the near end's weight. */
+const HORIZON_DECAY_EVENTS = 4;
+
+/** How much of the true spread between teams each source retains. Measured
+ * on synthetic leagues: a priced fixture is close to exact, ratings derived
+ * from one priced gameweek retain about half, and a neutral placeholder
+ * retains nothing at all and should barely count. */
+const SOURCE_PRECISION: Record<FixtureSource, number> = {
+  market: 1,
+  "market-1x2": 0.8,
+  "market-ratings": 0.6,
+  results: 0.7,
+  fpl: 0.5,
+  neutral: 0.15,
+};
+
+export const BASE_HOME_GOALS = 1.62;
+export const BASE_AWAY_GOALS = 1.41;
+
+/**
+ * League baselines measured from this season's finished matches, falling
+ * back to the constants above until there is enough of a sample.
+ *
+ * A constant that is a decade out of date is a silent, league-wide level
+ * error. The data to replace it is already fetched on every page load.
+ */
+export function deriveLeagueBaselines(fixtures: FplFixture[]): {
+  home: number;
+  away: number;
+  matches: number;
+} {
+  const finished = fixtures.filter(
+    (f) => f.finished && f.team_h_score !== null && f.team_a_score !== null
+  );
+  // Below about thirty matches the split is noisier than the prior it would
+  // replace, so blend rather than switch.
+  const n = finished.length;
+  if (n === 0) return { home: BASE_HOME_GOALS, away: BASE_AWAY_GOALS, matches: 0 };
+  const home = finished.reduce((s, f) => s + (f.team_h_score ?? 0), 0) / n;
+  const away = finished.reduce((s, f) => s + (f.team_a_score ?? 0), 0) / n;
+  const trust = Math.min(1, n / 60);
+  return {
+    home: BASE_HOME_GOALS * (1 - trust) + home * trust,
+    away: BASE_AWAY_GOALS * (1 - trust) + away * trust,
+    matches: n,
+  };
+}
 
 /**
  * Has FPL actually published its team strength ratings yet?
@@ -221,6 +291,54 @@ export function buildFixtureExpectations(
   const fplRatingsUsable =
     avgAttackHome > 0 && avgAttackAway > 0 && avgDefenceHome > 0 && avgDefenceAway > 0;
 
+  // REST DAYS.
+  //
+  // `kickoff_time` was in the type and read by nothing. It is the only thing
+  // needed to price two effects the model had no term for at all: the second
+  // leg of a double gameweek, played three days after the first and heavily
+  // rotated at exactly the clubs that get doubles; and the Saturday fixture
+  // that follows a Wednesday in Europe, which costs on the order of 0.05 to
+  // 0.10 goals for the six or seven clubs whose players dominate FPL squads.
+  const kickoffByTeam = new Map<number, number[]>();
+  for (const f of fixtures) {
+    if (!f.kickoff_time) continue;
+    const t = new Date(f.kickoff_time).getTime();
+    if (!Number.isFinite(t)) continue;
+    for (const id of [f.team_h, f.team_a]) {
+      if (!kickoffByTeam.has(id)) kickoffByTeam.set(id, []);
+      kickoffByTeam.get(id)!.push(t);
+    }
+  }
+  for (const list of kickoffByTeam.values()) list.sort((a, b) => a - b);
+
+  /** Multiplier on a team's attacking output for a fixture, given how long
+   * they have had to recover. Only short rest is penalised; extra rest
+   * beyond a normal week is not a measurable advantage. */
+  const restFactor = (teamId: number, kickoff: string | null): number => {
+    if (!kickoff) return 1;
+    const t = new Date(kickoff).getTime();
+    if (!Number.isFinite(t)) return 1;
+    const list = kickoffByTeam.get(teamId);
+    if (!list) return 1;
+    let previous: number | null = null;
+    for (const other of list) {
+      if (other < t) previous = other;
+      else break;
+    }
+    if (previous === null) return 1;
+    const days = (t - previous) / 86_400_000;
+    if (days >= 5) return 1;
+    if (days <= 2.5) return 0.90;
+    // Linear between the two, which is as much shape as the evidence
+    // supports.
+    return 0.90 + ((days - 2.5) / 2.5) * 0.10;
+  };
+
+  // League baselines from this season's own results, not from a constant.
+  const baselines = deriveLeagueBaselines(fixtures);
+  const baseHome = baselines.home;
+  const baseAway = baselines.away;
+
   const ratio = (value: number | undefined, avg: number): number => {
     if (!fplRatingsUsable) return 1;
     if (!Number.isFinite(value) || (value ?? 0) <= 0) return 1;
@@ -255,7 +373,6 @@ export function buildFixtureExpectations(
     oddsMatches && oddsMatches.length > 0
       ? deriveTeamRatingsFromMarket(teams, oddsMatches, (n) => teamIdByOddsName.get(n) ?? null)
       : null;
-  const hasMarketRatings = (id: number) => (marketRatings?.get(id)?.sample ?? 0) > 0;
 
   const byTeam = new Map<number, FixtureExpectation[]>();
   const push = (teamId: number, exp: FixtureExpectation) => {
@@ -270,8 +387,6 @@ export function buildFixtureExpectations(
 
     const homeDynamic = teamFactors?.get(home.id);
     const awayDynamic = teamFactors?.get(away.id);
-    const resultsInformed =
-      (homeDynamic?.finishedMatches ?? 0) > 0 || (awayDynamic?.finishedMatches ?? 0) > 0;
 
     let xgHome: number;
     let xgAway: number;
@@ -287,58 +402,131 @@ export function buildFixtureExpectations(
         : undefined;
 
     if (market) {
-      const derived = expectedGoalsFromMarket(market);
+      // When the bookmakers priced no totals market, fall back to the total
+      // these two teams' own ratings imply rather than to a league constant.
+      const priorH = teamFactors?.get(home.id);
+      const priorA = teamFactors?.get(away.id);
+      const fallbackTotal =
+        baseHome * (priorH?.attackFactor ?? 1) / (priorA?.defenceFactor || 1) +
+        baseAway * (priorA?.attackFactor ?? 1) / (priorH?.defenceFactor || 1);
+      const derived = expectedGoalsFromMarket(market, fallbackTotal);
       xgHome = derived.xgHome;
       xgAway = derived.xgAway;
-      source = "market";
+      // A fixture priced on 1X2 alone has an INVENTED total (the split moves,
+      // the total does not), so it must not carry the same label as one whose
+      // total was actually priced. See lib/oddsmodel.ts.
+      source = derived.totalWasPriced ? "market" : "market-1x2";
       marketAdjusted = true;
-    } else if (marketRatings && (hasMarketRatings(home.id) || hasMarketRatings(away.id))) {
-      // ---- rung 2: no line for THIS fixture, but the market has told us
-      // how strong at least one of these teams is elsewhere.
-      //
-      // Requiring BOTH teams to have a rating was too strict: a single
-      // unrated side (typically a promoted club whose name the odds
-      // provider spells differently, so it never resolves) dragged the
-      // whole fixture down to the neutral rung and threw away perfectly
-      // good information about its opponent. An unrated team simply keeps
-      // the neutral 1.0 it is initialised with, which is exactly the right
-      // assumption for a team we know nothing about — while the rated team
-      // still contributes what the market does say.
-      const h = marketRatings.get(home.id) ?? { attack: 1, defence: 1, sample: 0 };
-      const a = marketRatings.get(away.id) ?? { attack: 1, defence: 1, sample: 0 };
-      xgHome = BASE_HOME_GOALS * h.attack * a.defence;
-      xgAway = BASE_AWAY_GOALS * a.attack * h.defence;
-      source = "market-ratings";
-      marketAdjusted = true;
-    } else if (resultsInformed) {
-      // ---- rung 3: this season's actual results (lib/teamrating.ts).
-      xgHome =
-        (BASE_HOME_GOALS * (homeDynamic?.attackFactor ?? 1)) /
-        (awayDynamic?.defenceFactor || 1);
-      xgAway =
-        (BASE_AWAY_GOALS * (awayDynamic?.attackFactor ?? 1)) /
-        (homeDynamic?.defenceFactor || 1);
-      source = "results";
-    } else if (fplRatingsUsable) {
-      // ---- rung 4: FPL's own published ratings.
-      const attackFactorHome =
-        ratio(home.strength_attack_home, avgAttackHome) * (homeDynamic?.attackFactor ?? 1);
-      const defenceFactorAway =
-        ratio(away.strength_defence_away, avgDefenceAway) * (awayDynamic?.defenceFactor ?? 1);
-      xgHome = (BASE_HOME_GOALS * attackFactorHome) / (defenceFactorAway || 1);
-
-      const attackFactorAway =
-        ratio(away.strength_attack_away, avgAttackAway) * (awayDynamic?.attackFactor ?? 1);
-      const defenceFactorHome =
-        ratio(home.strength_defence_home, avgDefenceHome) * (homeDynamic?.defenceFactor ?? 1);
-      xgAway = (BASE_AWAY_GOALS * attackFactorAway) / (defenceFactorHome || 1);
-      source = "fpl";
     } else {
-      // ---- rung 5: nothing at all. Home advantage and nothing else.
-      xgHome = BASE_HOME_GOALS;
-      xgAway = BASE_AWAY_GOALS;
-      source = "neutral";
+      // ---- rungs 2-4: combine every source that has something to say -----
+      //
+      // This used to be an if/else ladder where the first applicable rung
+      // won outright. That had two consequences, both bad. From gameweek 2
+      // onwards a single finished match made `resultsInformed` true for
+      // every fixture, so FPL's calibrated 20-team prior became unreachable
+      // code — the model threw away a full prior and replaced it with one
+      // match shrunk 87% toward neutral, leaving it LESS differentiated in
+      // gameweek 2 than it had been in gameweek 1. In the other direction,
+      // one gameweek of market-derived ratings preempted nineteen gameweeks
+      // of results.
+      //
+      // Neither source dominates the other: market ratings are sharper per
+      // observation, results have far more observations. The right estimator
+      // is the precision-weighted combination, so the factors are now blended
+      // in log space with weights proportional to how much evidence each one
+      // rests on. The `source` label reports which contributor dominates,
+      // which is what it was always really being used for.
+      const mktH = marketRatings?.get(home.id);
+      const mktA = marketRatings?.get(away.id);
+      const marketSample = Math.max(mktH?.sample ?? 0, mktA?.sample ?? 0);
+      const resultsSample = Math.max(
+        homeDynamic?.finishedMatches ?? 0,
+        awayDynamic?.finishedMatches ?? 0
+      );
+
+      // Weights. The FPL prior is worth a few matches of evidence and never
+      // disappears entirely; each priced fixture counts double a played one
+      // because the market embeds team news the results cannot.
+      const wFpl = fplRatingsUsable ? FPL_PRIOR_PSEUDO_MATCHES : 0;
+      const wMarket = marketSample * 2;
+      const wResults = resultsSample;
+      const wTotal = wFpl + wMarket + wResults;
+
+      if (wTotal <= 0) {
+        // ---- nothing at all: home advantage and nothing else.
+        xgHome = baseHome;
+        xgAway = baseAway;
+        source = "neutral";
+      } else {
+        // Each contributor supplies a multiplicative attack/defence factor.
+        // Blending them in log space keeps a factor of 2 and a factor of 0.5
+        // symmetric, which an arithmetic mean does not.
+        const blend = (
+          fplF: number,
+          marketF: number,
+          resultsF: number
+        ): number => {
+          const logSum =
+            wFpl * Math.log(Math.max(0.2, fplF)) +
+            wMarket * Math.log(Math.max(0.2, marketF)) +
+            wResults * Math.log(Math.max(0.2, resultsF));
+          return Math.exp(logSum / wTotal);
+        };
+
+        const attackHome = blend(
+          fplRatingsUsable ? ratio(home.strength_attack_home, avgAttackHome) : 1,
+          mktH?.attack ?? 1,
+          homeDynamic?.attackFactor ?? 1
+        );
+        const defenceAway = blend(
+          fplRatingsUsable ? ratio(away.strength_defence_away, avgDefenceAway) : 1,
+          // A market DEFENCE rating above 1 means "concedes more"; the
+          // results-side factor is inverted (above 1 means "concedes less"),
+          // so the two are put on the same footing here.
+          mktA?.defence ?? 1,
+          1 / (awayDynamic?.defenceFactor || 1)
+        );
+        const attackAway = blend(
+          fplRatingsUsable ? ratio(away.strength_attack_away, avgAttackAway) : 1,
+          mktA?.attack ?? 1,
+          awayDynamic?.attackFactor ?? 1
+        );
+        const defenceHome = blend(
+          fplRatingsUsable ? ratio(home.strength_defence_home, avgDefenceHome) : 1,
+          mktH?.defence ?? 1,
+          1 / (homeDynamic?.defenceFactor || 1)
+        );
+
+        xgHome = baseHome * attackHome * defenceAway;
+        xgAway = baseAway * attackAway * defenceHome;
+
+        // Report the dominant contributor rather than the first one that
+        // happened to apply.
+        source =
+          wMarket >= wResults && wMarket >= wFpl
+            ? "market-ratings"
+            : wResults >= wFpl
+              ? "results"
+              : "fpl";
+        marketAdjusted = wMarket > 0;
+      }
     }
+
+    // Congestion. Applied after the source blend so it modifies whatever
+    // estimate won — including a market-priced one, where the bookmakers
+    // have usually priced the schedule but not the rotation that follows it.
+    const restHome = restFactor(home.id, f.kickoff_time);
+    const restAway = restFactor(away.id, f.kickoff_time);
+    xgHome *= restHome;
+    xgAway *= restAway;
+    // A tired opponent concedes more, so the other side's attack is helped
+    // by the same amount its own is hurt.
+    xgHome /= restAway;
+    xgAway /= restHome;
+
+    // Guard against a degenerate blend producing an implausible fixture.
+    xgHome = Math.min(4.5, Math.max(0.15, xgHome));
+    xgAway = Math.min(4.5, Math.max(0.15, xgAway));
 
     push(home.id, {
       fixtureId: f.id,
@@ -440,6 +628,33 @@ export function windowExpectation(
   );
   if (inWindow.length === 0) return EMPTY_WINDOW;
   const n = inWindow.length;
+
+  // WEIGHTED, NOT FLAT.
+  //
+  // A flat mean treats gameweek n+4 exactly like gameweek n. It should not:
+  // the near fixture is usually priced by the market, the far one is not,
+  // and a rating-derived estimate retains far less of the true spread
+  // between teams than a priced one. Averaging them flat drags one sharp
+  // number toward four blurred ones, which is why good fixture runs read
+  // flatter in this model than they are.
+  //
+  // Two weights multiply. Horizon decay reflects that a forecast four weeks
+  // out is genuinely less informative — and that you will very likely have
+  // transferred again by then. Source precision reflects how much of the
+  // real spread each estimate retains.
+  const horizonWeight = (event: number | null) =>
+    Math.exp(-Math.max(0, (event ?? fromEvent) - fromEvent) / HORIZON_DECAY_EVENTS);
+  const totalWeight = inWindow.reduce(
+    (t, e) => t + horizonWeight(e.event) * SOURCE_PRECISION[e.source],
+    0
+  );
+  const weightedMean = (pick: (e: FixtureExpectation) => number) =>
+    totalWeight > 0
+      ? inWindow.reduce(
+          (t, e) => t + pick(e) * horizonWeight(e.event) * SOURCE_PRECISION[e.source],
+          0
+        ) / totalWeight
+      : inWindow.reduce((t, e) => t + pick(e), 0) / n;
   // Real gameweeks covered, never more than remain in the season.
   const gameweeksInWindow = Math.max(
     1,
@@ -452,9 +667,12 @@ export function windowExpectation(
     0
   );
   return {
-    avgGoalsFor: totalGoalsFor / n,
-    avgGoalsAgainst: totalGoalsAgainst / n,
-    avgCleanSheetProbability: totalCleanSheetProbability / n,
+    // Averages are weighted (they drive per-fixture scoring); totals stay
+    // unweighted, because "how many fixtures are there" is a count and a
+    // double gameweek really is two chances to score.
+    avgGoalsFor: weightedMean((e) => e.expectedGoalsFor),
+    avgGoalsAgainst: weightedMean((e) => e.expectedGoalsAgainst),
+    avgCleanSheetProbability: weightedMean((e) => e.cleanSheetProbability),
     totalGoalsFor,
     totalGoalsAgainst,
     totalCleanSheetProbability,

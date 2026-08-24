@@ -62,6 +62,11 @@ export interface FplElement {
   assists: number;
   clean_sheets: number;
   bonus: number;
+  /** Bookings. Present in the bootstrap payload and unread until v1.28 —
+   * the omission fell hardest on exactly the high-tackle defenders the
+   * defensive-contribution bonus rewards. */
+  yellow_cards?: number;
+  red_cards?: number;
   defensive_contribution?: number;
   /** Goalkeeper saves. 1 FPL point per 3 saves — a real, separately-paid
    * scoring mechanism that this app fetched nothing for until v1.24, which

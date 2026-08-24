@@ -20,8 +20,27 @@ const POS_KEY: Record<number, string> = { 1: "gk", 2: "def", 3: "mid", 4: "fwd" 
 // per player (squad AND starting eleven): the solve is roughly twice the
 // size, so the candidate list is trimmed to keep it inside Vercel's time
 // limit. Measured solve time is reported by the test suite.
-const TOP_BY_SCORE_PER_POSITION = 30;
-const CHEAPEST_ENABLERS_PER_POSITION = 8;
+// Measured, not assumed: the full-pool solve completes in about 1.5 s
+// against a 6 s budget. The previous 30/8 cut rested on a claim that the
+// optimal squad "essentially never includes a mid-priced player", which is
+// backwards — £100m across 15 players averages £6.67m, so the optimum is
+// MOSTLY mid-priced. The barbell shape that claim described was an artefact
+// of the cut itself: with the top 30 and the cheapest 8 there was nothing
+// in between for the solver to choose.
+const TOP_BY_SCORE_PER_POSITION = 40;
+const CHEAPEST_ENABLERS_PER_POSITION = 10;
+/**
+ * The real fix for the mid-market hole is not a bigger top-N — it is
+ * sampling ACROSS the price range, so every band from £4.0m to £15m has its
+ * best player in contention. Fourteen bands per position costs fourteen
+ * variables and removes the barbell entirely.
+ */
+const PRICE_BANDS_PER_POSITION = 14;
+/** Pool sizes to try, largest first. See the retry logic in
+ * buildOptimalSquad: this solver will occasionally return a solution that
+ * violates its own budget constraint and report it as feasible, and the
+ * probability of that rises with the size of the model. */
+const POOL_RETRY_SCALES = [1, 0.6, 0.35];
 const SOLVE_TIMEOUT_MS = 6000;
 
 /**
@@ -80,9 +99,18 @@ const STACK_PENALTY_POINTS = 1.5; // charged per starter beyond that
  * value and pushed out of contention by arithmetic rather than by merit.
  */
 export function strategicValue(p: ScoredPlayer, beta: number): number {
-  if (!beta) return p.expectedPoints;
+  if (!beta || !Number.isFinite(beta)) return p.expectedPoints;
   const ownershipShare = Math.min(1, Math.max(0, p.ownershipPct / 100));
   return p.expectedPoints * (1 - beta * ownershipShare);
+}
+
+/** The same posture applied to NEXT-GAMEWEEK points, for decisions that are
+ * about one gameweek rather than the window — the starting eleven, the
+ * captaincy, and pricing a -4 hit. */
+export function strategicValueNext(p: ScoredPlayer, beta: number): number {
+  if (!beta || !Number.isFinite(beta)) return p.expectedPointsNext;
+  const ownershipShare = Math.min(1, Math.max(0, p.ownershipPct / 100));
+  return p.expectedPointsNext * (1 - beta * ownershipShare);
 }
 
 export interface OptimalSquadResult {
@@ -95,16 +123,23 @@ export interface OptimalSquadResult {
   beta: number;
 }
 
-function buildCandidatePool(scored: ScoredPlayer[], beta: number): ScoredPlayer[] {
+function buildCandidatePool(
+  scored: ScoredPlayer[],
+  beta: number,
+  scale = 1
+): ScoredPlayer[] {
+  const topN = Math.max(12, Math.round(TOP_BY_SCORE_PER_POSITION * scale));
+  const cheapN = Math.max(5, Math.round(CHEAPEST_ENABLERS_PER_POSITION * scale));
+  const bands = Math.max(6, Math.round(PRICE_BANDS_PER_POSITION * scale));
   const pool = new Map<number, ScoredPlayer>();
   for (const posId of [1, 2, 3, 4]) {
     const inPos = scored.filter((p) => p.element.element_type === posId);
     const byScore = [...inPos]
       .sort((a, b) => b.score - a.score)
-      .slice(0, TOP_BY_SCORE_PER_POSITION);
+      .slice(0, topN);
     const byPrice = [...inPos]
       .sort((a, b) => a.priceM - b.priceM)
-      .slice(0, CHEAPEST_ENABLERS_PER_POSITION);
+      .slice(0, cheapN);
     // With a non-zero posture the objective is no longer expected points, so
     // a pool built only on expected points would quietly exclude exactly the
     // players the posture exists to find — a low-owned differential when
@@ -113,9 +148,27 @@ function buildCandidatePool(scored: ScoredPlayer[], beta: number): ScoredPlayer[
     const byStrategic = beta
       ? [...inPos]
           .sort((a, b) => strategicValue(b, beta) - strategicValue(a, beta))
-          .slice(0, TOP_BY_SCORE_PER_POSITION)
+          .slice(0, topN)
       : [];
-    for (const p of [...byScore, ...byStrategic, ...byPrice]) pool.set(p.element.id, p);
+    // The best player in each price band, so the mid-market is never a hole.
+    const banded: ScoredPlayer[] = [];
+    if (inPos.length > 0) {
+      const prices = inPos.map((p) => p.priceM);
+      const lo = Math.min(...prices);
+      const hi = Math.max(...prices);
+      const width = (hi - lo) / bands || 1;
+      for (let b = 0; b < bands; b++) {
+        const from = lo + b * width;
+        const to = b === bands - 1 ? hi + 1e-6 : from + width;
+        const best = inPos
+          .filter((p) => p.priceM >= from && p.priceM < to)
+          .sort((a, b2) => b2.score - a.score)[0];
+        if (best) banded.push(best);
+      }
+    }
+    for (const p of [...byScore, ...byStrategic, ...byPrice, ...banded]) {
+      pool.set(p.element.id, p);
+    }
   }
   return [...pool.values()];
 }
@@ -133,13 +186,26 @@ function buildCandidatePool(scored: ScoredPlayer[], beta: number): ScoredPlayer[
  * 15-player squad in time (e.g. a pathological budget) — a working,
  * honestly-labelled suggestion beats a broken page.
  */
-export function buildOptimalSquad(
+/**
+ * Solves the squad once, at one pool size. Returns null rather than
+ * throwing so the caller can retry smaller.
+ *
+ * WHY A RETRY EXISTS AT ALL. `javascript-lp-solver` will occasionally
+ * return a solution that violates its own budget constraint while setting
+ * `feasible: true` — observed directly during the v1.28 work, on a 304-player
+ * pool: a fifteen that cost £106.7m against a £100m cap, reported as optimal.
+ * The probability of it rises with the size of the model. Validating the
+ * answer against the rules and stepping the pool down is the difference
+ * between a slightly-narrower search and a silently illegal squad.
+ */
+function solveOnce(
   scored: ScoredPlayer[],
-  budgetM = 100,
-  beta = 0
-): OptimalSquadResult {
+  budgetM: number,
+  beta: number,
+  scale: number
+): { squad: ScoredPlayer[]; starters: ScoredPlayer[] } | null {
   try {
-    const pool = buildCandidatePool(scored, beta);
+    const pool = buildCandidatePool(scored, beta, scale);
     const clubIds = Array.from(new Set(pool.map((p) => p.team.id)));
 
     // Two binary decisions per player:
@@ -234,35 +300,51 @@ export function buildOptimalSquad(
       }
     }
 
-    if (!result.feasible || !isValidSquad(squad, budgetM)) {
-      throw new Error("O otimizador não encontrou uma equipa viável de 15.");
-    }
-
-    const totalCost =
-      Math.round(squad.reduce((sum, p) => sum + p.priceM, 0) * 10) / 10;
+    // The solver's own `feasible` flag is not sufficient — see the note on
+    // solveOnce above. Every returned squad is re-checked against the rules.
+    if (!result.feasible || !isValidSquad(squad, budgetM)) return null;
 
     // Use the eleven the solver itself committed to. It optimised the
     // squad AROUND that eleven, so re-deriving it afterwards could pick a
     // different one and quietly invalidate the trade-offs the solver made.
     // Fall back to the standalone picker only if the solver's XI is
     // somehow not a legal eleven.
-    const starters =
-      chosenXi.length === 11 ? chosenXi : pickBestXI(squad);
-
-    return {
-      squad,
-      starters,
-      totalCost,
-      feasible: true,
-      method: "otimizador",
-      beta,
-    };
+    const starters = chosenXi.length === 11 ? chosenXi : pickBestXI(squad);
+    return { squad, starters };
   } catch {
+    return null;
+  }
+}
+
+export function buildOptimalSquad(
+  scored: ScoredPlayer[],
+  budgetM = 100,
+  beta = 0
+): OptimalSquadResult {
+  for (const scale of POOL_RETRY_SCALES) {
+    const solved = solveOnce(scored, budgetM, beta, scale);
+    if (solved) {
+      return {
+        squad: solved.squad,
+        starters: solved.starters,
+        totalCost:
+          Math.round(solved.squad.reduce((sum, p) => sum + p.priceM, 0) * 10) / 10,
+        feasible: true,
+        method: "otimizador",
+        beta,
+      };
+    }
+  }
+
+  {
     // The fallback heuristic can genuinely fail to fill a squad when the
     // budget is tight. It used to report `feasible: true` regardless, and
     // the page then told the user the squad respected 2-5-5-3 while
     // showing eleven players and no forward. Report what actually
     // happened instead, and let the UI say so.
+    // Every pool size failed. The greedy heuristic can genuinely fail to
+    // fill a squad on a tight budget, so report what actually happened
+    // rather than claiming success.
     const fallback = buildSuggestedSquad(scored, budgetM);
     return {
       squad: fallback.squad,

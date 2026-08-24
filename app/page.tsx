@@ -3,6 +3,7 @@ import {
   buildScoredPlayers,
   pickCaptain,
   findDifferentials,
+  orderBench,
 } from "@/lib/recommend";
 import {
   buildFixtureExpectations,
@@ -375,6 +376,7 @@ export default async function Home() {
   // ---- what to actually do before the deadline -------------------------
   const transferAdvice = planTransfers(scored, squadState, {
     beta: posture.beta,
+    currentEvent: fromEvent,
     likelyRisers: risers.map((r) => r.element.id),
     likelyFallers: fallers.map((r) => r.element.id),
   });
@@ -449,16 +451,27 @@ export default async function Home() {
   // read at a glance; the full reasoning lives in the panel below it.
   const decisionCaptain =
     transferAdvice.recommended?.captain ?? captain;
-  const decisionHeadline = transferAdvice.recommended
-    ? transferAdvice.recommended.transfers === 0
-      ? "Não faças nenhuma transferência esta jornada."
-      : transferAdvice.recommended.moves
-          .map((m) => `${m.out.element.web_name} → ${m.in.element.web_name}`)
-          .join("  ·  ")
-    : "Ainda sem plantel teu publicado — este é o onze que o modelo escolheria hoje.";
+  const decisionHeadline = (() => {
+    const plan = transferAdvice.recommended;
+    if (!plan) {
+      return "Ainda sem plantel teu publicado — este é o onze que o modelo escolheria hoje.";
+    }
+    if (plan.transfers === 0) return "Não faças nenhuma transferência esta jornada.";
+    // Listing every swap works for one or two. Beyond that it stops being an
+    // instruction and becomes a paragraph — which is exactly what happened on
+    // a wildcard plan, where five names and five arrows ran off the line.
+    if (plan.transfers > 2) {
+      return plan.key === "wildcard"
+        ? `Joga o Wildcard — ${plan.transfers} transferências, detalhadas em baixo.`
+        : `${plan.transfers} transferências, detalhadas em baixo.`;
+    }
+    return plan.moves
+      .map((m) => `${m.out.element.web_name} → ${m.in.element.web_name}`)
+      .join("  ·  ");
+  })();
 
   const isPreseason = scored[0]?.isPreseason ?? true;
-  const bench = squad.filter((p) => !starters.includes(p));
+  const bench = orderBench(squad.filter((p) => !starters.includes(p)));
   const xiExpected = starters.reduce((s, p) => s + p.expectedPointsNext, 0);
 
   return (
