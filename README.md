@@ -36,6 +36,7 @@ app/
   api/shadow-team/route.ts    Guarda/lê a Shadow Team no Upstash Redis (quando ligado)
   api/insights/route.ts       Lê/escreve notas táticas dinâmicas (GET aberto; POST/DELETE autenticados por INSIGHTS_API_TOKEN)
   api/insights/push/route.ts  Escrita em forma de GET — a única via que a sessão de investigação agendada consegue alcançar (ver lib/insightsintake.ts)
+  api/backtest/route.ts       Corre o backtest do modelo contra jornadas já jogadas (autenticado; ?cached=1 lê o último resultado)
 lib/
   types.ts        Tipos TypeScript para as respostas da API da FPL
   fpl-client.ts   Cliente HTTP server-side para a API da FPL (com cache)
@@ -58,6 +59,7 @@ lib/
   managerinsights.ts Ajustes qualitativos/táticos — lista permanente manual + camada dinâmica auto-aplicada (resolução de nomes, validação, expiração, limite)
   teamrating.ts   Rating de equipa dinâmico (Elo + taxa de golos), calibrado com os resultados reais desta época
   accuracy.ts     Compara previsões do modelo com pontos reais, jornada a jornada (opcional, precisa de Redis)
+  backtest.ts     Backtesting — reconstrói o estado do mundo em cada deadline passado e volta a correr o modelo real contra o que aconteceu
   optimizer.ts    Otimizador real (programação linear) da equipa sugerida
   pricewatch.ts   Preditor de mudanças de preço e monitor de notícias/lesões
   strategy.ts     Playbook e regras 2026/27 (conteúdo da investigação)
@@ -79,6 +81,163 @@ components/
   MyTeamPanel.tsx     A Minha Equipa — liga um Team ID real (client)
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
+
+## Novo na v1.28 — auditoria externa ao modelo
+
+Um especialista externo avaliou o modelo do princípio ao fim, sem o ter visto
+antes. Encontrou catorze defeitos. Estão todos corrigidos, com um teste de
+regressão por cada um — e, mais importante, a recomendação estrutural que a
+auditoria disse valer mais do que os dez defeitos individuais também está
+feita.
+
+### O que estava mal na aritmética de cada jogador
+
+- **A desigualdade de Jensen, em três sítios.** A tabela de pontuação da FPL
+  é cheia de degraus: -1 por cada 2 golos sofridos, 1 por cada 3 defesas,
+  2 pontos ao chegar a 10 ações defensivas. O modelo dividia a MÉDIA pelo
+  degrau, quando o que se paga é a média DO degrau — coisas diferentes.
+  Com 1.35 golos esperados sofridos, a forma antiga cobrava 0.68 onde a
+  verdade são 0.44: um imposto fixo sobre guarda-redes e defesas que nenhum
+  médio ou avançado pagava. As defesas do guarda-redes tinham o erro ao
+  contrário, a oferecer 0.33 pontos por jogo a todos os guarda-redes. Ambos
+  passam a usar a forma exata `E[floor(X/d)] = Σ P(X ≥ jd)`.
+- **A contribuição defensiva era uma reta onde tem de ser uma curva em S.**
+  Com 5 ações por 90 minutos o modelo dizia 25% de probabilidade quando a
+  verdade são 3%; com 15 dizia 75% quando são 93%. Errado nos dois sentidos
+  ao mesmo tempo, o que estragava exatamente a alavanca dos defesas baratos
+  que esta regra criou. E deixa de exigir 60 minutos: o bónus paga-se pelas
+  ações, não pelo tempo.
+- **Os penáltis contavam duas vezes.** O xG de um jogador já inclui os
+  penáltis que marca; somar por cima a taxa de bolas paradas inflacionava
+  precisamente os avançados premium que são candidatos a capitão, onde o
+  erro custa a dobrar.
+- **Os cartões não contavam de todo.** A taxa de amarelos é das mais estáveis
+  que existem, e a omissão não era neutra: caía sobre os centrais e médios
+  defensivos com 0.25-0.40 amarelos por 90 — o mesmo arquétipo que o bónus
+  defensivo recompensa. O modelo pagava-lhes para desarmar e nunca lhes
+  cobrava os cartões que desarmar produz.
+- **Encolhimento por tamanho de amostra.** Com 90 minutos jogados, um jogo
+  de 60 BPS implicava uma taxa de 60, e um amarelo implicava um cartão por
+  jogo. Cada taxa passa a ser puxada para um valor neutro pela sua própria
+  amostra, com prior mais pesado nas estatísticas que se realizam raramente.
+- **As defesas do guarda-redes eram comparadas com uma constante da liga**
+  em vez do nível normal da própria equipa — o mesmo erro de contar a
+  qualidade da equipa duas vezes que o lado atacante já tinha corrigido e
+  este lado não.
+
+### O que estava mal no modelo de jogo
+
+- **Os limites do rating de equipa eram estreitos demais** (0.8 a 1.25). Um
+  Liverpool em casa contra um promovido não cabe nesse intervalo; o modelo
+  achatava os extremos, que é onde estão as decisões. Passam a 0.5 a 1.6.
+- **As bases da liga estavam desatualizadas** (1.5 e 1.2 golos, total de
+  2.70). A Premier League atual anda nos 2.95-3.28. E agora nem são
+  constantes: medem-se nos resultados desta época assim que houver amostra.
+- **A escolha da fonte era uma escada de "ou isto ou aquilo".** Um jogo com
+  odds descartava por completo o que os resultados e os ratings diziam.
+  Passa a haver uma mistura ponderada pela precisão de cada fonte, em espaço
+  logarítmico.
+- **A linha de golos do mercado estava fixa em 2.5.** As casas movem a linha
+  para 3.5 nos jogos com muitos golos e 2.5 nos fechados — ler a linha errada
+  é ler o preço errado. Passa a aceitar qualquer linha e a escolher a modal
+  entre casas.
+- **A janela de 5 jornadas era uma média plana.** Tratava a jornada n+4 como
+  a n, misturando um número afinado pelo mercado com quatro estimativas
+  desfocadas. Passa a ponderar por horizonte e por precisão da fonte.
+- **O descanso entre jogos não existia no modelo.** `kickoff_time` estava no
+  tipo e não era lido por ninguém — é o único dado preciso para o segundo
+  jogo de uma jornada dupla e para o sábado a seguir à quarta-feira europeia.
+
+### O que estava mal na camada de decisão
+
+- **A regra do -4 estava a comparar com a coisa errada.** A alternativa a
+  pagar -4 não é "nunca transferir", é "transferir de graça para a semana" —
+  por isso um hit compra exatamente UMA jornada, e tinha de render mais de 4
+  pontos nessa jornada. A regra antiga disparava a partir de 0.8 pontos por
+  jornada.
+- **Uma transferência livre vale ~1.5 pontos guardada.** Gastar a última não
+  é gratuito e o planeador tratava-a como se fosse.
+- **A ordenação dos planos usava um objetivo diferente do do otimizador** —
+  o mesmo desencontro que já tinha sido corrigido uma vez e voltou a entrar.
+  Agora existe uma função única, usada nos dois sítios.
+- **A braçadeira eram duas listas em vez de um par.** O vice é dobrado
+  exatamente quando o capitão não joga, o que tem uma consequência
+  contra-intuitiva: um premium em dúvida NÃO deve ser penalizado outra vez
+  pela dúvida na escolha do capitão, porque o vice devolve a duplicação nos
+  casos em que a dúvida se confirma. Ordenar só por pontos esperados conta a
+  dúvida duas vezes.
+- **O banco não tinha ordem nenhuma.** As substituições automáticas seguem a
+  ordem do banco e disparam quase uma vez por jornada; o banco era o resto
+  de um filtro, na ordem em que o solver calhasse. Passa a ser guarda-redes
+  suplente à parte e os três de campo por P(jogar) × pontos.
+- **O otimizador devolvia plantéis acima do orçamento a dizer que estavam
+  bem.** Confirmado em produção: £106.7m com o limite em £100m. O conjunto
+  de candidatos passa a ser mais pequeno e melhor estruturado, e há
+  validação independente com nova tentativa em vez de confiança no solver.
+
+### A recomendação que valia mais do que as dez — backtesting
+
+Todos os números deste projeto eram justificados por um argumento. Os
+argumentos são baratos. Uma mistura de 0.65/0.35, um prior de 3 jogos, um
+decaimento de 4 jornadas — cada um foi escolhido por soar bem, e nenhum
+tinha alguma vez sido confrontado com um resultado. Sem isso não há como
+distinguir uma melhoria de uma regressão bem argumentada, e cada alteração
+futura ao modelo é um palpite.
+
+`lib/backtest.ts` reconstrói o mundo tal como estava no deadline de cada
+jornada passada — somando o histórico jogo a jogo que a FPL publica por
+jogador — e volta a correr o **pipeline real** (`buildScoredPlayers`, não uma
+cópia) contra o que aconteceu de facto. Reutilizar o código que está em
+produção é o ponto todo: um backtest que reimplementa o modelo testa a
+reimplementação.
+
+O que mede: erro médio, viés, correlação de ordem (que é o que interessa —
+escolher jogadores é um problema de ordenação, e um modelo pode ser
+otimista em dois pontos e ordenar na perfeição), a diferença entre o decil
+de topo e o de fundo, com que frequência o jogador nº1 do modelo acabou no
+top 10 real da jornada, calibração por escalão — e sempre, ao lado, o que
+uma previsão ingénua (a média de pontos por jogo de cada um) teria feito.
+Um erro de 1.8 pontos pode ser excelente ou vergonhoso conforme o que a
+resposta trivial consegue.
+
+As limitações vão escritas dentro do próprio resultado, não numa nota de
+rodapé: os estados de lesão de hoje não são reconstituíveis e foram
+neutralizados (por isso o backtest mede o modelo SEM a camada de
+disponibilidade, e não recebe crédito por ela); a estimativa da própria FPL
+não fica arquivada e foi substituída pela média de pontos por jogo; e as
+notas táticas manuais não são aplicadas, porque são escritas com o
+conhecimento de hoje.
+
+Quatro dos testes novos existem só para atacar a fuga de informação, que é
+o único erro que invalida um backtest por completo: adulterar as jornadas
+futuras não pode mexer numa única previsão, e adulterar os resultados da
+própria jornada testada tem de piorar as métricas — se não piorar, o modelo
+estava a copiar em vez de prever.
+
+Corre a partir da app (`/api/backtest`), não daqui: o ambiente onde este
+projeto é desenvolvido chega à internet por um proxy que recusa
+`fantasy.premierleague.com`, por isso o histórico por jogador só pode ser
+obtido de dentro do deploy.
+
+## Novo na v1.27.1
+
+Duas correções encontradas ao verificar a v1.27 já em produção:
+
+- **O wildcard estava a ser recomendado na jornada 2.** O sinal media a
+  distância ao plantel ideal e o que essa distância vale em pontos, e disparava
+  acima de 5 transferências e 12 pontos — sem olhar para o calendário. Faltavam
+  duas coisas que só pesam cedo na época: a essa altura o "ideal" assenta quase
+  todo em estimativas de pré-época e em poucas odds, por isso a distância mede
+  sobretudo ruído; e um chip guardado vale mais do que os pontos que compraria
+  hoje, porque só há dois por época e a informação melhora todas as semanas. A
+  barra de pontos passa a decair com a jornada: ~32 pontos na jornada 2, 12 a
+  partir da jornada 10. Uma diferença esmagadora continua a justificar o chip
+  em qualquer altura — a regra não é "nunca cedo".
+- **A frase da decisão partia-se com muitas transferências.** Foi escrita a
+  pensar em uma ou duas trocas; num plano de wildcard, cinco nomes e cinco setas
+  transbordavam a linha e deixavam de ser uma instrução. Acima de duas trocas
+  passa a resumir ("Joga o Wildcard — 6 transferências") e a lista detalhada
+  fica no painel.
 
 ## Novo na v1.27 — redesenho
 
