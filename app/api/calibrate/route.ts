@@ -24,7 +24,19 @@ import type { FplElement } from "@/lib/types";
  */
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 800;
+// 300 is the ceiling on Vercel's Hobby plan. Setting it higher does not
+// give a longer function — the DEPLOYMENT is rejected outright
+// ("invalid_max_duration"), which is how the v1.30 deploy died. The sweep
+// therefore works to a time budget instead of assuming it has all day.
+export const maxDuration = 300;
+
+/** Leave headroom for fetching histories and serialising the reply. */
+const SWEEP_BUDGET_MS = 210_000;
+
+/** Most parameters one request may sweep. A full twelve-parameter sweep
+ * cannot fit in 300 seconds, and pretending otherwise just wastes the run.
+ * The weekly scheduled task rotates through them three at a time. */
+const MAX_PARAMS_PER_RUN = 4;
 
 const CACHE_KEY = "calibration:last";
 const HISTORY_KEY = (id: number, upTo: number) => `backtest:hist:${id}:${upTo}`;
@@ -95,6 +107,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  const startedAt = Date.now();
   try {
     const [bootstrap, fixtures] = await Promise.all([getBootstrap(), getFixtures()]);
     const finishedEvents = bootstrap.events
@@ -163,7 +176,11 @@ export async function GET(req: NextRequest) {
       historyByElement,
       fromEvent,
       toEvent,
-      params: requested.length > 0 ? requested : undefined,
+      params:
+        requested.length > 0
+          ? requested.slice(0, MAX_PARAMS_PER_RUN)
+          : (Object.keys(PARAM_GRIDS) as TunableParam[]).slice(0, MAX_PARAMS_PER_RUN),
+      deadlineMs: startedAt + SWEEP_BUDGET_MS,
     });
 
     if (redis) await redis.set(CACHE_KEY, report);

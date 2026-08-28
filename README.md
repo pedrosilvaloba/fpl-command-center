@@ -87,6 +87,37 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.30.1 — o deploy da v1.30 foi recusado por um limite do plano
+
+O build passou, os 428 testes passaram, e a app não subiu. A Vercel recusou o
+deploy inteiro com `invalid_max_duration`: a rota `/api/calibrate` declarava
+`maxDuration = 800` e o plano Hobby aceita no máximo **300**. Não trunca —
+recusa.
+
+Foi um número que escrevi sem verificar contra o plano em que este projeto
+corre. O varrimento é caro e eu dei-lhe o tempo que achei que precisava, em
+vez do tempo que existe.
+
+**A correção não é só baixar o número.** Um varrimento completo não cabe em
+300 segundos, e bater na parede sem devolver nada é o pior resultado
+possível para uma tarefa semanal automática. Por isso:
+
+- `maxDuration` a 300, com o motivo escrito ao lado para ninguém o voltar a
+  subir sem saber porquê.
+- A calibração passa a trabalhar com **orçamento de tempo**. Antes de começar
+  cada parâmetro verifica o relógio; se já não há tempo, para e devolve o que
+  já apurou, com `truncated: true` e a lista dos que ficaram por cobrir. A
+  verificação é feita ANTES de começar um parâmetro e nunca a meio — meio
+  varrimento reportaria um "melhor valor" escolhido a partir de meia grelha,
+  o que é pior do que não reportar nada.
+- Máximo de 4 parâmetros por pedido. A tarefa semanal já roda três a três.
+
+**O teste que faltava.** A suite passou a ler os próprios ficheiros de rota e
+a verificar que nenhum declara um `maxDuration` acima do limite do plano. É o
+único sítio onde os testes olham para o código como texto, e justifica-se:
+nada mais nesta suite consegue apanhar um limite de infraestrutura. Validado
+ao contrário — repondo o 800, falha com a linha exata.
+
 ## Novo na v1.30 — calibração: transformar argumentos em medições
 
 Pedido: "quero continuar a melhorar o modelo", com a direção escolhida de

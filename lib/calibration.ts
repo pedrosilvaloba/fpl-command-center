@@ -97,6 +97,11 @@ export interface CalibrationReport {
   /** Only the parameters that cleared every guard, worst-first by how much
    * the current value is costing. */
   recommendations: ParamResult[];
+  /** True when the time budget stopped the sweep before every requested
+   * parameter was covered. The ones missed are named, so the next run can
+   * pick them up rather than silently never testing them. */
+  truncated: boolean;
+  notCovered: TunableParam[];
 }
 
 /** Mean absolute error. Chosen over RMSE because FPL scores have a long
@@ -114,6 +119,12 @@ export interface CalibrationInput {
   toEvent: number;
   /** Restrict the sweep to these parameters. Defaults to all of them. */
   params?: TunableParam[];
+  /** Absolute timestamp (Date.now() terms) after which no NEW parameter is
+   * started. A sweep is easily the most expensive thing this project does
+   * and it runs inside a serverless function with a hard wall — without a
+   * budget, hitting that wall returns nothing at all, and a partial answer
+   * is worth infinitely more than a timeout. */
+  deadlineMs?: number;
 }
 
 /**
@@ -176,9 +187,17 @@ export function calibrate(input: CalibrationInput): CalibrationReport {
   };
 
   const results: ParamResult[] = [];
+  const notCovered: TunableParam[] = [];
   for (const param of paramNames) {
     const grid = PARAM_GRIDS[param as keyof ModelParams];
     if (!grid) continue;
+    // Checked BEFORE starting a parameter, never mid-parameter: a half-swept
+    // parameter would report a "best value" chosen from part of its grid,
+    // which is worse than not reporting it at all.
+    if (input.deadlineMs !== undefined && Date.now() >= input.deadlineMs) {
+      notCovered.push(param);
+      continue;
+    }
     const currentValue = DEFAULT_MODEL_PARAMS[param as keyof ModelParams] as number;
 
     // One replay per candidate value, kept as per-gameweek errors so the
@@ -295,5 +314,7 @@ export function calibrate(input: CalibrationInput): CalibrationReport {
     recommendations: results
       .filter((r) => r.recommended)
       .sort((a, b) => b.improvement - a.improvement),
+    truncated: notCovered.length > 0,
+    notCovered,
   };
 }

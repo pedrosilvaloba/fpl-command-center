@@ -76,6 +76,9 @@ import {
   deriveTeamRatingsFromMarket,
 } from "../lib/oddsmodel";
 import type { OddsMatch } from "../lib/oddsapi";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isStorageConfigured } from "../lib/kv";
 import { DEFAULT_MODEL_PARAMS, PARAM_GRIDS } from "../lib/modelparams";
 import { calibrate, MIN_EVENTS, MIN_ROWS } from "../lib/calibration";
@@ -3400,6 +3403,58 @@ function testCalibrationIsHonestAboutDisagreement() {
   );
 }
 
+// ---------------------------------------------------------------------
+// v1.30.1 — o deploy morreu por causa de um limite do plano.
+//
+// `maxDuration = 800` no /api/calibrate. O plano Hobby da Vercel aceita no
+// máximo 300, e não trunca: RECUSA O DEPLOY INTEIRO
+// ("invalid_max_duration"). O build passou, os testes passaram, e a app
+// não subiu — uma constante escrita sem verificar o plano derrubou tudo.
+//
+// Este teste lê os próprios ficheiros de rota. É o único sítio onde a
+// suite olha para o código como texto, e vale a pena: nada mais aqui
+// consegue apanhar um limite de infraestrutura.
+// ---------------------------------------------------------------------
+
+const VERCEL_HOBBY_MAX_DURATION = 300;
+
+function testNoRouteExceedsThePlanTimeout() {
+  const walk = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...walk(full));
+      else if (entry.name === "route.ts" || entry.name === "page.tsx") out.push(full);
+    }
+    return out;
+  };
+
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const appDir = path.join(here, "..", "app");
+  const files = fs.existsSync(appDir) ? walk(appDir) : [];
+  check("os ficheiros de rota são encontrados para verificação", files.length > 0);
+
+  const offenders: string[] = [];
+  let declared = 0;
+  for (const file of files) {
+    const src = fs.readFileSync(file, "utf8");
+    const m = src.match(/export\s+const\s+maxDuration\s*=\s*(\d+)/);
+    if (!m) continue;
+    declared++;
+    const value = parseInt(m[1], 10);
+    if (value > VERCEL_HOBBY_MAX_DURATION) {
+      offenders.push(`${path.relative(appDir, file)} = ${value}`);
+    }
+  }
+
+  check("pelo menos uma rota declara maxDuration (senão o teste é vazio)", declared > 0);
+  check(
+    `nenhuma rota passa do limite de ${VERCEL_HOBBY_MAX_DURATION}s do plano`,
+    offenders.length === 0,
+    offenders.join(", ")
+  );
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testFreeTransferReconstruction();
 testSellingPriceEstimation();
@@ -3469,6 +3524,8 @@ testDefaultsMatchTheShippedLiterals();
 testParamsChangeNothingByDefault();
 testCalibrationRefusesToGuess();
 testCalibrationIsHonestAboutDisagreement();
+
+testNoRouteExceedsThePlanTimeout();
 
 report("regressão");
 const { passed, failed } = counts();
