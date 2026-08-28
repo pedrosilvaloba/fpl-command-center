@@ -24,6 +24,7 @@ import {
   insightAppliesToEvent,
 } from "./managerinsights";
 import type { ManagerInsight } from "./managerinsights";
+import type { ModelParams } from "./modelparams";
 
 export interface ScoredPlayer {
   element: FplElement;
@@ -186,7 +187,10 @@ export function buildScoredPlayers(
   // still behaves the same as before this parameter existed — callers
   // that want the full auto-updating layer (i.e. the live dashboard) pass
   // the result of `loadActiveInsights()` here instead.
-  managerInsights: ManagerInsight[] = MANAGER_INSIGHTS
+  managerInsights: ManagerInsight[] = MANAGER_INSIGHTS,
+  /** Model constants. Omitted everywhere except the calibration sweep,
+   * which is the whole reason they are injectable — see lib/modelparams.ts. */
+  modelParams?: Partial<ModelParams>
 ): ScoredPlayer[] {
   const teamById = new Map(bootstrap.teams.map((t) => [t.id, t]));
   const ticker = buildFixtureTicker(bootstrap.teams, fixtures, fromEvent, fixtureWindow);
@@ -270,8 +274,13 @@ export function buildScoredPlayers(
     const reasons: string[] = [];
 
     // ---- expected points -------------------------------------------------
-    const mins = computeMinutesModel(el, teamFinishedFixtures.get(team.id) ?? 0, isPreseason);
-    const rates = computePlayerRates(el);
+    const mins = computeMinutesModel(
+      el,
+      teamFinishedFixtures.get(team.id) ?? 0,
+      isPreseason,
+      modelParams
+    );
+    const rates = computePlayerRates(el, modelParams);
     const minutesPlayed = Number.isFinite(el.minutes) ? el.minutes : 0;
 
     // How good is this team's upcoming run RELATIVE TO ITS OWN normal
@@ -310,7 +319,7 @@ export function buildScoredPlayers(
     // `ep_next` does not expose. Using it as a blend partner rather than
     // as one more additive term is what stops it double-counting form,
     // fixtures and minutes, all of which it already contains.
-    const trust = isPreseason ? 0 : modelTrust(minutesPlayed);
+    const trust = isPreseason ? 0 : modelTrust(minutesPlayed, modelParams);
 
     let expectedPoints: number;
     let expectedPointsNext: number;

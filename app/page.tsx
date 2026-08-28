@@ -1,4 +1,4 @@
-import { getBootstrap, getFixtures, getLeagueStandings } from "@/lib/fpl-client";
+import { getBootstrap, getFixtures, getFullLeagueStandings } from "@/lib/fpl-client";
 import {
   buildScoredPlayers,
   pickCaptain,
@@ -278,16 +278,21 @@ export default async function Home() {
     total: number;
   }[] = [];
   let leagueError: string | null = null;
-  let leagueStandingsRaw: Awaited<ReturnType<typeof getLeagueStandings>> | null = null;
+  let leagueComplete = true;
+  let leagueStandingsRaw: Awaited<ReturnType<typeof getFullLeagueStandings>> | null = null;
   try {
-    leagueStandingsRaw = await getLeagueStandings(DEFAULT_LEAGUE_ID);
+    // Every page, not just the first fifty — see getFullLeagueStandings.
+    leagueStandingsRaw = await getFullLeagueStandings(DEFAULT_LEAGUE_ID);
     leagueName = leagueStandingsRaw.league.name;
-    leagueResults = leagueStandingsRaw.standings.results;
+    leagueResults = leagueStandingsRaw.results;
+    leagueComplete = leagueStandingsRaw.complete;
   } catch {
     leagueError =
       "Não foi possível carregar esta liga — se for uma liga privada pode precisar de sessão autenticada.";
   }
   const myTeamIdNum = Number(DEFAULT_TEAM_ID);
+  const myLeagueRank =
+    leagueResults.find((r) => r.entry === myTeamIdNum)?.rank ?? null;
 
   // ---- Camada 2: simulation against the real rivals ---------------------
   // `finished` (bonus confirmed, stats final) is the right gate for the
@@ -330,7 +335,7 @@ export default async function Home() {
   };
   if (lastPublishedEvent >= 1 && leagueStandingsRaw) {
     const squads = await fetchRivalSquads(
-      leagueStandingsRaw.standings.results,
+      leagueStandingsRaw.results,
       lastPublishedEvent,
       myTeamIdNum
     );
@@ -785,19 +790,42 @@ export default async function Home() {
 
           <LeagueSimPanel outlook={effectiveOutlook} />
 
-          {leagueResults.length > 0 && !effectiveOutlook.available && (
-            <div className="mt-5 scroll-x">
+          {/* ALWAYS shown, not only when the simulation is unavailable.
+              This table used to be a fallback for a broken simulation, which
+              meant fixing the simulation would have made the league table
+              disappear — the opposite of what it is for. */}
+          {leagueResults.length > 0 && (
+            <div className="mt-5">
+              <p className="mb-2 flex flex-wrap items-baseline justify-between gap-2 text-xs text-text-muted">
+                <span>
+                  Liga completa — <strong className="text-text">{leagueResults.length}</strong>{" "}
+                  {leagueResults.length === 1 ? "equipa" : "equipas"}
+                  {myLeagueRank !== null && (
+                    <>
+                      {" · estás em "}
+                      <strong className="text-text">{myLeagueRank}º</strong>
+                    </>
+                  )}
+                </span>
+                {!leagueComplete && (
+                  <span className="text-warn">
+                    Liga demasiado grande para carregar por inteiro — mostradas as
+                    primeiras {leagueResults.length}.
+                  </span>
+                )}
+              </p>
+              <div className="max-h-[26rem] overflow-y-auto scroll-x rounded-lg border border-border">
               <table className="w-full border-collapse text-sm">
                 <thead>
-                  <tr className="text-left text-xs uppercase tracking-wide text-text-muted">
-                    <th className="py-2 pr-3 font-semibold">#</th>
+                  <tr className="sticky top-0 bg-surface text-left text-xs uppercase tracking-wide text-text-muted">
+                    <th className="py-2 pl-3 pr-3 font-semibold">#</th>
                     <th className="py-2 pr-3 font-semibold">Gestor</th>
                     <th className="py-2 pr-3 font-semibold">Equipa</th>
                     <th className="py-2 text-right font-semibold">Pontos</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {leagueResults.slice(0, 20).map((r) => (
+                  {leagueResults.map((r) => (
                     <tr
                       key={r.id}
                       className={`border-t border-border ${
@@ -806,7 +834,7 @@ export default async function Home() {
                           : ""
                       }`}
                     >
-                      <td className="py-2 pr-3 font-mono tabular">{r.rank}</td>
+                      <td className="py-2 pl-3 pr-3 font-mono tabular">{r.rank}</td>
                       <td className="py-2 pr-3">{r.player_name}</td>
                       <td className="py-2 pr-3 text-text-muted">
                         {r.entry_name}
@@ -823,6 +851,7 @@ export default async function Home() {
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
         </Section>

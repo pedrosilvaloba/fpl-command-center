@@ -37,6 +37,7 @@ app/
   api/insights/route.ts       Lê/escreve notas táticas dinâmicas (GET aberto; POST/DELETE autenticados por INSIGHTS_API_TOKEN)
   api/insights/push/route.ts  Escrita em forma de GET — a única via que a sessão de investigação agendada consegue alcançar (ver lib/insightsintake.ts)
   api/backtest/route.ts       Corre o backtest do modelo contra jornadas já jogadas (autenticado; ?cached=1 lê o último resultado)
+  api/calibrate/route.ts      Varre as constantes do modelo contra dados reais e diz quais deviam mudar (autenticado)
 lib/
   types.ts        Tipos TypeScript para as respostas da API da FPL
   fpl-client.ts   Cliente HTTP server-side para a API da FPL (com cache)
@@ -59,6 +60,8 @@ lib/
   managerinsights.ts Ajustes qualitativos/táticos — lista permanente manual + camada dinâmica auto-aplicada (resolução de nomes, validação, expiração, limite)
   teamrating.ts   Rating de equipa dinâmico (Elo + taxa de golos), calibrado com os resultados reais desta época
   accuracy.ts     Compara previsões do modelo com pontos reais, jornada a jornada (opcional, precisa de Redis)
+  modelparams.ts  As constantes do modelo, num só sítio e injetáveis — sem isto não há calibração possível
+  calibration.ts  Varrimento das constantes contra jornadas reais, com validação fora da amostra e travões anti-sobreajuste
   backtest.ts     Backtesting — reconstrói o estado do mundo em cada deadline passado e volta a correr o modelo real contra o que aconteceu
   optimizer.ts    Otimizador real (programação linear) da equipa sugerida
   pricewatch.ts   Preditor de mudanças de preço e monitor de notícias/lesões
@@ -83,6 +86,121 @@ components/
   MyTeamPanel.tsx     A Minha Equipa — liga um Team ID real (client)
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
+
+## Novo na v1.30 — calibração: transformar argumentos em medições
+
+Pedido: "quero continuar a melhorar o modelo", com a direção escolhida de
+afinar o que já existe com dados reais.
+
+A v1.28 construiu o backtest, que responde a "quão errado está o modelo".
+Esta versão responde à pergunta que de facto o melhora: **quais das suas
+constantes estão erradas, e quanto deviam valer**.
+
+### O obstáculo era estrutural
+
+Não se calibra uma constante que não se consegue variar. A mistura de
+0.65/0.35, o prior de encolhimento de 3 jogos, o intercepto de 12 BPS —
+estavam todos escritos como literais no meio de funções. `lib/modelparams.ts`
+junta os dezoito num só sítio e torna-os injetáveis, com os valores de sempre
+por omissão. Há um teste que verifica cada valor por omissão contra o literal
+que substituiu, porque uma deriva silenciosa aqui mexia no modelo inteiro sem
+ninguém decidir nada.
+
+### O método, e sobretudo os travões
+
+`lib/calibration.ts` varre valores alternativos, um parâmetro de cada vez, e
+mede qual prevê melhor. O que interessa não é o varrimento — é a defesa
+contra o autoengano, porque **um varrimento encontra sempre um vencedor**.
+
+**Travão 1 — avaliação fora da amostra.** Escolher um valor nas mesmas
+jornadas em que depois o avaliamos mede o quão bem ele decorou essas
+jornadas. Cada jornada é, à vez, deixada de fora: o valor é escolhido em
+todas as outras e avaliado só nessa. Um valor que só ajuda onde foi escolhido
+não pontua melhor do que o atual — que é exatamente o ponto.
+
+*A primeira versão desta função fazia média dos erros por jornada e chamava
+a isso validação cruzada. Não era: a escolha via todas as jornadas em que
+depois era avaliada. Um comentário a prometer um rigor que o código não tinha
+é pior do que não ter rigor nenhum, porque lê-se como garantia.*
+
+**Travão 2 — evidência mínima.** Abaixo de 6 jornadas e 900 previsões, nada é
+recomendado. Isto não é teoria: com o travão removido, três jornadas de dados
+sintéticos já produzem uma "recomendação". Com uma amostra dessas o vencedor
+é ruído com casas decimais — e as casas decimais são o que o torna
+convincente.
+
+**Travão 3 — concordância entre jornadas.** Se as jornadas escolhem valores
+diferentes, essa discordância É o resultado: ainda não há sinal estável. O
+relatório di-lo em vez de apresentar a média como se fosse consenso.
+
+**Travão 4 — efeito mínimo.** Uma melhoria de 0.3% não justifica mexer numa
+constante que tem uma justificação por trás. O valor atual é o incumbente:
+ganha empates e quase-empates.
+
+O que isto deliberadamente NÃO faz é procurar combinações. Um varrimento
+conjunto sobre doze parâmetros, com as amostras que uma época de FPL dá,
+ajustar-se-ia ao ruído quase na perfeição.
+
+### Como corre
+
+`/api/calibrate` (autenticado; `?cached=1` lê o último relatório sem token).
+É a coisa mais cara do projeto — um replay completo por valor candidato por
+parâmetro — por isso corre a pedido e aceita `?params=` para varrer um
+subconjunto.
+
+Há uma tarefa agendada às terças de manhã que mede o erro, varre três
+parâmetros à vez em rotação, e relata em português: se o modelo bate a
+previsão ingénua, se a ordenação compensa, e o que mudar — ou "nada esta
+semana", sem pedir desculpa por isso.
+
+**Aviso honesto:** só há uma jornada terminada. Até por volta da jornada 6
+esta camada vai dizer, corretamente, que não sabe. Foi construída agora para
+render depois; não para produzir números já.
+
+## Novo na v1.29 — a Camada 2 estava desligada e ninguém dava por isso
+
+Pedido: "quero que apareça a liga toda, agora só aparecem alguns membros".
+A investigação encontrou três truncagens, e a segunda era muito mais grave
+do que a queixa.
+
+**1. Só se lia a primeira página.** `getLeagueStandings` devolve 50 entradas
+por página e a app lia só a primeira. Qualquer liga com mais de 50 membros
+aparecia cortada, e cortada em silêncio — a tabela simplesmente acabava,
+parecendo que a liga era menor do que é. Passa a existir
+`getFullLeagueStandings`, que segue a paginação até ao fim e, quando bate no
+limite de segurança, diz que ficou incompleta em vez de deixar adivinhar.
+
+**2. A Camada 2 estava morta em produção.** Os rivais simulados eram
+`standings.slice(0, 24)` — os 24 primeiros. O raciocínio escrito no código
+era que "para além dos primeiros, a classificação não é a competição em que
+estás realmente". Esse raciocínio tem um buraco que desliga a camada
+inteira: **se TU não estás nos 24 primeiros, não estás na amostra** — e a
+simulação não consegue simular uma liga onde a tua equipa não está.
+
+Era exatamente o que estava a acontecer: 29º de 47. A `simulateLeague`
+devolvia "não foi possível identificar a tua equipa", a postura caía para
+neutra e o β ia a zero. A página dizia-o, mas numa linha pequena que se lê
+como um problema temporário de dados e não como uma exclusão permanente.
+Uma das duas camadas de aprendizagem esteve desligada para o único
+utilizador que esta app tem.
+
+A seleção passa a ter uma ordem de prioridade explícita: **tu primeiro**,
+sempre, seja qual for a posição; depois os teus vizinhos diretos na tabela,
+que são quem uma jornada consegue mesmo ultrapassar; depois os líderes, que
+marcam o ritmo; e só então os restantes, até ao limite (agora 60, com os
+pedidos limitados a 8 em simultâneo para não martelar uma API pública e
+gratuita).
+
+**3. A tabela da liga só aparecia quando a simulação falhava.** Estava
+escrita como recurso para o caso de a Camada 2 não estar disponível — o que
+significa que corrigir a simulação teria feito a tabela desaparecer, o
+oposto do que foi pedido. Passa a estar sempre visível, com a liga inteira,
+rolável, com a tua linha destacada e o total de equipas em cima.
+
+**Os testes.** Sete verificações novas, validadas ao contrário: repondo o
+`slice(0, 24)`, falham sete, incluindo a mensagem literal que estava em
+produção. Cobrem estar em 29º, estar em último, estar em primeiro, uma liga
+de 5000 entradas, e um Team ID que não pertence à liga.
 
 ## Novo na v1.28.2 — o orçamento estava errado, e mandava comprar o incomprável
 

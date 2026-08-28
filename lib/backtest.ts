@@ -1,5 +1,6 @@
 import type { FplBootstrap, FplElement, FplFixture } from "./types";
 import { buildScoredPlayers } from "./recommend";
+import type { ModelParams } from "./modelparams";
 
 /**
  * BACKTESTING HARNESS — replaying the model against gameweeks that have
@@ -422,6 +423,9 @@ export interface BacktestInput {
    * including thousands of guaranteed 0-0 rows would make every error
    * metric look far better than the model deserves. */
   minMinutes?: number;
+  /** Model constants to run the replay with. Omitted means the shipped
+   * defaults; the calibration sweep varies them one at a time. */
+  modelParams?: Partial<ModelParams>;
 }
 
 /** How many minutes of evidence a prediction needs before it counts as
@@ -429,7 +433,21 @@ export interface BacktestInput {
  * in lib/expectedpoints.ts. */
 const HIGH_TRUST_MINUTES = 360;
 
-export function runBacktest(input: BacktestInput): BacktestResult {
+/**
+ * The replay itself, stopping at the raw rows.
+ *
+ * Split out from `runBacktest` because the calibration sweep needs the rows
+ * and not the summary: it re-scores the same rows many different ways (once
+ * per held-out gameweek, per candidate value), and computing a full metrics
+ * bundle each time would be wasted work.
+ *
+ * `baseline[i]` is the naive points-per-game prediction for `rows[i]` — the
+ * two arrays are built in lockstep and callers rely on that.
+ */
+export function collectBacktestRows(input: BacktestInput): {
+  rows: BacktestRow[];
+  baseline: { predicted: number; actual: number }[];
+} {
   const { bootstrap, fixtures, historyByElement, fromEvent, toEvent } = input;
   const minMinutes = input.minMinutes ?? 1;
   const elementIds = [...historyByElement.keys()];
@@ -449,7 +467,15 @@ export function runBacktest(input: BacktestInput): BacktestResult {
     // The real pipeline, with no qualitative notes: those are written by
     // hand today and applying them to a past gameweek is leakage of the
     // most flattering kind.
-    const scored = buildScoredPlayers(asOfBootstrap, asOfFixtures, event, 5, null, []);
+    const scored = buildScoredPlayers(
+      asOfBootstrap,
+      asOfFixtures,
+      event,
+      5,
+      null,
+      [],
+      input.modelParams
+    );
 
     for (const p of scored) {
       const history = historyByElement.get(p.element.id) ?? [];
@@ -476,6 +502,14 @@ export function runBacktest(input: BacktestInput): BacktestResult {
       baselineRows.push({ predicted: parseFloat(p.element.points_per_game) || 0, actual });
     }
   }
+
+  return { rows, baseline: baselineRows };
+}
+
+export function runBacktest(input: BacktestInput): BacktestResult {
+  const { fromEvent, toEvent } = input;
+  const elementIds = [...input.historyByElement.keys()];
+  const { rows, baseline: baselineRows } = collectBacktestRows(input);
 
   const metrics = scoreBacktest(rows);
   const baseline = scoreBaseline(baselineRows);

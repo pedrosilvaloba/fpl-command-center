@@ -42,7 +42,7 @@ import {
   type MinutesModel,
 } from "../lib/expectedpoints";
 import { buildOptimalSquad, strategicValue } from "../lib/optimizer";
-import { simulateLeague, applyLearningTilt, type RivalSquad } from "../lib/rivals";
+import { simulateLeague, applyLearningTilt, selectRivals, type RivalSquad } from "../lib/rivals";
 import {
   buildLearningState,
   applyCalibration,
@@ -77,6 +77,8 @@ import {
 } from "../lib/oddsmodel";
 import type { OddsMatch } from "../lib/oddsapi";
 import { isStorageConfigured } from "../lib/kv";
+import { DEFAULT_MODEL_PARAMS, PARAM_GRIDS } from "../lib/modelparams";
+import { calibrate, MIN_EVENTS, MIN_ROWS } from "../lib/calibration";
 import {
   reconstructElementAsOf,
   reconstructFixturesAsOf,
@@ -3030,6 +3032,374 @@ function testPlanNeverExceedsRealMoney() {
   }
 }
 
+// ---------------------------------------------------------------------
+// v1.29 — a Camada 2 estava desligada em produção e ninguém dava por isso.
+//
+// Os rivais eram os 24 primeiros da tabela. Quem está em 29º de 47 não
+// entra nessa lista — e a simulação não consegue simular uma liga onde a
+// própria equipa não está. A postura caía para neutra, β ficava a 0, e a
+// página dizia-o numa linha pequena que se lia como um problema temporário
+// de dados em vez de uma exclusão permanente.
+// ---------------------------------------------------------------------
+
+function mkStandings(n: number) {
+  return Array.from({ length: n }, (_, i) => ({
+    id: i + 1,
+    entry: 1000 + i,
+    entry_name: `Equipa ${i + 1}`,
+    player_name: `Gestor ${i + 1}`,
+    rank: i + 1,
+    last_rank: i + 1,
+    total: 100 - i,
+    event_total: 50,
+  }));
+}
+
+function testRivalSelectionAlwaysIncludesMe() {
+  // O caso real: 47 na liga, eu em 29º.
+  const league = mkStandings(47);
+  const me = league[28].entry;
+  const picked = selectRivals(league, me, 24);
+  check(
+    "estando em 29º de 47, continuo dentro da amostra simulada",
+    picked.some((e) => e.entry === me),
+    `escolhidos: ${picked.map((e) => e.rank).join(",")}`
+  );
+  check("e o limite é respeitado", picked.length === 24, `${picked.length}`);
+
+  // O último da tabela é o caso extremo do mesmo erro.
+  const last = league[46].entry;
+  check(
+    "mesmo em último lugar continuo dentro",
+    selectRivals(league, last, 24).some((e) => e.entry === last)
+  );
+  // E o primeiro, obviamente.
+  check(
+    "e em primeiro também",
+    selectRivals(league, league[0].entry, 24).some((e) => e.entry === league[0].entry)
+  );
+
+  // Os vizinhos diretos importam mais do que a 24ª equipa: são eles que uma
+  // jornada consegue mesmo ultrapassar.
+  const ranks = new Set(picked.map((e) => e.rank));
+  check(
+    "os vizinhos imediatos acima e abaixo entram",
+    [27, 28, 30, 31].every((r) => ranks.has(r)),
+    `${[...ranks].sort((a, b) => a - b).join(",")}`
+  );
+  check(
+    "e os líderes também, porque é o ritmo deles que é preciso acompanhar",
+    ranks.has(1) && ranks.has(2) && ranks.has(3)
+  );
+  check(
+    "a lista sai por ordem de classificação",
+    picked.every((e, i) => i === 0 || picked[i - 1].rank < e.rank)
+  );
+  check(
+    "ninguém aparece duas vezes",
+    new Set(picked.map((e) => e.entry)).size === picked.length
+  );
+
+  // Ligas pequenas entram por inteiro, sem escolhas nenhumas.
+  const small = mkStandings(12);
+  check(
+    "uma liga mais pequena do que o limite entra toda",
+    selectRivals(small, small[5].entry, 24).length === 12
+  );
+
+  // Uma liga enorme não pode rebentar o limite nem perder-me.
+  const huge = mkStandings(5000);
+  const inHuge = selectRivals(huge, huge[4321].entry, 60);
+  check(
+    "numa liga de 5000, o limite aguenta e continuo lá dentro",
+    inHuge.length === 60 && inHuge.some((e) => e.entry === huge[4321].entry),
+    `${inHuge.length}`
+  );
+
+  // Um Team ID que não pertence à liga não pode partir a seleção.
+  const stranger = selectRivals(league, 999999, 24);
+  check(
+    "um ID de fora da liga devolve na mesma uma amostra válida",
+    stranger.length === 24 && stranger[0].rank === 1
+  );
+}
+
+function testSimulationSurvivesBeingBottomOfTheLeague() {
+  // O teste de ponta a ponta do mesmo defeito: com a seleção certa, a
+  // simulação tem de ficar DISPONÍVEL para quem está no fundo da tabela.
+  const league = mkStandings(47);
+  const meEntry = league[28].entry;
+  const picked = selectRivals(league, meEntry, 24);
+
+  const pool: ScoredPlayer[] = [];
+  for (let i = 0; i < 30; i++) {
+    pool.push(
+      mkSim(500 + i, {
+        teamId: (i % 20) + 1,
+        type: (i % 4) + 1,
+        epNext: 3 + (i % 5),
+        own: 10 + (i % 40),
+      })
+    );
+  }
+  const squads: RivalSquad[] = picked.map((e, i) =>
+    mkSquad(
+      e.entry,
+      e.rank,
+      e.total,
+      Array.from({ length: 11 }, (_, k) => pool[(i + k) % pool.length].element.id),
+      e.entry === meEntry
+    )
+  );
+
+  const outlook = simulateLeague(squads, pool, {
+    currentEvent: 10,
+    squadsFromEvent: 9,
+    runs: 300,
+  });
+  check(
+    "a simulação fica disponível mesmo estando em 29º de 47",
+    outlook.available,
+    outlook.reason ?? ""
+  );
+  check("e identifica a minha equipa", outlook.me?.entry === meEntry);
+  check(
+    "e produz uma postura a sério, não a predefinição neutra",
+    outlook.rivals.length > 0 && outlook.runs > 0
+  );
+
+  // O contrário: sem a minha equipa, tem de recusar em vez de inventar.
+  const withoutMe = squads.filter((s) => !s.isMe);
+  const broken = simulateLeague(withoutMe, pool, {
+    currentEvent: 10,
+    squadsFromEvent: 9,
+    runs: 100,
+  });
+  check(
+    "sem a minha equipa, a simulação recusa em vez de fingir",
+    !broken.available && broken.posture.beta === 0
+  );
+}
+
+// ---------------------------------------------------------------------
+// v1.30 — calibração. Transformar argumentos em medições.
+//
+// O perigo desta camada não é errar a conta: é encontrar um "melhor valor"
+// em três jornadas de dados e apresentá-lo com duas casas decimais. Um
+// varrimento ENCONTRA SEMPRE um vencedor. A maior parte dos testes abaixo
+// existe para garantir que a máquina se cala quando não sabe.
+// ---------------------------------------------------------------------
+
+function testDefaultsMatchTheShippedLiterals() {
+  // Se estes valores mudarem sem ninguém decidir, o modelo inteiro muda.
+  const d = DEFAULT_MODEL_PARAMS;
+  const expected: [string, number][] = [
+    ["underlyingBlend", 0.65],
+    ["shrinkXg", 3],
+    ["shrinkXa", 3],
+    ["shrinkBonus", 6],
+    ["shrinkSaves", 3],
+    ["shrinkDc", 6],
+    ["shrinkYellow", 6],
+    ["shrinkRed", 10],
+    ["priorYellow90", 0.12],
+    ["priorRed90", 0.012],
+    ["bpsIntercept", 12],
+    ["bpsDivisor", 18],
+    ["bpsMaxBonus", 2.2],
+    ["bpsBlend", 0.7],
+    ["minutes60Floor", 35],
+    ["minutes60Span", 45],
+    ["minutes60Cap", 0.97],
+    ["modelTrustMinutes", 360],
+  ];
+  for (const [key, value] of expected) {
+    check(
+      `o valor por omissão de ${key} é o que o modelo sempre teve (${value})`,
+      (d as unknown as Record<string, number>)[key] === value,
+      `${(d as unknown as Record<string, number>)[key]}`
+    );
+  }
+
+  check(
+    "todos os parâmetros com grelha têm o valor atual dentro dela",
+    (Object.keys(PARAM_GRIDS) as (keyof typeof PARAM_GRIDS)[]).every((k) => {
+      const grid = PARAM_GRIDS[k]!;
+      const current = (d as unknown as Record<string, number>)[k as string];
+      return grid.some((v) => Math.abs(v - current) < 1e-9);
+    }),
+    "uma grelha que não contém o valor atual não consegue dizer 'fica como está'"
+  );
+}
+
+function testParamsChangeNothingByDefault() {
+  const el = makeElement({
+    id: 1,
+    element_type: 3,
+    minutes: 900,
+    starts: 10,
+    goals_scored: 4,
+    assists: 3,
+    bps: 320,
+    bonus: 6,
+    yellow_cards: 2,
+  });
+  const a = computePlayerRates(el);
+  const b = computePlayerRates(el, {});
+  const c = computePlayerRates(el, DEFAULT_MODEL_PARAMS);
+  check(
+    "passar parâmetros vazios não muda absolutamente nada",
+    JSON.stringify(a) === JSON.stringify(b) && JSON.stringify(b) === JSON.stringify(c)
+  );
+
+  const m1 = computeMinutesModel(el, 10, false);
+  const m2 = computeMinutesModel(el, 10, false, {});
+  check(
+    "e o mesmo no modelo de minutos",
+    JSON.stringify(m1) === JSON.stringify(m2)
+  );
+
+  // Mas mudar um parâmetro tem de mudar mesmo o resultado, senão a
+  // calibração estaria a varrer valores que não fazem nada.
+  const heavier = computePlayerRates(el, { shrinkXg: 20 });
+  check(
+    "aumentar o encolhimento puxa a taxa para baixo",
+    heavier.xg90 < a.xg90,
+    `${heavier.xg90} vs ${a.xg90}`
+  );
+  const noBlend = computePlayerRates(el, { underlyingBlend: 1 });
+  check(
+    "mudar a mistura muda o xG esperado",
+    Math.abs(noBlend.xg90 - a.xg90) > 1e-9
+  );
+  const shortGate = computeMinutesModel(el, 10, false, { minutes60Floor: 80 });
+  check(
+    "subir o limiar dos 60 minutos reduz P(chegar aos 60)",
+    shortGate.pPlay60 < m1.pPlay60,
+    `${shortGate.pPlay60} vs ${m1.pPlay60}`
+  );
+}
+
+/** Um mundo sintético com jornadas suficientes para a calibração correr. */
+function mkCalibWorld(gameweeks: number) {
+  const { bootstrap, fixtures } = makeBootstrap({
+    currentEvent: gameweeks + 1,
+    gameweeks: gameweeks + 1,
+  });
+  const historyByElement = new Map<number, ElementHistoryRow[]>();
+  for (const el of bootstrap.elements) {
+    historyByElement.set(
+      el.id,
+      Array.from({ length: gameweeks }, (_, i) => ({
+        round: i + 1,
+        minutes: 90,
+        starts: 1,
+        value: 50,
+        total_points: 2 + ((el.id + i) % 6),
+        goals_scored: el.element_type >= 3 && (el.id + i) % 5 === 0 ? 1 : 0,
+        expected_goals: el.element_type >= 3 ? 0.3 : 0.05,
+        expected_assists: 0.15,
+        bps: 18 + ((el.id + i) % 12),
+        bonus: (el.id + i) % 7 === 0 ? 1 : 0,
+        saves: el.element_type === 1 ? 3 : 0,
+        clearances_blocks_interceptions: el.element_type === 2 ? 8 : 1,
+      })) as ElementHistoryRow[]
+    );
+  }
+  return { bootstrap, fixtures, historyByElement };
+}
+
+function testCalibrationRefusesToGuess() {
+  // Poucas jornadas: a máquina tem de se calar, por muito bom que pareça
+  // o mínimo que encontrou.
+  const w = mkCalibWorld(4);
+  const report = calibrate({
+    bootstrap: w.bootstrap,
+    fixtures: w.fixtures,
+    historyByElement: w.historyByElement,
+    fromEvent: 2,
+    toEvent: 4,
+    params: ["underlyingBlend", "shrinkXg"],
+  });
+
+  check(
+    "com poucas jornadas, a evidência é declarada insuficiente",
+    !report.sufficientEvidence,
+    `${report.events.length} jornadas, ${report.rows} linhas`
+  );
+  check(
+    "e NADA é recomendado",
+    report.recommendations.length === 0,
+    `${report.recommendations.length} recomendações`
+  );
+  check(
+    "mas o varrimento corre na mesma e mostra as curvas",
+    report.results.length === 2 && report.results.every((r) => r.curve.length >= 5)
+  );
+  check(
+    "e cada parâmetro explica porque não foi recomendado",
+    report.results.every((r) => !r.recommended && r.reason.length > 20)
+  );
+  check(
+    "a nota de evidência diz quantas jornadas faltam",
+    report.evidenceNote.includes(String(MIN_EVENTS))
+  );
+  check(
+    "as curvas nunca contêm valores inválidos",
+    report.results.every((r) =>
+      r.curve.every((c) => Number.isFinite(c.error) || c.error === Infinity)
+    )
+  );
+  check(
+    "o valor atual aparece marcado na curva",
+    report.results.every((r) => r.curve.filter((c) => c.isDefault).length === 1)
+  );
+}
+
+function testCalibrationIsHonestAboutDisagreement() {
+  // Dados sem sinal nenhum a favor de outro valor: as jornadas não vão
+  // concordar, e a discordância tem de ser reportada em vez de escondida
+  // atrás do melhor valor médio.
+  const w = mkCalibWorld(9);
+  const report = calibrate({
+    bootstrap: w.bootstrap,
+    fixtures: w.fixtures,
+    historyByElement: w.historyByElement,
+    fromEvent: 2,
+    toEvent: 9,
+    params: ["underlyingBlend"],
+  });
+  const r = report.results[0];
+
+  check(
+    "com jornadas suficientes, a calibração passa a poder recomendar",
+    report.sufficientEvidence || report.rows < MIN_ROWS,
+    `${report.events.length} jornadas, ${report.rows} linhas`
+  );
+  check(
+    "uma recomendação só sai se as jornadas concordarem entre si",
+    !r.recommended ||
+      r.reason.includes("concordarem") ||
+      r.reason.includes("Reduz o erro"),
+    r.reason
+  );
+  check(
+    "o relatório nunca recomenda manter o valor atual como se fosse mudança",
+    !r.recommended || Math.abs(r.bestValue - r.currentValue) > 1e-9
+  );
+  check(
+    "a melhoria reportada é coerente com os erros reportados",
+    !Number.isFinite(r.currentError) ||
+      Math.abs(
+        r.improvement - (r.currentError - r.bestError) / r.currentError
+      ) < 1e-9
+  );
+  check(
+    "as recomendações são um subconjunto dos resultados",
+    report.recommendations.every((x) => report.results.includes(x))
+  );
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testFreeTransferReconstruction();
 testSellingPriceEstimation();
@@ -3091,6 +3461,14 @@ testBacktestRunsEndToEnd();
 
 testBudgetSplit();
 testPlanNeverExceedsRealMoney();
+
+testRivalSelectionAlwaysIncludesMe();
+testSimulationSurvivesBeingBottomOfTheLeague();
+
+testDefaultsMatchTheShippedLiterals();
+testParamsChangeNothingByDefault();
+testCalibrationRefusesToGuess();
+testCalibrationIsHonestAboutDisagreement();
 
 report("regressão");
 const { passed, failed } = counts();

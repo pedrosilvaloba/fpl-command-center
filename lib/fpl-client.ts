@@ -1,5 +1,6 @@
 import type {
   FplBootstrap,
+  FplLeagueStandingsEntry,
   FplFixture,
   FplEntry,
   FplEntryHistoryEntry,
@@ -85,6 +86,39 @@ export function getLeagueStandings(leagueId: number, page = 1) {
     `/leagues-classic/${leagueId}/standings/?page_standings=${page}`,
     180
   );
+}
+
+/**
+ * A whole classic league, following FPL's pagination to the end.
+ *
+ * `getLeagueStandings` returns one page of 50. Reading only the first page
+ * silently truncates every league bigger than that, and the truncation is
+ * invisible — the table just stops, looking like the league is smaller than
+ * it is.
+ *
+ * Capped at `maxPages`, because a public classic league can hold millions of
+ * entries. When the cap bites, `complete` is false, so a caller can tell a
+ * fully-loaded league from a truncated one instead of assuming.
+ */
+export async function getFullLeagueStandings(
+  leagueId: number,
+  maxPages = 20
+): Promise<{
+  league: { id: number; name: string };
+  results: FplLeagueStandingsEntry[];
+  complete: boolean;
+}> {
+  const first = await getLeagueStandings(leagueId, 1);
+  const results = [...first.standings.results];
+  let hasNext = first.standings.has_next;
+  let page = 1;
+  while (hasNext && page < maxPages) {
+    page += 1;
+    const next = await getLeagueStandings(leagueId, page);
+    results.push(...next.standings.results);
+    hasNext = next.standings.has_next;
+  }
+  return { league: first.league, results, complete: !hasNext };
 }
 
 /** Per-player fixture list + match-by-match history + prior seasons. */

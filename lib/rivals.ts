@@ -65,10 +65,21 @@ const ASSIST_POINTS = 3;
  * on the ~150 distinct players a small league actually owns. */
 const DEFAULT_RUNS = 4000;
 
-/** Rivals fetched at most. A classic league can have thousands of entries;
- * beyond the top handful the standings are not the competition you are
- * actually in, and each entry costs one API round-trip. */
-const MAX_RIVALS = 24;
+/** Rivals fetched at most. A classic league can have thousands of entries
+ * and each one costs an API round-trip, so a cap has to exist. What must
+ * NOT exist is a cap that can exclude YOU — see `selectRivals`. */
+const MAX_RIVALS = 60;
+
+/** How many managers immediately above and below you are always included,
+ * whatever the cap. These are the people one gameweek can actually move you
+ * past, which is what a variance posture is really about. */
+const NEIGHBOURS_EACH_SIDE = 8;
+
+/** Concurrent requests when reading rival squads. An unbounded `Promise.all`
+ * over a whole league fires sixty simultaneous requests at someone else's
+ * free, unthrottled API — the quickest way to be rate-limited into a broken
+ * page. */
+const RIVAL_FETCH_CONCURRENCY = 8;
 
 const LAST_EVENT = 38;
 
@@ -141,15 +152,91 @@ export interface RivalSquad {
  * probabilities below are computed against last week's squads, and the
  * page says so.
  */
+/**
+ * Which managers in the league actually get simulated.
+ *
+ * THE BUG THIS EXISTS TO PREVENT. This used to be `standings.slice(0, 24)`,
+ * on the reasoning that beyond the top handful the standings are not the
+ * competition you are really in. That reasoning has a hole in it big enough
+ * to disable the entire layer: if YOU are not in the top 24, you are not in
+ * the sample — and `simulateLeague` cannot simulate a league you are not in.
+ * It returned "could not identify your team", the posture fell back to
+ * neutral, and beta went to zero.
+ *
+ * That is exactly what was happening in production: 29th of 47, so Camada 2
+ * was switched off and the page said so in small text that read like a
+ * temporary data problem rather than a permanent exclusion. A whole layer
+ * was dead for the one user this app has.
+ *
+ * The selection now has a fixed order of priority:
+ *   1. You. Always, whatever your rank. Without this nothing else works.
+ *   2. Your neighbours — the managers just above and below you, who are the
+ *      ones a single gameweek can actually move you past.
+ *   3. The leaders, who set the pace you have to match to win the thing.
+ *   4. Everyone else, until the cap.
+ *
+ * Returned in standings order so downstream output reads like the table.
+ */
+export function selectRivals(
+  standings: FplLeagueStandingsEntry[],
+  myEntryId: number,
+  max = MAX_RIVALS
+): FplLeagueStandingsEntry[] {
+  if (standings.length <= max) return [...standings];
+
+  const chosen = new Map<number, FplLeagueStandingsEntry>();
+  const take = (e: FplLeagueStandingsEntry | undefined) => {
+    if (e && chosen.size < max) chosen.set(e.entry, e);
+  };
+
+  const myIndex = standings.findIndex((e) => e.entry === myEntryId);
+  if (myIndex >= 0) {
+    take(standings[myIndex]);
+    // Neighbours, alternating outwards so the nearest are taken first.
+    for (let d = 1; d <= NEIGHBOURS_EACH_SIDE; d++) {
+      take(standings[myIndex - d]);
+      take(standings[myIndex + d]);
+    }
+  }
+  for (const e of standings) take(e);
+
+  const order = new Map(standings.map((e, i) => [e.entry, i]));
+  return [...chosen.values()].sort(
+    (a, b) => (order.get(a.entry) ?? 0) - (order.get(b.entry) ?? 0)
+  );
+}
+
+/** Bounded-concurrency map — see RIVAL_FETCH_CONCURRENCY. */
+async function mapWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let cursor = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      for (;;) {
+        const i = cursor++;
+        if (i >= items.length) return;
+        out[i] = await fn(items[i]);
+      }
+    })
+  );
+  return out;
+}
+
 export async function fetchRivalSquads(
   standings: FplLeagueStandingsEntry[],
   lastFinishedEvent: number,
   myEntryId: number
 ): Promise<RivalSquad[]> {
   if (lastFinishedEvent < 1) return [];
-  const targets = standings.slice(0, MAX_RIVALS);
-  const results = await Promise.all(
-    targets.map(async (entry): Promise<RivalSquad | null> => {
+  const targets = selectRivals(standings, myEntryId);
+  const results = await mapWithLimit(
+    targets,
+    RIVAL_FETCH_CONCURRENCY,
+    async (entry): Promise<RivalSquad | null> => {
       try {
         const picks = await getEntryPicks(entry.entry, lastFinishedEvent);
         const xi = picks.picks.filter((p) => p.multiplier > 0).map((p) => p.element);
@@ -169,7 +256,7 @@ export async function fetchRivalSquads(
         // One unreachable manager must not take the whole layer down.
         return null;
       }
-    })
+    }
   );
   return results.filter((r): r is RivalSquad => r !== null);
 }

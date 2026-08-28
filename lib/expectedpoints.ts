@@ -71,6 +71,8 @@ const DC_POINTS = 2;
 /** Positions that concede the -1-per-2-goals penalty. */
 const CONCEDE_PENALTY_POSITIONS = new Set([1, 2]);
 
+import { type ModelParams, withParams, DEFAULT_MODEL_PARAMS } from "./modelparams";
+
 export interface MinutesModel {
   /** P(this player starts a given fixture). */
   pStart: number;
@@ -111,8 +113,10 @@ export interface MinutesModel {
 export function computeMinutesModel(
   el: FplElement,
   teamFinishedFixtures: number,
-  isPreseason: boolean
+  isPreseason: boolean,
+  paramsOver?: Partial<ModelParams>
 ): MinutesModel {
+  const params = withParams(paramsOver);
   const reasons: string[] = [];
   const minutes = toNum(el.minutes);
   const starts = toNum(el.starts);
@@ -147,9 +151,12 @@ export function computeMinutesModel(
   // always gets there; one averaging ~60 gets there roughly half the
   // time, because that average is made of full matches and early hooks.
   const pPlay60GivenStart =
-    avgMinutesPerStart <= 35
+    avgMinutesPerStart <= params.minutes60Floor
       ? 0
-      : Math.min(0.97, (avgMinutesPerStart - 35) / 45);
+      : Math.min(
+          params.minutes60Cap,
+          (avgMinutesPerStart - params.minutes60Floor) / params.minutes60Span
+        );
 
   if (starts >= 3 && avgMinutesPerStart > 0 && avgMinutesPerStart < 65) {
     reasons.push(
@@ -253,7 +260,11 @@ const FREEKICK_XG90: Record<number, number> = { 1: 0.05, 2: 0.01 };
  * ONLY place realised output enters the model; the old formula let it in
  * through five separate doors.
  */
-export function computePlayerRates(el: FplElement): PlayerRates {
+export function computePlayerRates(
+  el: FplElement,
+  paramsOver?: Partial<ModelParams>
+): PlayerRates {
+  const params = withParams(paramsOver);
   const reasons: string[] = [];
   const minutes = toNum(el.minutes);
   const per90 = (total: number) => (minutes > 0 ? (total / minutes) * 90 : 0);
@@ -264,7 +275,9 @@ export function computePlayerRates(el: FplElement): PlayerRates {
   const xaActual = per90(toNum(el.assists));
 
   const blend = (underlying: number, actual: number) =>
-    underlying > 0 || actual > 0 ? underlying * 0.65 + actual * 0.35 : 0;
+    underlying > 0 || actual > 0
+      ? underlying * params.underlyingBlend + actual * (1 - params.underlyingBlend)
+      : 0;
 
   const xg90 = blend(xgUnderlying, xgActual);
   const xa90 = blend(xaUnderlying, xaActual);
@@ -290,13 +303,18 @@ export function computePlayerRates(el: FplElement): PlayerRates {
   // occasionally, and 40+ is the territory of players who collect bonus
   // most weeks. Capped because no one earns 3 bonus points every match.
   const bps90 = per90(toNum(el.bps));
-  const bonusFromBps = Math.min(2.2, Math.max(0, (bps90 - 12) / 18));
+  const bonusFromBps = Math.min(
+    params.bpsMaxBonus,
+    Math.max(0, (bps90 - params.bpsIntercept) / params.bpsDivisor)
+  );
   const bonusRealised = per90(toNum(el.bonus));
   // Blend, favouring the more stable BPS-derived figure but letting a
   // player who genuinely converts BPS into bonus better than the curve
   // suggests be recognised.
   const bonus90 =
-    bps90 > 0 ? bonusFromBps * 0.7 + bonusRealised * 0.3 : bonusRealised;
+    bps90 > 0
+      ? bonusFromBps * params.bpsBlend + bonusRealised * (1 - params.bpsBlend)
+      : bonusRealised;
   if (bonus90 >= 0.5) {
     reasons.push(
       `forte candidato a pontos de bónus (~${bps90.toFixed(0)} BPS/90min)`
@@ -360,13 +378,13 @@ export function computePlayerRates(el: FplElement): PlayerRates {
     matches > 0 ? (rate * matches + prior * k) / (matches + k) : prior;
 
   return {
-    xg90: shrink(xg90, 3),
-    xa90: shrink(xa90, 3),
-    bonus90: shrink(bonus90, 6),
-    saves90: shrink(saves90, 3),
-    dc90: shrink(dc90, 6),
-    yellow90: shrink(yellow90, 6, 0.12),
-    red90: shrink(red90, 10, 0.012),
+    xg90: shrink(xg90, params.shrinkXg),
+    xa90: shrink(xa90, params.shrinkXa),
+    bonus90: shrink(bonus90, params.shrinkBonus),
+    saves90: shrink(saves90, params.shrinkSaves),
+    dc90: shrink(dc90, params.shrinkDc),
+    yellow90: shrink(yellow90, params.shrinkYellow, params.priorYellow90),
+    red90: shrink(red90, params.shrinkRed, params.priorRed90),
     setPieceXg90,
     reasons,
   };
@@ -550,8 +568,11 @@ export function scaleBreakdown(b: ExpectedPointsBreakdown, n: number): ExpectedP
  * term is what keeps it from double-counting: it appears exactly once, and
  * its influence shrinks as independent evidence accumulates.
  */
-export const MODEL_TRUST_MINUTES = 360; // ~4 full matches
+export const MODEL_TRUST_MINUTES = DEFAULT_MODEL_PARAMS.modelTrustMinutes;
 
-export function modelTrust(minutesPlayed: number): number {
-  return Math.min(1, Math.max(0, minutesPlayed / MODEL_TRUST_MINUTES));
+export function modelTrust(
+  minutesPlayed: number,
+  paramsOver?: Partial<ModelParams>
+): number {
+  return Math.min(1, Math.max(0, minutesPlayed / withParams(paramsOver).modelTrustMinutes));
 }
