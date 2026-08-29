@@ -3,6 +3,7 @@ import {
   processInsightSubmission,
   MAX_PAYLOAD_CHARS,
 } from "@/lib/insightsintake";
+import { checkApiToken, unauthorizedBody } from "@/lib/apitoken";
 
 /**
  * The GET-shaped write path for the weekly tactical research.
@@ -30,23 +31,10 @@ import {
 // This route writes. It must never be cached, prerendered, or deduplicated.
 export const dynamic = "force-dynamic";
 
-function isAuthorized(req: NextRequest): boolean {
-  const expected = process.env.INSIGHTS_API_TOKEN;
-  // No token configured means writes are disabled, not that anything goes.
-  if (!expected) return false;
-  const provided = req.nextUrl.searchParams.get("token") ?? "";
-  return provided.length > 0 && provided === expected;
-}
-
 export async function GET(req: NextRequest) {
-  if (!isAuthorized(req)) {
-    return NextResponse.json(
-      {
-        error:
-          "não autorizado — falta o parâmetro 'token' ou não corresponde a INSIGHTS_API_TOKEN",
-      },
-      { status: 401 }
-    );
+  const auth = checkApiToken(req.nextUrl.searchParams.get("token"));
+  if (!auth.ok) {
+    return NextResponse.json(unauthorizedBody(auth), { status: 401 });
   }
 
   const payload = req.nextUrl.searchParams.get("payload");

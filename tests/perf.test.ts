@@ -10,7 +10,7 @@ function mk(id: number, type: number, teamId: number, ep: number, price: number,
   const pos: Record<number, string> = { 1: "GK", 2: "DEF", 3: "MID", 4: "FWD" };
   return {
     element: makeElement({ id, element_type: type, selected_by_percent: String(own) }),
-    team: makeTeam(teamId), positionShort: pos[type], priceM: price, ownershipPct: own,
+    team: makeTeam(teamId), positionShort: pos[type], priceM: price, ownershipPct: own, modelTrust: 1,
     formNum: 3, fixtureAvgDifficulty: 3, nextOpponents: "", expectedGoalsFor: 1.5,
     cleanSheetProbability: 0.3, individualExpectedGI: 0.4, ceilingGI: 1, floorGI: 0,
     expectedPoints: ep * 5, expectedPointsNext: ep, pPlay: 1,

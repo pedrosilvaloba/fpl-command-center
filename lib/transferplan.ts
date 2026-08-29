@@ -81,6 +81,54 @@ const BENCH_WEIGHT = 0.12;
 const FUTURE_DISCOUNT = 0.15;
 
 /**
+ * THE NOISE FLOOR — how big an edge a transfer must show before it is worth
+ * making, given how little the model actually knows yet.
+ *
+ * Reported from production in gameweek 2: the app recommended selling a
+ * defender who had just scored 9 points, for a gain of +0.4 points over five
+ * gameweeks. The owner could not see why, and he was right not to.
+ *
+ * The reason is in the scoring engine. `expectedPointsNext` blends this
+ * model with FPL's own `ep_next`, weighted by minutes played: a full-90
+ * player in gameweek 2 has 90 of the 360 minutes the blend wants, so THREE
+ * QUARTERS of every number on the page is FPL's own estimate — which is
+ * deliberately flat early in a season. It showed: the whole squad priced
+ * between 1.9 and 3.8 expected points, with a goalkeeper rated above a
+ * premium striker.
+ *
+ * The arithmetic was not wrong. What was wrong is that the decision layer
+ * treated those numbers as if they were confident, and recommended acting on
+ * differences that are entirely inside the noise.
+ *
+ * So a plan must now beat holding by more than a floor that shrinks as the
+ * model earns the right to an opinion. At full confidence the floor is zero
+ * and nothing changes. In gameweek 2 it is around 2.3 points over five
+ * gameweeks, which is roughly the width of the noise — and a +0.4 "upgrade"
+ * correctly becomes "hold your transfer".
+ */
+const NOISE_FLOOR_MAX_POINTS = 3;
+
+/** Confidence of a plan: the mean model-trust of the players it moves, or of
+ * the whole XI when it moves nobody. A transfer's confidence is about the
+ * two players being swapped, not about the squad at large. */
+export function planConfidence(plan: TransferPlan): number {
+  const trustOf = (p: ScoredPlayer) =>
+    typeof p.modelTrust === "number" ? p.modelTrust : 1;
+  const involved =
+    plan.moves.length > 0
+      ? plan.moves.flatMap((m) => [m.out, m.in])
+      : plan.xi;
+  if (involved.length === 0) return 1;
+  return involved.reduce((s, p) => s + trustOf(p), 0) / involved.length;
+}
+
+/** How much a plan must beat holding by, given its confidence. */
+export function noiseFloor(confidence: number): number {
+  const c = Math.min(1, Math.max(0, confidence));
+  return Math.round(NOISE_FLOOR_MAX_POINTS * (1 - c) * 100) / 100;
+}
+
+/**
  * What a banked free transfer is worth as an option on next week's
  * information — injuries, team news, price moves, a fixture swing.
  *
@@ -173,6 +221,11 @@ export interface TransferPlan {
   /** The eleven's value under the active variance posture — the quantity the
    * solver actually maximised, and therefore the one plans are ranked on. */
   xiStrategicPoints: number;
+  /** Mean model-trust of the players this plan moves. Low means the numbers
+   * behind it are mostly FPL's own flat estimate, not this model. */
+  confidence: number;
+  /** How much this plan had to beat holding by to be recommended. */
+  requiredEdge: number;
   /** xiWindowPoints minus the hit cost — the number plans are ranked on. */
   netValue: number;
   /** Versus doing nothing. Negative means the plan is worse than holding. */
@@ -471,6 +524,8 @@ function makePlan(
           state.freeTransfers >= 5 ? 0 : FT_OPTION_VALUE
         ) * 10
       ) / 10,
+    confidence: 1, // filled in below, once moves exist
+    requiredEdge: 0,
     netGainVsHold: 0, // filled in by the caller once the hold plan exists
     bankAfterM,
     rationale: "",
@@ -713,13 +768,49 @@ export function planTransfers(
   for (const p of plans) {
     p.netGainVsHold = Math.round((p.netValue - hold.netValue) * 10) / 10;
   }
+  for (const p of plans) {
+    p.confidence = Math.round(planConfidence(p) * 1000) / 1000;
+    p.requiredEdge = p.key === "manter" ? 0 : noiseFloor(p.confidence);
+  }
+
+  // THE NOISE FLOOR, APPLIED.
+  //
+  // Ranking by netValue alone recommends whatever edges ahead, however
+  // slightly, and however little the model knows. A plan now has to clear
+  // its own required edge over holding; the ones that do not are still
+  // shown — the reasoning stays visible — but they cannot be the advice.
   const ranked = [...plans].sort((a, b) => b.netValue - a.netValue);
-  const recommended = ranked[0];
+  const clears = (p: TransferPlan) =>
+    p.key === "manter" || p.netValue - hold.netValue >= p.requiredEdge;
+  const recommended = ranked.find(clears) ?? hold;
+  for (const p of plans) {
+    if (p.key === "manter") continue;
+    const edge = Math.round((p.netValue - hold.netValue) * 10) / 10;
+    if (!clears(p)) {
+      p.rationale =
+        `${p.rationale} ` +
+        `NÃO recomendado: ganha ${edge >= 0 ? "+" : ""}${edge} pts sobre não fazer nada, e nesta altura da época é preciso ganhar pelo menos ${p.requiredEdge.toFixed(1)} para valer a pena. ` +
+        `Com ${Math.round(p.confidence * 100)}% de confiança, o resto vem da estimativa da própria FPL, que é quase igual para toda a gente no início da época — uma diferença desta dimensão é ruído, não vantagem.`;
+    }
+  }
 
   // --- horizons ---------------------------------------------------------
+  // When holding is the advice BECAUSE the alternatives were inside the
+  // noise, say so. "Do nothing" with no reason reads like the model had
+  // nothing to say, when in fact it looked and decided the difference was
+  // not real.
+  const bestRefused = ranked.find((p) => p.key !== "manter" && !clears(p));
+  const heldForNoise =
+    recommended.key === "manter" && !!bestRefused && bestRefused.moves.length > 0;
+
   const shortTerm =
     recommended.key === "manter"
-      ? `Esta jornada: não faças nenhuma transferência. Alinha ${recommended.captain?.element.web_name ?? "o teu melhor jogador"} com a braçadeira e guarda a transferência (ficas com ${Math.min(5, state.freeTransfers + 1)} na próxima).`
+      ? (heldForNoise
+          ? `Esta jornada: não faças nenhuma transferência. A melhor troca disponível (${bestRefused!.moves
+              .map((m) => `${m.out.element.web_name} → ${m.in.element.web_name}`)
+              .join("; ")}) só ganha ${(bestRefused!.netValue - hold.netValue).toFixed(1)} pts em 5 jornadas, e com ${Math.round(bestRefused!.confidence * 100)}% de confiança isso está dentro da margem de erro — o modelo ainda não sabe o suficiente para justificar gastar a transferência. Guarda-a. `
+          : `Esta jornada: não faças nenhuma transferência. `) +
+        `Alinha ${recommended.captain?.element.web_name ?? "o teu melhor jogador"} com a braçadeira e guarda a transferência (ficas com ${Math.min(5, state.freeTransfers + 1)} na próxima).`
       : `Esta jornada: ${recommended.moves
           .map((m) => `sai ${m.out.element.web_name}, entra ${m.in.element.web_name}`)
           .join("; ")}. Capitão: ${recommended.captain?.element.web_name ?? "—"}.` +

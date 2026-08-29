@@ -157,6 +157,22 @@ function PlanCard({
         <p className="mb-2 text-sm text-text-muted">Nenhuma transferência.</p>
       )}
 
+      {/* Confidence, in plain language. The model blends its own numbers with
+          FPL's `ep_next` by minutes played, so early in a season most of what
+          it "knows" is FPL's flat league-wide estimate. Hiding that made a
+          +0.4 point difference look like a recommendation. */}
+      {plan.confidence < 0.9 && (
+        <p className="mb-2 rounded-lg border border-warn/40 bg-warn/5 px-3 py-2 text-xs leading-relaxed text-text-muted">
+          <strong className="text-warn">
+            Confiança do modelo: {Math.round(plan.confidence * 100)}%
+          </strong>{" "}
+          — o resto vem da estimativa da própria FPL, que é quase igual para
+          toda a gente nesta altura da época. Por isso este plano só é
+          recomendado se ganhar mais de{" "}
+          <strong className="text-text">{plan.requiredEdge.toFixed(1)} pts</strong> sobre
+          não fazer nada.
+        </p>
+      )}
       <p className="text-xs leading-relaxed text-text-muted">{plan.rationale}</p>
       <p className="mt-2 font-mono text-[11px] tabular text-text-muted">
         Capitão: {plan.captain?.element.web_name ?? "—"} · Vice:{" "}

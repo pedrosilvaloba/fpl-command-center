@@ -65,6 +65,21 @@ export interface ScoredPlayer {
    * contingency is (1 - pPlay of the captain).
    */
   pPlay: number;
+  /** How much of `expectedPointsNext` came from THIS MODEL rather than from
+   * FPL's own `ep_next`. 0 = entirely FPL's flat league-wide estimate,
+   * 1 = entirely this model's per-90 rates and fixture context.
+   *
+   * This was computed and then thrown away. Nothing downstream knew that in
+   * gameweek 2 — where a full-90 player has 90 of the 360 minutes the blend
+   * wants — three quarters of every number on the page is FPL's estimate,
+   * which is deliberately flat early in a season. The decision layer was
+   * making confident recommendations out of numbers the scoring layer had
+   * explicitly told itself not to trust. See lib/transferplan.ts.
+   *
+   * Optional so hand-built objects in tests and older callers still compile;
+   * every consumer treats a missing value as "fully trusted", which is the
+   * assumption those callers were already making implicitly. */
+  modelTrust?: number;
   /** Where the window's expected points come from, for transparency. */
   breakdown: ExpectedPointsBreakdown;
   score: number;
@@ -548,6 +563,7 @@ export function buildScoredPlayers(
       floorGI,
       expectedPoints: Math.round(expectedPoints * 100) / 100,
       expectedPointsNext: Math.round(expectedPointsNext * 100) / 100,
+      modelTrust: Math.round(trust * 1000) / 1000,
       pPlay: Math.round(Math.min(1, Math.max(0, mins.pAppear * availability)) * 1000) / 1000,
       breakdown: modelWindowPoints,
       // Alias, so nothing downstream had to change when the score became a

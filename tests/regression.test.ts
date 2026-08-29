@@ -57,7 +57,7 @@ import {
   summariseChips,
   type SquadState,
 } from "../lib/squadstate";
-import { planTransfers } from "../lib/transferplan";
+import { planTransfers, noiseFloor } from "../lib/transferplan";
 import { computeSquadRisk, computeTeamExposures } from "../lib/correlation";
 import { computeRankValue, computeSquadRankProfile } from "../lib/rankvalue";
 import {
@@ -80,6 +80,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isStorageConfigured } from "../lib/kv";
+import { checkApiToken, unauthorizedBody } from "../lib/apitoken";
 import { DEFAULT_MODEL_PARAMS, PARAM_GRIDS } from "../lib/modelparams";
 import { calibrate, MIN_EVENTS, MIN_ROWS } from "../lib/calibration";
 import {
@@ -263,7 +264,7 @@ function testSquadValidity() {
     ({
       element: makeElement({ id, element_type: type }),
       team: makeTeam((id % 20) + 1),
-      positionShort: "X", priceM: price, ownershipPct: 5, formNum: 0,
+      positionShort: "X", priceM: price, ownershipPct: 5, formNum: 0, modelTrust: 1,
       fixtureAvgDifficulty: 3, nextOpponents: "", expectedGoalsFor: 1.4,
       cleanSheetProbability: 0.3, individualExpectedGI: 0, ceilingGI: 0, floorGI: 0,
       expectedPoints: score, expectedPointsNext: score / 5, pPlay: 1,
@@ -1216,6 +1217,7 @@ function mkSim(
     expectedPoints: epNext * 5,
     expectedPointsNext: epNext,
     pPlay: opts.pPlay ?? 1,
+    modelTrust: 1,
     breakdown: {
       appearance: 2 * 5,
       goals: (epNext - 2) * 0.5 * 5,
@@ -3455,6 +3457,196 @@ function testNoRouteExceedsThePlanTimeout() {
   );
 }
 
+// ---------------------------------------------------------------------
+// v1.30.2 — o token da API. As tarefas semanais nunca escreveram nada.
+//
+// `lastRun` esteve a null durante uma semana enquanto o painel mostrava
+// notas ativas (postas à mão), o que fazia a camada parecer viva. A
+// verificação do token era comparação exata, e um valor colado no painel
+// da Vercel apanha espaço ou quebra de linha com toda a facilidade — o
+// valor PARECE igual em todo o lado e todos os pedidos dão 401.
+// ---------------------------------------------------------------------
+
+function withEnvToken<T>(value: string | undefined, fn: () => T): T {
+  const previous = process.env.INSIGHTS_API_TOKEN;
+  if (value === undefined) delete process.env.INSIGHTS_API_TOKEN;
+  else process.env.INSIGHTS_API_TOKEN = value;
+  try {
+    return fn();
+  } finally {
+    if (previous === undefined) delete process.env.INSIGHTS_API_TOKEN;
+    else process.env.INSIGHTS_API_TOKEN = previous;
+  }
+}
+
+function testApiTokenCheck() {
+  const secret = "abc123secret";
+
+  check(
+    "o token certo é aceite",
+    withEnvToken(secret, () => checkApiToken(secret).ok)
+  );
+  check(
+    "um token errado é recusado",
+    withEnvToken(secret, () => !checkApiToken("outro").ok)
+  );
+  check(
+    "sem token nenhum, recusa",
+    withEnvToken(secret, () => !checkApiToken(null).ok && !checkApiToken("").ok)
+  );
+
+  // O caso que estava a partir tudo em produção.
+  check(
+    "uma quebra de linha colada a mais no SERVIDOR não invalida o token",
+    withEnvToken(secret + "\n", () => checkApiToken(secret).ok)
+  );
+  check(
+    "nem espaços à volta do valor enviado",
+    withEnvToken(secret, () => checkApiToken(`  ${secret}  `).ok)
+  );
+
+  // Variável em falta = escritas desligadas, nunca "entra qualquer um".
+  check(
+    "sem a variável definida, nada passa — nem uma string vazia",
+    withEnvToken(undefined, () => !checkApiToken("").ok && !checkApiToken("seja o que for").ok)
+  );
+  check(
+    "e uma variável só com espaços conta como não definida",
+    withEnvToken("   ", () => {
+      const c = checkApiToken("   ");
+      return !c.ok && !c.configured;
+    })
+  );
+
+  // O diagnóstico tem de ajudar sem alguma vez expor o segredo.
+  const body = withEnvToken(secret, () => unauthorizedBody(checkApiToken("curto")));
+  const asText = JSON.stringify(body);
+  check(
+    "a resposta de erro NUNCA contém o segredo",
+    !asText.includes(secret),
+    asText.slice(0, 120)
+  );
+  check(
+    "mas diz que está configurado e dá os comprimentos, que é o que distingue as causas",
+    body.configured === true &&
+      body.expectedLength === secret.length &&
+      body.providedLength === 5
+  );
+  const missing = withEnvToken(undefined, () => unauthorizedBody(checkApiToken("x")));
+  check(
+    "e quando a variável falta, diz isso explicitamente",
+    missing.configured === false && String(missing.hint).includes("Redeploy")
+  );
+}
+
+// ---------------------------------------------------------------------
+// v1.31 — o modelo estava a recomendar trocas dentro do ruído.
+//
+// Reportado em produção na jornada 2: "manda tirar o Calafiori, que
+// acabou de fazer 9 pontos, e meter o Guéhi" — por +0.4 pontos em cinco
+// jornadas. O dono da equipa não percebia, e tinha razão.
+//
+// A causa não era aritmética. `expectedPointsNext` mistura este modelo
+// com o `ep_next` da própria FPL, ponderado pelos minutos jogados. Na
+// jornada 2, um jogador com 90 minutos tem 90 dos 360 que a mistura quer:
+// TRÊS QUARTOS do número vêm da estimativa da FPL, que é propositadamente
+// plana no início da época. Via-se no ecrã — o plantel todo entre 1.9 e
+// 3.8 pontos, com um guarda-redes acima de um avançado premium.
+//
+// O erro era a camada de decisão tratar esses números como se fossem
+// seguros.
+// ---------------------------------------------------------------------
+
+function testNoiseFloorScalesWithConfidence() {
+  check(
+    "sem confiança nenhuma, é preciso um ganho grande",
+    noiseFloor(0) === 3,
+    `${noiseFloor(0)}`
+  );
+  check(
+    "com confiança total, não há travão nenhum",
+    noiseFloor(1) === 0
+  );
+  check(
+    "na jornada 2 (25% de confiança) o travão fica perto de 2.3 pts",
+    Math.abs(noiseFloor(0.25) - 2.25) < 0.01,
+    `${noiseFloor(0.25)}`
+  );
+  check(
+    "o travão desce à medida que o modelo ganha o direito a ter opinião",
+    noiseFloor(0.25) > noiseFloor(0.5) && noiseFloor(0.5) > noiseFloor(0.9)
+  );
+  check(
+    "valores absurdos são contidos, nunca produzem travões negativos",
+    noiseFloor(-5) === 3 && noiseFloor(99) === 0
+  );
+}
+
+function testMarginalTransferIsRefusedEarlyInTheSeason() {
+  // Um plantel onde a melhor troca vale pouco — exatamente o caso real.
+  // g=6 produz uma vantagem real de 0.9 pts — positiva, mas dentro do ruído
+  // enquanto o modelo só tem 25% de confiança. Exatamente o caso do Calafiori.
+  const { owned, scored } = mkTransferPool([6]);
+  const withTrust = (p: ScoredPlayer, t: number): ScoredPlayer => ({
+    ...p,
+    modelTrust: t,
+  });
+
+  // Jornada 2: 25% de confiança. O ganho não chega ao travão.
+  const early = scored.map((p) => withTrust(p, 0.25));
+  const earlyOwned = owned.map((p) => withTrust(p, 0.25));
+  const earlyAdvice = planTransfers(early, mkState(earlyOwned, 1), {
+    currentEvent: 2,
+  });
+  check(
+    "no início da época, uma troca marginal NÃO é recomendada",
+    earlyAdvice.recommended?.key === "manter",
+    `recomendado: ${earlyAdvice.recommended?.key}`
+  );
+  const refused = earlyAdvice.plans.find((p) => p.key !== "manter");
+  check(
+    "mas o plano continua visível, com o raciocínio à vista",
+    !!refused && refused.moves.length > 0
+  );
+  check(
+    "e explica que a diferença é ruído, não vantagem",
+    !!refused && refused.rationale.includes("ruído"),
+    refused?.rationale.slice(0, 80)
+  );
+  check(
+    "e diz quanto teria de ganhar para valer a pena",
+    !!refused && refused.requiredEdge > 1,
+    `${refused?.requiredEdge}`
+  );
+
+  // Mesma troca, mas com a época avançada e o modelo já com provas dadas.
+  const late = scored.map((p) => withTrust(p, 1));
+  const lateOwned = owned.map((p) => withTrust(p, 1));
+  const lateAdvice = planTransfers(late, mkState(lateOwned, 1), {
+    currentEvent: 20,
+  });
+  check(
+    "com o modelo já confiante, a mesma troca volta a ser aceitável",
+    lateAdvice.recommended?.key !== "manter" ||
+      (lateAdvice.plans.find((p) => p.key !== "manter")?.requiredEdge ?? 1) === 0,
+    `recomendado: ${lateAdvice.recommended?.key}`
+  );
+
+  // Uma melhoria GRANDE tem de passar mesmo com pouca confiança — o travão
+  // é contra o ruído, não contra agir.
+  const { owned: bigOwned, scored: bigScored } = mkTransferPool([30]);
+  const bigEarly = bigScored.map((p) => withTrust(p, 0.25));
+  const bigEarlyOwned = bigOwned.map((p) => withTrust(p, 0.25));
+  const bigAdvice = planTransfers(bigEarly, mkState(bigEarlyOwned, 1), {
+    currentEvent: 2,
+  });
+  check(
+    "uma melhoria grande passa o travão mesmo cedo na época",
+    bigAdvice.recommended?.key !== "manter",
+    `recomendado: ${bigAdvice.recommended?.key}`
+  );
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testFreeTransferReconstruction();
 testSellingPriceEstimation();
@@ -3526,6 +3718,11 @@ testCalibrationRefusesToGuess();
 testCalibrationIsHonestAboutDisagreement();
 
 testNoRouteExceedsThePlanTimeout();
+
+testApiTokenCheck();
+
+testNoiseFloorScalesWithConfidence();
+testMarginalTransferIsRefusedEarlyInTheSeason();
 
 report("regressão");
 const { passed, failed } = counts();

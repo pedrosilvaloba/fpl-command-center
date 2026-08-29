@@ -87,6 +87,96 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.31 — o modelo estava a recomendar trocas dentro do ruído
+
+Reportado em produção, jornada 2: *"está a dizer para eu tirar o Calafiori e
+meter o Guéhi, e o Calafiori acabou de pontuar bem. Faz sentido? Eu não
+entendo estas sugestões."*
+
+Fui ver os números reais da página. A troca valia **+0.4 pontos em cinco
+jornadas**. E o resto do ecrã explicava porquê:
+
+```
+A.Becker (GR)  3.2   ← capitão sugerido
+Gabriel  (DEF) 3.8
+Guéhi    (DEF) 3.3
+Palmer   (MID) 3.3
+Isak     (AVA) 2.7
+```
+
+O plantel inteiro entre 1.9 e 3.8 pontos esperados, com um **guarda-redes
+recomendado para capitão à frente de um avançado premium**. Isso não é uma
+previsão — é ausência de previsão.
+
+### A causa
+
+`expectedPointsNext` mistura este modelo com o `ep_next` da própria FPL,
+ponderado pelos minutos jogados: `trust = minutos / 360`. Na jornada 2, um
+jogador com 90 minutos tem `trust = 0.25`. **Três quartos de cada número na
+página são a estimativa da FPL**, que é propositadamente plana no início da
+época — toda a gente entre 2 e 4.
+
+A aritmética não estava errada. O que estava errado é que a camada de decisão
+tratava esses números como se fossem seguros, e recomendava agir sobre
+diferenças inteiramente dentro do ruído. O `trust` era calculado, usado para
+misturar, e **deitado fora** — nada a jusante sabia em que é que a
+recomendação assentava.
+
+### A correção
+
+O `trust` passa a viajar com cada jogador (`modelTrust`) e a camada de decisão
+passa a ter um **travão de ruído**: um plano tem de bater o "não fazer nada"
+por mais do que uma margem que encolhe à medida que o modelo ganha o direito a
+ter opinião.
+
+```
+confiança 100%  →  travão 0.0 pts   (nada muda)
+confiança  50%  →  travão 1.5 pts
+confiança  25%  →  travão 2.3 pts   (jornada 2)
+```
+
+Verificado com os números reais do cenário: uma vantagem de +0.9 pts é
+recusada na jornada 2 e aceite mais tarde na época; uma vantagem de +2.5 pts
+passa mesmo cedo. **O travão é contra o ruído, não contra agir.**
+
+### E, sobretudo, passa a dizê-lo
+
+O plano recusado continua visível — o raciocínio não se esconde — mas explica:
+quanto ganharia, quanto teria de ganhar, e que com aquela confiança a
+diferença é ruído. A frase de "esta jornada" deixa de ser um "não faças nada"
+seco e passa a dizer qual era a melhor troca e porque não vale a pena.
+
+O painel ganha uma linha de confiança sempre que ela está abaixo de 90%.
+
+**O que isto NÃO corrige:** o guarda-redes continuar a aparecer como melhor
+capitão enquanto a época for nova. É o mesmo achatamento a manifestar-se, e a
+resposta certa é a mesma — nesta altura o modelo não tem opinião sobre quem
+capitanear, e vai passar a dizê-lo em vez de fingir que tem.
+
+## Novo na v1.30.2 — as tarefas semanais nunca escreveram nada
+
+Ao verificar o deploy da v1.30.1 tentei correr o backtest e apanhei 401. Fui
+ver o estado da camada de investigação táctica e encontrei `"lastRun": null`
+— **nenhuma execução semanal alguma vez conseguiu escrever**. As notas
+tácticas ativas no painel são as que foram semeadas à mão a 21 de agosto, o
+que fazia a camada parecer viva quando estava morta.
+
+A verificação do token era comparação exata, repetida em quatro rotas. Um
+valor colado num campo de texto de um painel web apanha espaço ou quebra de
+linha com toda a facilidade, e a falha que isso produz é das mais
+confusas que há: o valor PARECE idêntico onde quer que se inspecione, e todos
+os pedidos continuam a dar 401.
+
+`lib/apitoken.ts` passa a ser a única verificação, e apara espaços dos dois
+lados. Nenhum token legítimo tem espaço à volta, por isso não se perde nada e
+elimina-se uma classe inteira de falha silenciosa.
+
+**O diagnóstico.** A resposta 401 passa a dizer se a variável está sequer
+definida no servidor, e os dois COMPRIMENTOS. Isso chega para distinguir "não
+está configurada", "está configurada com outro valor" e "é o mesmo valor com
+espaço a mais" — sem nunca revelar um único carácter do segredo. Há um teste
+que verifica exatamente isso: que o corpo do erro não contém o segredo.
+
 ## Novo na v1.30.1 — o deploy da v1.30 foi recusado por um limite do plano
 
 O build passou, os 428 testes passaram, e a app não subiu. A Vercel recusou o

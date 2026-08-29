@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getBootstrap, getFixtures, getElementSummary } from "@/lib/fpl-client";
 import { getRedis } from "@/lib/kv";
+import { checkApiToken, unauthorizedBody } from "@/lib/apitoken";
 import { calibrate, type CalibrationReport } from "@/lib/calibration";
 import { PARAM_GRIDS, type TunableParam } from "@/lib/modelparams";
 import type { ElementHistoryRow } from "@/lib/backtest";
@@ -41,13 +42,6 @@ const MAX_PARAMS_PER_RUN = 4;
 const CACHE_KEY = "calibration:last";
 const HISTORY_KEY = (id: number, upTo: number) => `backtest:hist:${id}:${upTo}`;
 const HISTORY_TTL_SECONDS = 60 * 60 * 24 * 14;
-
-function isAuthorized(req: NextRequest): boolean {
-  const expected = process.env.INSIGHTS_API_TOKEN;
-  if (!expected) return false;
-  const provided = req.nextUrl.searchParams.get("token") ?? "";
-  return provided.length > 0 && provided === expected;
-}
 
 async function mapWithLimit<T, R>(
   items: T[],
@@ -100,11 +94,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(cached);
   }
 
-  if (!isAuthorized(req)) {
-    return NextResponse.json(
-      { error: "não autorizado — falta o parâmetro 'token' ou não corresponde a INSIGHTS_API_TOKEN" },
-      { status: 401 }
-    );
+  const auth = checkApiToken(params.get("token"));
+  if (!auth.ok) {
+    return NextResponse.json(unauthorizedBody(auth), { status: 401 });
   }
 
   const startedAt = Date.now();
