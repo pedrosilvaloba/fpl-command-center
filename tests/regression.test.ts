@@ -51,6 +51,13 @@ import {
 import { computeMomentum, momentumReason } from "../lib/momentum";
 import { readCalendar, planChips } from "../lib/chipplan";
 import {
+  decisionGain,
+  implausibleXiWarning,
+  shrunkForSelection,
+  selectionReliability,
+  SELECTION_RELIABILITY_FLOOR,
+} from "../lib/selection";
+import {
   simulateLeague,
   applyLearningTilt,
   selectRivals,
@@ -4249,6 +4256,215 @@ function testIncumbencyKeepsPlayersWhoAreDoingFine() {
 }
 
 
+// ---------------------------------------------------------------------
+// v1.35 — o resolvedor de nomes aplicava notas ao jogador errado.
+//
+// Encontrado a olhar para produção: uma nota cuja razão dizia "executor
+// único de penáltis do EVERTON" estava aplicada a um jogador do MANCHESTER
+// CITY, e apresentada com toda a confiança como "Ndiaye (MCI)".
+//
+// A camada de investigação tinha feito o trabalho certo. O resolvedor é
+// que apontou a nota ao homem errado — um ajuste de +8% na pontuação de um
+// jogador que ninguém investigou.
+//
+// A causa: a equipa indicada só era usada para filtrar SE o filtro desse
+// resultados. Não dando, era descartada em silêncio, e o desempate por
+// nome exato escolhia o jogador de outro clube.
+// ---------------------------------------------------------------------
+
+function testTeamIsAConstraintNotAHint() {
+  const { bootstrap } = makeBootstrap({ currentEvent: 5, gameweeks: 10 });
+  const teams = [makeTeam(1, "EVE"), makeTeam(2, "MCI")];
+  bootstrap.teams = teams;
+  // Dois jogadores com o mesmo apelido em clubes diferentes — e o do
+  // Everton NÃO existe, que é exatamente o caso real.
+  bootstrap.elements = [
+    makeElement({ id: 10, web_name: "Ndiaye", team: 2, element_type: 3 }),
+    makeElement({ id: 11, web_name: "Haaland", team: 2, element_type: 4 }),
+  ];
+
+  const wrongClub = resolveInsightTarget(bootstrap, "player", {
+    playerName: "Ndiaye",
+    teamShortName: "EVE",
+  });
+  check(
+    "um jogador que não existe no clube indicado é REJEITADO, não redirecionado",
+    wrongClub.ok === false,
+    wrongClub.ok ? `resolveu para ${wrongClub.label}` : wrongClub.reason
+  );
+  check(
+    "e a razão diz claramente que a equipa é uma restrição",
+    wrongClub.ok === false && wrongClub.reason.includes("restrição"),
+    wrongClub.ok ? "" : wrongClub.reason
+  );
+
+  // O caso legítimo continua a funcionar.
+  const rightClub = resolveInsightTarget(bootstrap, "player", {
+    playerName: "Ndiaye",
+    teamShortName: "MCI",
+  });
+  check(
+    "com o clube certo, resolve normalmente",
+    rightClub.ok === true && rightClub.id === 10,
+    rightClub.ok ? rightClub.label : rightClub.reason
+  );
+  check(
+    "e a etiqueta mostra o clube verdadeiro",
+    rightClub.ok === true && rightClub.label.includes("MCI")
+  );
+
+  // Um clube que nem sequer existe não pode virar "sem restrição".
+  const badClub = resolveInsightTarget(bootstrap, "player", {
+    playerName: "Ndiaye",
+    teamShortName: "XYZ",
+  });
+  check(
+    "um clube inexistente é rejeitado em vez de ignorado",
+    badClub.ok === false && badClub.reason.includes("não existe"),
+    badClub.ok ? `resolveu para ${badClub.label}` : badClub.reason
+  );
+
+  // Sem clube indicado, o comportamento antigo mantém-se: resolve pelo nome.
+  const noClub = resolveInsightTarget(bootstrap, "player", { playerName: "Ndiaye" });
+  check(
+    "sem clube indicado, continua a resolver só pelo nome",
+    noClub.ok === true && noClub.id === 10
+  );
+
+  // Dois jogadores com o mesmo apelido em clubes diferentes: o clube passa a
+  // ser o que decide, em vez de um desempate arbitrário.
+  bootstrap.elements = [
+    makeElement({ id: 20, web_name: "Ndiaye", team: 1, element_type: 3 }),
+    makeElement({ id: 21, web_name: "Ndiaye", team: 2, element_type: 3 }),
+  ];
+  const eve = resolveInsightTarget(bootstrap, "player", {
+    playerName: "Ndiaye",
+    teamShortName: "EVE",
+  });
+  const mci = resolveInsightTarget(bootstrap, "player", {
+    playerName: "Ndiaye",
+    teamShortName: "MCI",
+  });
+  check(
+    "com dois homónimos, cada clube resolve para o seu",
+    eve.ok === true && eve.id === 20 && mci.ok === true && mci.id === 21,
+    `${eve.ok ? eve.id : eve.reason} / ${mci.ok ? mci.id : mci.reason}`
+  );
+}
+
+// ---------------------------------------------------------------------
+// v1.35 — a maldição do vencedor. Porque é que o "plantel ideal" era
+// sempre espetacular, e porque é que o Wildcard era sempre recomendado.
+//
+// Medido em produção, jornada 3:
+//   onze atual   296.5 pts / 5 jornadas = 59.3 por jornada  (plausível)
+//   onze ideal   461.6 pts / 5 jornadas = 92.3 por jornada  (impossível)
+//
+// Um onze normal faz 50-60 pontos por jornada. Escolher os 11 melhores de
+// 600 estimativas não escolhe os melhores jogadores — escolhe aqueles cujo
+// ERRO é mais otimista.
+//
+// E a assimetria é o defeito: o onze atual não passa por seleção, o ideal
+// passa. A diferença herda todo o otimismo, e era essa diferença que
+// autorizava gastar o chip.
+// ---------------------------------------------------------------------
+
+function testDecisionGainRefusesImpossibleNumbers() {
+  // Os números reais da produção.
+  const real = decisionGain(461.6, 296.5, 5);
+  check(
+    "um onze impossível é limitado ao teto antes de decidir",
+    real.capped === true,
+    `${real.gain}`
+  );
+  check(
+    "e o ganho cai de 165.1 para 78.5",
+    Math.abs(real.gain - 78.5) < 0.05,
+    `${real.gain}`
+  );
+
+  // Um onze plausível passa intacto — o teto é um travão, não um imposto.
+  const sane = decisionGain(330, 296.5, 5);
+  check(
+    "um onze plausível não é tocado",
+    sane.capped === false && Math.abs(sane.gain - 33.5) < 0.05,
+    `${sane.gain}`
+  );
+  check(
+    "o teto nunca inventa ganho onde não há",
+    decisionGain(280, 296.5, 5).gain < 0
+  );
+}
+
+function testModelSaysOutLoudWhenItOverreaches() {
+  check(
+    "92 pontos por jornada dispara o aviso",
+    (implausibleXiWarning(461.6, 5) ?? "").includes("92"),
+    implausibleXiWarning(461.6, 5)?.slice(0, 60) ?? "sem aviso"
+  );
+  check(
+    "e o aviso explica a causa, não só o sintoma",
+    (implausibleXiWarning(461.6, 5) ?? "").includes("otimistas")
+  );
+  check(
+    "um onze de 60 por jornada não dispara nada",
+    implausibleXiWarning(300, 5) === null
+  );
+  check(
+    "nem valores degenerados",
+    implausibleXiWarning(0, 5) === null && implausibleXiWarning(400, 0) === null
+  );
+}
+
+function testSelectionShrinkageIsHonestlyLimited() {
+  // O que o encolhimento FAZ: um jogador com pouca evidência e um número
+  // espetacular é puxado para trás; um com evidência mantém-se.
+  const mean = 20;
+  const flashy = mkSim(1, { epNext: 8 });
+  const proven = mkSim(2, { epNext: 8 });
+  const flashyLow = { ...flashy, modelTrust: 0, expectedPoints: 40 } as ScoredPlayer;
+  const provenHigh = { ...proven, modelTrust: 1, expectedPoints: 40 } as ScoredPlayer;
+
+  check(
+    "sem evidência, um número espetacular é puxado para a média",
+    shrunkForSelection(flashyLow, 40, mean) < 40 - 5,
+    `${shrunkForSelection(flashyLow, 40, mean).toFixed(1)}`
+  );
+  check(
+    "com evidência completa, o número mantém-se intacto",
+    Math.abs(shrunkForSelection(provenHigh, 40, mean) - 40) < 1e-9
+  );
+  check(
+    "e quem já está na média não é mexido, tenha a evidência que tiver",
+    Math.abs(shrunkForSelection(flashyLow, mean, mean) - mean) < 1e-9
+  );
+  check(
+    "a fiabilidade nunca sai do intervalo declarado",
+    selectionReliability(flashyLow) === SELECTION_RELIABILITY_FLOOR &&
+      selectionReliability(provenHigh) === 1
+  );
+
+  // O que o encolhimento NÃO faz — medido, não presumido. Com a mesma
+  // confiança em toda a gente é uma transformação monótona: não reordena
+  // ninguém. Foi por isso que sozinho não resolveu o problema.
+  const same = [30, 40, 50].map(
+    (v, i) => ({ ...mkSim(100 + i, {}), modelTrust: 0.25, expectedPoints: v }) as ScoredPlayer
+  );
+  const before = [...same].sort((a, b) => b.expectedPoints - a.expectedPoints).map((p) => p.element.id);
+  const after = [...same]
+    .sort(
+      (a, b) =>
+        shrunkForSelection(b, b.expectedPoints, mean) -
+        shrunkForSelection(a, a.expectedPoints, mean)
+    )
+    .map((p) => p.element.id);
+  check(
+    "com confiança uniforme, o encolhimento não reordena nada — e isso está documentado",
+    before.join(",") === after.join(","),
+    `${before.join(",")} vs ${after.join(",")}`
+  );
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testFreeTransferReconstruction();
 testSellingPriceEstimation();
@@ -4338,6 +4554,12 @@ testCalendarFindsInternationalBreaks();
 testChipPlannerProtectsTheOption();
 testWildcardWaitsForTheInternationalBreak();
 testIncumbencyKeepsPlayersWhoAreDoingFine();
+
+testTeamIsAConstraintNotAHint();
+
+testDecisionGainRefusesImpossibleNumbers();
+testModelSaysOutLoudWhenItOverreaches();
+testSelectionShrinkageIsHonestlyLimited();
 
 report("regressão");
 const { passed, failed } = counts();

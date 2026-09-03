@@ -210,6 +210,14 @@ export default async function Home() {
   const oddsProblem = oddsResult.status === "ok" ? null : oddsResult.message;
   const storageConfigured = isStorageConfigured();
   const lastResearchRun = await getLastResearchRun();
+  // The research layer runs weekly. Anything past nine days means a run was
+  // missed, not that the schedule is merely between passes.
+  const researchAgeDays = lastResearchRun
+    // eslint-disable-next-line react-hooks/purity
+    ? Math.floor((Date.now() - new Date(lastResearchRun.at).getTime()) / 86_400_000)
+    : null;
+  const researchStale =
+    storageConfigured && (researchAgeDays === null || researchAgeDays > 9);
 
   const currentEventForPicks = bootstrap.events.find((e) => e.is_current);
   const picksEvent = currentEventForPicks?.id ?? Math.max(1, fromEvent - 1);
@@ -635,6 +643,27 @@ export default async function Home() {
               <AlertStrip tone="danger" title="Sem odds de mercado.">
                 {oddsProblem} É a fonte mais forte para avaliar calendário — sem
                 ela o modelo apoia-se numa leitura bastante mais fraca.
+              </AlertStrip>
+            )}
+            {/* THE RESEARCH LAYER, LOUDLY.
+                A tactical layer that stops running is invisible: the notes it
+                left behind stay on screen, still look current, and keep moving
+                the model until they expire two weeks later. That silence is
+                exactly what made the owner distrust the layer. It now says so
+                itself, at the top, in the same place as a missing data source
+                — because that is what it is. */}
+            {researchStale && (
+              <AlertStrip
+                tone="danger"
+                title={
+                  lastResearchRun
+                    ? `Investigação tática parada há ${researchAgeDays} dias.`
+                    : "Investigação tática nunca correu."
+                }
+              >
+                {activeInsights.length > 0
+                  ? `Há ${activeInsights.length} nota${activeInsights.length === 1 ? "" : "s"} ativa${activeInsights.length === 1 ? "" : "s"} a mexer no modelo, mas nenhuma é recente. As tarefas semanais correm à quinta e à sexta — se isto persistir, falharam.`
+                  : "Nenhuma nota ativa e nenhuma execução recente. A camada qualitativa do modelo está inerte."}
               </AlertStrip>
             )}
             {!storageConfigured && (

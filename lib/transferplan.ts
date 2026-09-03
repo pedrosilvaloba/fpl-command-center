@@ -2,6 +2,12 @@ import solver from "javascript-lp-solver";
 import type { ScoredPlayer } from "./recommend";
 import { pickBestXI, pickCaptain, orderBench } from "./recommend";
 import { WILDCARD_BREAK_PREMIUM, type CalendarContext } from "./chipplan";
+import {
+  positionalMeans,
+  shrunkForSelection,
+  implausibleXiWarning,
+  decisionGain,
+} from "./selection";
 import { strategicValue, strategicValueNext } from "./optimizer";
 import { HIT_COST_POINTS, type SquadState } from "./squadstate";
 
@@ -287,6 +293,9 @@ export interface TransferPlan {
 }
 
 export interface WildcardSignal {
+  /** Set when the "ideal" eleven's forecast is not physically plausible —
+   * the model saying out loud that it is over-reaching. See lib/selection.ts. */
+  overreach?: string | null;
   /** How many of the ideal fifteen are not in the current squad. */
   distance: number;
   /** Window points gained by moving all the way to the ideal squad. */
@@ -360,6 +369,10 @@ function solveSquad(opts: SolveOptions): ScoredPlayer[] | null {
   const { pool, ownedIds, costM, budgetM, maxTransfers, freeTransfers, allowHits, beta } = opts;
   const clubIds = Array.from(new Set(pool.map((p) => p.team.id)));
 
+  // Positional anchors for the shrinkage below, computed once per solve.
+  const meanSquad = positionalMeans(pool, (p) => playerValue(p, beta).squad);
+  const meanXi = positionalMeans(pool, (p) => playerValue(p, beta).xi);
+
   const variables: Record<string, Record<string, number>> = {};
   const binaries: Record<string, 1> = {};
   const ints: Record<string, 1> = {};
@@ -391,7 +404,15 @@ function solveSquad(opts: SolveOptions): ScoredPlayer[] | null {
     // plus a discounted tail — which is also what puts the -4 hit on a
     // comparable scale. See FUTURE_DISCOUNT above.
     const isOwned = ownedIds.has(p.element.id);
-    const raw = playerValue(p, beta);
+    const rawValue = playerValue(p, beta);
+    // THE WINNER'S CURSE — see lib/selection.ts. Optimising over estimates
+    // selects the most flattering ERRORS, not the best players. Each value is
+    // pulled toward its positional mean by how little evidence stands behind
+    // it, BEFORE the solver gets to hunt through them.
+    const raw = {
+      squad: shrunkForSelection(p, rawValue.squad, meanSquad.get(p.element.element_type) ?? 0),
+      xi: shrunkForSelection(p, rawValue.xi, meanXi.get(p.element.element_type) ?? 0),
+    };
     // See INCUMBENCY_BONUS. Applied to squad membership only: whether a
     // player STARTS is a pure this-week question with no switching cost.
     const valueSquad = raw.squad + (isOwned ? INCUMBENCY_BONUS : 0);
@@ -779,7 +800,15 @@ export function planTransfers(
       0
     );
     const distance = plan.transfers;
-    const gain = Math.round((plan.xiWindowPoints - hold.xiWindowPoints) * 10) / 10;
+    // NOT the raw difference — see decisionGain in lib/selection.ts. The
+    // ideal squad is selected from six hundred estimates and the current one
+    // is not, so the raw difference carries the whole selection bias.
+    const rawGain = Math.round((plan.xiWindowPoints - hold.xiWindowPoints) * 10) / 10;
+    const { gain, capped: gainCapped } = decisionGain(
+      plan.xiWindowPoints,
+      hold.xiWindowPoints,
+      5
+    );
     // A wildcard is worth playing when the squad is far enough from where it
     // should be that free transfers cannot close the gap in reasonable time.
     // Five transfers is over a month of holding; below that the free
@@ -825,11 +854,16 @@ export function planTransfers(
     const requiredGain =
       WILDCARD_MIN_GAIN + earlySeasonPremium + breakPremium + confidencePremium;
     const advise = wildcardAvailable && distance >= 5 && gain >= requiredGain;
+    const overreach = implausibleXiWarning(plan.xiWindowPoints, 5);
     wildcard = {
       distance,
       gain,
       available: wildcardAvailable,
       advise,
+      overreach:
+        overreach && gainCapped
+          ? `${overreach} O ganho apresentado já foi limitado a esse teto (${rawGain} → ${gain} pts).`
+          : overreach,
       text: !wildcardAvailable
         ? `O teu plantel está a ${distance} transferências do ideal (${gain >= 0 ? "+" : ""}${gain} pts em 5 jornadas), mas já não tens Wildcard disponível nesta metade da época — o caminho é por transferências livres, uma de cada vez.`
         : advise

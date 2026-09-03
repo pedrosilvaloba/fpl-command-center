@@ -483,15 +483,41 @@ export function resolveInsightTarget(
     const full = normalizeName(`${e.first_name} ${e.second_name}`);
     return web === nameQuery || full === nameQuery || web.includes(nameQuery) || full.includes(nameQuery);
   });
-  if (target.teamShortName) {
-    const teamQuery = normalizeName(target.teamShortName);
+  // THE TEAM IS A CONSTRAINT, NOT A HINT.
+  //
+  // This used to narrow by team only `if (narrowed.length > 0)` — so when the
+  // named player did not exist at the named club, the constraint was SILENTLY
+  // DISCARDED and the candidates from other clubs survived. Combined with the
+  // exact-web_name tie-break below, that resolves a note about one club's
+  // player onto a different club's player of the same surname, and labels it
+  // confidently with the wrong club.
+  //
+  // Not hypothetical. Live in production: a note whose reason read
+  // "executor único de penáltis do Everton" was applied to a Manchester City
+  // player and displayed as "Ndiaye (MCI)". The research layer had done its
+  // job correctly and the resolver quietly aimed it at the wrong man — a
+  // +8% scoring adjustment on a player nobody had researched.
+  //
+  // A supplied team is now a hard filter. No match at that club is a
+  // rejection, and a club name that does not resolve at all is a rejection
+  // too: a typo must not silently become "no constraint".
+  if (target.teamShortName || target.teamName) {
+    const raw = target.teamShortName ?? target.teamName ?? "";
+    const teamQuery = normalizeName(raw);
     const teamMatch = bootstrap.teams.find(
       (t) => normalizeName(t.short_name) === teamQuery || normalizeName(t.name) === teamQuery
     );
-    if (teamMatch) {
-      const narrowed = candidates.filter((e) => e.team === teamMatch.id);
-      if (narrowed.length > 0) candidates = narrowed;
+    if (!teamMatch) {
+      return { ok: false, reason: `equipa "${raw}" não existe — nota rejeitada em vez de aplicada a outro clube` };
     }
+    const narrowed = candidates.filter((e) => e.team === teamMatch.id);
+    if (narrowed.length === 0) {
+      return {
+        ok: false,
+        reason: `"${target.playerName}" não existe no ${teamMatch.short_name} — a equipa indicada é uma restrição, não uma sugestão`,
+      };
+    }
+    candidates = narrowed;
   }
   if (candidates.length === 0) {
     return { ok: false, reason: `jogador "${target.playerName}" não encontrado` };

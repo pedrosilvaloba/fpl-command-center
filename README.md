@@ -60,6 +60,7 @@ lib/
   managerinsights.ts Ajustes qualitativos/táticos — lista permanente manual + camada dinâmica auto-aplicada (resolução de nomes, validação, expiração, limite)
   teamrating.ts   Rating de equipa dinâmico (Elo + taxa de golos), calibrado com os resultados reais desta época
   accuracy.ts     Compara previsões do modelo com pontos reais, jornada a jornada (opcional, precisa de Redis)
+  selection.ts    Maldição do vencedor — encolhimento na seleção e teto de plausibilidade nas decisões
   chipplan.ts     Chips e calendário — paragens para seleções, e quando jogar Bench Boost, Triple Captain e Free Hit
   momentum.ts     Arrastamento — converte os fluxos de transferências da FPL em posse projetada; mexe no RISCO, nunca nos pontos
   modelparams.ts  As constantes do modelo, num só sítio e injetáveis — sem isto não há calibração possível
@@ -88,6 +89,85 @@ components/
   MyTeamPanel.tsx     A Minha Equipa — liga um Team ID real (client)
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
+
+## Novo na v1.35 — a maldição do vencedor, e o resolvedor que apontava ao homem errado
+
+### O plantel ideal era impossível, e era isso que mandava jogar o Wildcard
+
+Medido em produção, jornada 3:
+
+```
+onze atual   296.5 pts / 5 jornadas  =  59.3 por jornada   plausível
+onze "ideal" 461.6 pts / 5 jornadas  =  92.3 por jornada   impossível
+```
+
+Um onze normal da FPL faz 50-60 pontos por jornada. Os melhores gestores do
+mundo andam nos 65-70. O modelo acreditava que um plantel comprável naquele
+dia fazia **noventa e dois**.
+
+Não é um plantel bom — é um artefacto aritmético. O otimizador escolhe as
+onze maiores estimativas de entre cerca de seiscentas, e escolher o máximo de
+muitas estimativas ruidosas não escolhe os melhores jogadores: escolhe
+**aqueles cujo erro é mais otimista**. Somar as estimativas dos escolhidos
+soma todo esse otimismo. É a maldição do vencedor, e não é um defeito de
+nenhuma fórmula em particular — é o que acontece sempre que se otimiza sobre
+estimativas em vez de sobre a verdade.
+
+**E a assimetria é que era o defeito.** O plantel atual não passa por
+seleção nenhuma, por isso a previsão dele é limpa. O ideal passa, por isso
+carrega o enviesamento todo. A DIFERENÇA herda-o por inteiro — e era essa
+diferença que o limiar do Wildcard testava.
+
+### Duas correções, e honestidade sobre qual funciona
+
+**1. Encolhimento antes de escolher.** Cada estimativa é puxada para a média
+da posição consoante a evidência que a sustenta.
+
+**Medido, e não chega.** Simulado sobre seiscentos jogadores com valor
+verdadeiro idêntico e só ruído de estimativa, o encolhimento mudou a previsão
+do onze escolhido em **0.1 pontos**: com confiança uniforme é uma
+transformação monótona, não reordena nada, e o número REPORTADO continuava a
+ser a soma sem encolher. Só ajuda onde a confiança varia mesmo entre
+jogadores. Fica escrito assim no código e há um teste que o demonstra — um
+comentário a prometer uma correção que o código não entrega é pior do que não
+haver comentário.
+
+**2. Um teto na decisão.** O que trava mesmo o estrago é recusar que um
+número impossível autorize uma decisão. Com o teto, o ganho de 165.1 passa a
+78.5 — ainda possivelmente suficiente para justificar o chip, mas agora um
+número que podia ser verdade. E o painel passa a dizer em voz alta que o
+modelo se está a exceder, em vez de recomendar o chip em silêncio.
+
+Isto é um **limite, não uma correção**. Não torna a estimativa certa; impede
+que seja agida. Tornar a estimativa certa exige medir o enviesamento contra
+jornadas reais — que é exatamente para o que serve `lib/calibration.ts` e que
+ainda não é possível por falta de jornadas.
+
+### O resolvedor de nomes aplicava notas ao jogador errado
+
+Encontrado a olhar para produção: uma nota cuja razão dizia *"executor único
+de penáltis do **Everton**"* estava aplicada a um jogador do **Manchester
+City**, e apresentada com toda a confiança como "Ndiaye (MCI)".
+
+A camada de investigação tinha feito o trabalho certo. O resolvedor é que
+apontou a nota ao homem errado — um ajuste de +8% na pontuação de um jogador
+que ninguém investigou.
+
+A causa: a equipa indicada só era usada para filtrar **se o filtro desse
+resultados**. Não dando, era descartada em silêncio e o desempate por nome
+exato escolhia o jogador de outro clube. A equipa passa a ser uma
+**restrição**: não haver o jogador nesse clube é uma rejeição, e um clube que
+não existe também — um erro de escrita não pode virar "sem restrição".
+
+### E a falha da camada tática deixa de ser silenciosa
+
+Uma camada que deixa de correr é invisível: as notas que deixou continuam no
+ecrã, continuam a parecer atuais, e continuam a mexer no modelo até
+expirarem duas semanas depois. Era exatamente isso que estava a acontecer, e
+era isso que gerava a desconfiança.
+
+O painel passa a ter um alarme no topo, ao lado dos de fonte de dados em
+falta — porque é isso que é: *"Investigação tática parada há N dias"*.
 
 ## Novo na v1.34 — quando
 

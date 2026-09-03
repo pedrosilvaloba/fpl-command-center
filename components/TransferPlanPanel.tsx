@@ -271,6 +271,15 @@ export default function TransferPlanPanel({
             Longo prazo · estrutura e chips
           </p>
           <p className="text-sm leading-relaxed text-text-muted">{advice.longTerm}</p>
+          {/* The model saying out loud that it is over-reaching. A forecast of
+              ninety points a gameweek should never quietly justify spending a
+              chip — see lib/selection.ts. */}
+          {advice.wildcard?.overreach && (
+            <p className="mt-2 rounded-lg border border-danger/40 bg-danger/5 px-3 py-2 text-xs leading-relaxed text-text-muted">
+              <strong className="text-danger">Atenção ao número.</strong>{" "}
+              {advice.wildcard.overreach}
+            </p>
+          )}
         </div>
       </div>
 
