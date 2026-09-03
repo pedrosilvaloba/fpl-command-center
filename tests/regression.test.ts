@@ -104,7 +104,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isStorageConfigured } from "../lib/kv";
-import { checkApiToken, unauthorizedBody } from "../lib/apitoken";
+import { checkApiToken, unauthorizedBody, checkCronAuth } from "../lib/apitoken";
+import { computeJobHealth, mergeResearchHealth, type JobRun } from "../lib/joblog";
+import { paramsFromCursor, allTunableParams, MAX_PARAMS_PER_RUN } from "../lib/jobs";
 import { DEFAULT_MODEL_PARAMS, PARAM_GRIDS } from "../lib/modelparams";
 import { calibrate, MIN_EVENTS, MIN_ROWS } from "../lib/calibration";
 import {
@@ -4560,6 +4562,247 @@ testTeamIsAConstraintNotAHint();
 testDecisionGainRefusesImpossibleNumbers();
 testModelSaysOutLoudWhenItOverreaches();
 testSelectionShrinkageIsHonestlyLimited();
+
+// ---------------------------------------------------------------------
+// v1.36 — AUTOMAÇÃO. Três tarefas semanais falharam durante seis semanas e
+// nada nesta aplicação mudou de aspeto.
+//
+// A falha real não foi cada tarefa falhar: foi o silêncio. Uma tarefa que
+// morre antes de escrever deixa exatamente o mesmo rasto que uma tarefa que
+// nunca correu — nenhum. Uma execução manual chegou a durar 8m30s, fez
+// trabalho a sério, devolveu FAILED e não deixou registo nenhum.
+//
+// Estes testes trancam as três decisões que resolvem isso: correr as duas
+// tarefas computacionais dentro da aplicação (cron da Vercel, sem sessão
+// nenhuma pelo meio), rodar os parâmetros da calibração em vez de medir
+// sempre os mesmos quatro, e medir a saúde pelo ÚLTIMO SUCESSO.
+// ---------------------------------------------------------------------
+
+function run(over: Partial<JobRun>): JobRun {
+  return {
+    job: "backtest",
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    ok: true,
+    durationMs: 1000,
+    summary: "",
+    trigger: "cron",
+    ...over,
+  };
+}
+
+const daysAgo = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString();
+
+function testHealthMeasuresSuccessNotAttempts() {
+  // O caso exato: a tarefa dispara todos os dias e falha todos os dias.
+  // Medir "última tentativa" diria "correu hoje" — a mesma mentira noutro
+  // sítio. A saúde tem de olhar para o último SUCESSO.
+  const failingDaily = [
+    run({ job: "backtest", startedAt: daysAgo(0), finishedAt: daysAgo(0), ok: false, summary: "erro" }),
+    run({ job: "backtest", startedAt: daysAgo(1), finishedAt: daysAgo(1), ok: false, summary: "erro" }),
+    run({ job: "backtest", startedAt: daysAgo(2), finishedAt: daysAgo(2), ok: false, summary: "erro" }),
+    run({ job: "backtest", startedAt: daysAgo(30), finishedAt: daysAgo(30), ok: true, summary: "ok" }),
+  ];
+  const health = computeJobHealth(failingDaily);
+  const bt = health.find((h) => h.job === "backtest")!;
+  check("uma tarefa que falha todos os dias é reportada como parada", bt.stale === true);
+  check("conta as falhas seguidas", bt.consecutiveFailures === 3, `${bt.consecutiveFailures}`);
+  check(
+    "o último sucesso é o antigo, não a tentativa de hoje",
+    bt.daysSinceSuccess === 30,
+    `${bt.daysSinceSuccess}`
+  );
+
+  // E o contraste: um sucesso recente NÃO pode dar parada, senão o teste
+  // acima passava com qualquer implementação.
+  const healthy = computeJobHealth([
+    run({ job: "backtest", startedAt: daysAgo(0), finishedAt: daysAgo(0), ok: true, summary: "ok" }),
+  ]);
+  check(
+    "um sucesso de hoje não é reportado como parado",
+    healthy.find((h) => h.job === "backtest")!.stale === false
+  );
+}
+
+function testNeverHavingRunIsTheWorstCaseNotAnUnknownOne() {
+  // O estado em que este projeto esteve seis semanas: log vazio. Tratar
+  // "nunca correu" como indeterminado é como o painel ficou verde enquanto
+  // nada funcionava.
+  const health = computeJobHealth([]);
+  check(
+    "sem registo nenhum, todas as tarefas aparecem paradas",
+    health.every((h) => h.stale === true && h.lastSuccess === null)
+  );
+  check("as três tarefas são vigiadas", health.length === 3, health.map((h) => h.job).join(","));
+}
+
+function testAKilledRunLeavesEvidence() {
+  // O modo de falha mais provável destas funções é morrer no limite de
+  // tempo — e uma função morta não escreve o registo final. Por isso o
+  // registo é escrito ao COMEÇAR, e uma entrada sem `finishedAt` é a prova
+  // de que começou e nunca acabou.
+  const health = computeJobHealth([
+    run({ job: "calibration", startedAt: daysAgo(0), finishedAt: null, ok: null, summary: "a correr…" }),
+  ]);
+  const cal = health.find((h) => h.job === "calibration")!;
+  check("uma execução que nunca terminou não conta como sucesso", cal.lastSuccess === null);
+  check("e fica visível como última tentativa", cal.last?.finishedAt === null);
+  check("e marca a tarefa como parada", cal.stale === true);
+}
+
+function testResearchHistoryCountsEvenThoughItPredatesTheLog() {
+  // A investigação tática regista-se por outro caminho (lib/managerinsights),
+  // que é anterior a este log. Uma execução bem sucedida ANTES de o log
+  // existir aconteceu na mesma — ignorá-la seria inventar uma avaria.
+  const merged = mergeResearchHealth(computeJobHealth([]), {
+    at: daysAgo(1),
+    acceptedCount: 4,
+    rejectedCount: 1,
+  });
+  const research = merged.find((h) => h.job === "research")!;
+  check("uma investigação recente conta como sucesso", research.lastSuccess !== null);
+  check("e a tarefa deixa de estar parada", research.stale === false);
+  check("as outras tarefas não são afetadas", merged.find((h) => h.job === "backtest")!.stale === true);
+
+  // E uma investigação ANTIGA continua a dar parada — senão isto seria só
+  // uma forma de apagar o alarme.
+  const old = mergeResearchHealth(computeJobHealth([]), {
+    at: daysAgo(40),
+    acceptedCount: 4,
+    rejectedCount: 1,
+  });
+  check(
+    "uma investigação de há 40 dias continua a contar como parada",
+    old.find((h) => h.job === "research")!.stale === true
+  );
+}
+
+function testCalibrationRotatesInsteadOfMeasuringTheSameFourForever() {
+  // Antes: `Object.keys(PARAM_GRIDS).slice(0, 4)` em ambas as rotas. Uma
+  // tarefa diária que mede sempre os mesmos quatro parâmetros não é
+  // automação, é uma forma muito fiável de não aprender nada — os outros
+  // oito nunca teriam sido testados uma única vez.
+  const all = allTunableParams();
+  check("há mais parâmetros do que cabem numa execução", all.length > MAX_PARAMS_PER_RUN);
+
+  const seen = new Set<string>();
+  let cursor = 0;
+  const runs = Math.ceil(all.length / MAX_PARAMS_PER_RUN);
+  for (let i = 0; i < runs; i++) {
+    const batch = paramsFromCursor(all, cursor, MAX_PARAMS_PER_RUN);
+    batch.forEach((p) => seen.add(p));
+    cursor += batch.length;
+  }
+  check(
+    `${runs} execuções cobrem todos os ${all.length} parâmetros`,
+    seen.size === all.length,
+    `cobertos ${seen.size}`
+  );
+
+  // Dá a volta ao fim da lista em vez de parar lá — parar cobriria cada vez
+  // menos parâmetros por ciclo.
+  const wrapped = paramsFromCursor(all, all.length - 2, 4);
+  check("a rotação dá a volta ao fim da lista", wrapped.length === 4, `${wrapped.length}`);
+  check("e não repete dentro da mesma execução", new Set(wrapped).size === 4);
+  check("um cursor negativo não parte nada", paramsFromCursor(all, -3, 2).length === 2);
+}
+
+function testCronRefusesWhenNoSecretIsConfigured() {
+  // A tentação é deixar passar quando nada está configurado, para o cron
+  // "funcionar logo". Este endpoint corre a computação mais cara do
+  // projeto: aberto, é um botão de negação de serviço.
+  const open = checkCronAuth("Bearer whatever", "whatever", { cronSecret: "", apiToken: "" });
+  check("sem segredos configurados, recusa", open.ok === false);
+  check("e diz porquê", (open.reason ?? "").includes("desligada por segurança"));
+
+  const secrets = { cronSecret: "cron-secret", apiToken: "api-token" };
+  check(
+    "aceita o cabeçalho que a Vercel envia",
+    checkCronAuth("Bearer cron-secret", null, secrets).via === "cron"
+  );
+  check(
+    "aceita o token na query, para disparo manual",
+    checkCronAuth(null, "api-token", secrets).via === "token"
+  );
+  check(
+    "tolera espaço colado por engano",
+    checkCronAuth("Bearer  cron-secret ", null, { ...secrets, cronSecret: " cron-secret\n" }).ok === true
+  );
+  check("recusa um segredo errado", checkCronAuth("Bearer nope", "nope", secrets).ok === false);
+  check(
+    "o token da API não abre a porta se não estiver configurado",
+    checkCronAuth(null, "qualquer coisa", { cronSecret: "cron-secret", apiToken: "" }).ok === false
+  );
+}
+
+function testTheScheduleIsRealAndPointsAtARealRoute() {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const root = path.join(here, "..");
+  const configPath = path.join(root, "vercel.json");
+  check("existe vercel.json", fs.existsSync(configPath));
+  if (!fs.existsSync(configPath)) return;
+
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+    crons?: { path: string; schedule: string }[];
+  };
+  const crons = config.crons ?? [];
+  check("há pelo menos uma tarefa agendada", crons.length > 0);
+  // O plano Hobby aceita no máximo 2 cron jobs. Passar disso é o mesmo tipo
+  // de erro que o maxDuration = 800: a configuração é rejeitada e o deploy
+  // parece bem até não estar.
+  check("no máximo 2 crons (limite do plano Hobby)", crons.length <= 2, `${crons.length}`);
+
+  for (const cron of crons) {
+    // Uma rota agendada que não existe falha silenciosamente com 404 todos
+    // os dias — outra vez o mesmo padrão de avaria invisível.
+    const routeFile = path.join(root, "app", cron.path.replace(/^\//, ""), "route.ts");
+    check(`a rota ${cron.path} existe mesmo`, fs.existsSync(routeFile), routeFile);
+    const fields = cron.schedule.trim().split(/\s+/);
+    check(`o horário de ${cron.path} tem 5 campos`, fields.length === 5, cron.schedule);
+    // No plano Hobby só há uma execução por dia. Um horário com minuto ou
+    // hora em `*` pede execuções mais frequentes do que o plano dá.
+    check(
+      `${cron.path} corre no máximo uma vez por dia`,
+      !fields[0].includes("*") && !fields[1].includes("*"),
+      cron.schedule
+    );
+  }
+}
+
+function testTheSamplingRuleExistsExactlyOnce() {
+  // As duas rotas tinham cópias byte a byte de `chooseSample`. Código
+  // duplicado diverge, e uma calibração afinada numa amostra e validada
+  // noutra mede a diferença entre as amostras, não o modelo.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const root = path.join(here, "..");
+  const walk = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...walk(full));
+      else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) out.push(full);
+    }
+    return out;
+  };
+  const files = [...walk(path.join(root, "app")), ...walk(path.join(root, "lib"))];
+  const definitions = files.filter((f) =>
+    /function\s+chooseSample\s*\(/.test(fs.readFileSync(f, "utf8"))
+  );
+  check(
+    "a regra de amostragem está definida uma única vez",
+    definitions.length === 1,
+    definitions.map((f) => path.relative(root, f)).join(", ")
+  );
+}
+
+testHealthMeasuresSuccessNotAttempts();
+testNeverHavingRunIsTheWorstCaseNotAnUnknownOne();
+testAKilledRunLeavesEvidence();
+testResearchHistoryCountsEvenThoughItPredatesTheLog();
+testCalibrationRotatesInsteadOfMeasuringTheSameFourForever();
+testCronRefusesWhenNoSecretIsConfigured();
+testTheScheduleIsRealAndPointsAtARealRoute();
+testTheSamplingRuleExistsExactlyOnce();
 
 report("regressão");
 const { passed, failed } = counts();

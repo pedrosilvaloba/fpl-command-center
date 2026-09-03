@@ -43,6 +43,62 @@ export function checkApiToken(provided: string | null | undefined): TokenCheck {
   };
 }
 
+export interface CronAuth {
+  ok: boolean;
+  via: "cron" | "token" | "none";
+  reason?: string;
+}
+
+/**
+ * Authentication for the scheduled job endpoint.
+ *
+ * Vercel sends `Authorization: Bearer $CRON_SECRET` on every scheduled
+ * invocation — that is the primary path. A `?token=` matching
+ * INSIGHTS_API_TOKEN is accepted too, so the job can also be fired by hand
+ * from a browser or from a tool that can only issue plain GETs (the same
+ * constraint that shaped /api/insights/push).
+ *
+ * THE CASE THAT MATTERS. When NEITHER secret is configured, this refuses. The
+ * tempting shortcut is to let an unconfigured deployment through so the cron
+ * "just works" — but this endpoint runs the most expensive computation in the
+ * project, so an open version of it is a denial-of-service button, and "it is
+ * only my little app" is exactly how those get found. Refusing loudly also
+ * surfaces the misconfiguration rather than hiding it behind a job that
+ * appears to work.
+ *
+ * Pure, and taking its secrets as arguments, so the refusal can be tested
+ * without a running server.
+ */
+export function checkCronAuth(
+  authorizationHeader: string | null | undefined,
+  queryToken: string | null | undefined,
+  secrets: { cronSecret?: string | null; apiToken?: string | null } = {}
+): CronAuth {
+  const cronSecret = (secrets.cronSecret ?? process.env.CRON_SECRET ?? "").trim();
+  const header = (authorizationHeader ?? "").trim();
+  const bearer = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+
+  if (cronSecret.length > 0 && bearer.length > 0 && bearer === cronSecret) {
+    return { ok: true, via: "cron" };
+  }
+
+  const expected = (secrets.apiToken ?? process.env.INSIGHTS_API_TOKEN ?? "").trim();
+  const given = (queryToken ?? "").trim();
+  if (expected.length > 0 && given.length > 0 && given === expected) {
+    return { ok: true, via: "token" };
+  }
+
+  if (cronSecret.length === 0 && expected.length === 0) {
+    return {
+      ok: false,
+      via: "none",
+      reason:
+        "nem CRON_SECRET nem INSIGHTS_API_TOKEN estão definidas no servidor — a tarefa automática está desligada por segurança em vez de ficar aberta a qualquer pedido",
+    };
+  }
+  return { ok: false, via: "none", reason: "não autorizado" };
+}
+
 /** A 401 body that helps diagnose without leaking the secret. */
 export function unauthorizedBody(check: TokenCheck): Record<string, unknown> {
   return {

@@ -90,6 +90,76 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.36 — as tarefas passam a correr sozinhas, dentro da aplicação
+
+### O que estava mal
+
+Três tarefas de manutenção estavam agendadas como sessões de assistente:
+backtest à terça, investigação tática à quinta, verificação à sexta. Duas das
+três falharam **todas as semanas durante seis semanas** e nada nesta aplicação
+mudou de aspeto.
+
+O detalhe que fecha o diagnóstico: uma execução manual da tarefa de quinta
+durou **8 minutos e 30 segundos** — fez trabalho a sério — devolveu FAILED, e
+o `lastRun` da aplicação ficou exatamente onde estava.
+
+A falha real não é cada tarefa falhar; é o silêncio. **Uma tarefa que morre
+antes de escrever deixa o mesmo rasto que uma tarefa que nunca correu:
+nenhum.** Números antigos são indistinguíveis de números atuais quando nada
+diz quando foram calculados.
+
+### A observação que resolve
+
+**Duas das três tarefas nunca precisaram de um assistente.** O backtest é
+aritmética sobre o histórico de jogos do FPL. A calibração é uma pesquisa em
+grelha. Nenhuma precisa de julgamento, de linguagem ou de investigação — a
+única contribuição do assistente era chamar um URL. Isso é um cron job vestido
+de forma muito cara.
+
+Pior: essas sessões correm num ambiente que não chega a `*.vercel.app` a não
+ser por uma ferramenta específica. Mesmo uma sessão saudável estava a uma
+regra de proxy de não fazer nada.
+
+Passam agora a correr **dentro da própria aplicação**, no agendador da Vercel,
+uma vez por dia (`vercel.json` → `/api/cron/refresh`). Sem sessão, sem proxy,
+sem salto HTTP, sem token a viajar. Só a investigação tática continua a
+precisar de uma sessão semanal, porque envolve ler notícias e decidir o que é
+relevante — e é isso que o alarme de desatualização vigia.
+
+### E o silêncio deixa de ser possível
+
+Cada execução escreve no registo **ao começar** e outra vez ao acabar. É
+deliberado: o modo de morte mais provável destas funções é bater no limite de
+tempo, e uma função morta não escreve o registo final. Uma entrada sem
+`finishedAt` é a prova de que começou e nunca acabou — exatamente o caso que
+passou seis semanas invisível.
+
+O painel novo mostra o **último SUCESSO**, não a última tentativa. Uma tarefa
+que falha todos os dias não é uma tarefa que corre todos os dias, e mostrar
+"correu hoje" para uma execução com erro seria a mesma mentira noutro sítio.
+
+### Dois defeitos apanhados pelo caminho
+
+- **A calibração media sempre os mesmos quatro parâmetros.** As duas rotas
+  faziam `Object.keys(PARAM_GRIDS).slice(0, 4)`, portanto os outros oito nunca
+  teriam sido testados uma única vez. Uma tarefa diária que mede sempre o mesmo
+  não é automação — é uma forma muito fiável de não aprender nada. Há agora um
+  cursor rotativo: três dias cobrem os doze e recomeçam com dados mais frescos.
+- **A regra de amostragem estava duplicada byte a byte** nas duas rotas. Código
+  duplicado diverge, e uma calibração afinada numa amostra e validada noutra
+  mede a diferença entre as amostras, não o modelo. Passou a existir uma só vez,
+  em `lib/jobs.ts`, e há um teste que falha se voltar a haver duas.
+
+### Um passo teu, uma vez só
+
+Define **`CRON_SECRET`** nas Environment Variables do projeto na Vercel
+(qualquer valor longo serve) e faz Redeploy. A Vercel só assina os pedidos
+automáticos quando essa variável existe; sem ela a tarefa diária leva 401 todos
+os dias em silêncio. Se faltar, o painel diz-to na cara em vez de deixar
+descobrir daqui a um mês.
+
+---
+
 ## Novo na v1.35 — a maldição do vencedor, e o resolvedor que apontava ao homem errado
 
 ### O plantel ideal era impossível, e era isso que mandava jogar o Wildcard

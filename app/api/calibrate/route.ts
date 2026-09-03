@@ -1,90 +1,42 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBootstrap, getFixtures, getElementSummary } from "@/lib/fpl-client";
 import { getRedis } from "@/lib/kv";
 import { checkApiToken, unauthorizedBody } from "@/lib/apitoken";
-import { calibrate, type CalibrationReport } from "@/lib/calibration";
+import { runCalibrationJob, CALIBRATION_CACHE_KEY } from "@/lib/jobs";
+import { startJobRun, finishJobRun } from "@/lib/joblog";
 import { PARAM_GRIDS, type TunableParam } from "@/lib/modelparams";
-import type { ElementHistoryRow } from "@/lib/backtest";
-import type { FplElement } from "@/lib/types";
+import type { CalibrationReport } from "@/lib/calibration";
 
 /**
- * Runs the calibration sweep (lib/calibration.ts) and caches the report.
+ * Manual entry point for the calibration sweep. The work lives in
+ * lib/jobs.ts, shared with the daily scheduled run at /api/cron/refresh.
  *
- * COST. This is the most expensive thing in the project by a wide margin:
- * one full replay of every gameweek per candidate value per parameter. The
- * twelve tunable parameters have five or six candidates each, so a full
- * sweep is roughly sixty replays. That is why it is a deliberate, on-demand
- * route with a long timeout and not something a page load can trigger.
+ * COST. This is the most expensive thing in the project by a wide margin: one
+ * full replay of every gameweek per candidate value per parameter. Twelve
+ * tunable parameters with five or six candidates each is roughly sixty
+ * replays, which does not fit in one serverless function. Hence the time
+ * budget and the four-parameter cap — and hence the ROTATING CURSOR in
+ * lib/jobs.ts, so the unattended run covers a different slice each day
+ * instead of measuring the same four parameters forever.
  *
- * Pass `?params=underlyingBlend,shrinkXg` to sweep a subset, which is what
- * the weekly scheduled run does — a couple of parameters at a time, rotating,
- * keeps each run cheap while the whole set still gets covered.
- *
- * Same access shape as /api/backtest: `?cached=1` reads the last report and
- * needs no token; running a fresh sweep does.
+ * `?params=underlyingBlend,shrinkXg` overrides the rotation for a manual run
+ * without disturbing it. `?cached=1` reads the last report and needs no token.
  */
 
 export const dynamic = "force-dynamic";
-// 300 is the ceiling on Vercel's Hobby plan. Setting it higher does not
-// give a longer function — the DEPLOYMENT is rejected outright
-// ("invalid_max_duration"), which is how the v1.30 deploy died. The sweep
-// therefore works to a time budget instead of assuming it has all day.
+// 300 is the ceiling on Vercel's Hobby plan. Setting it higher does not give
+// a longer function — the DEPLOYMENT is rejected outright
+// ("invalid_max_duration"), which is how the v1.30 deploy died.
 export const maxDuration = 300;
 
 /** Leave headroom for fetching histories and serialising the reply. */
 const SWEEP_BUDGET_MS = 210_000;
 
-/** Most parameters one request may sweep. A full twelve-parameter sweep
- * cannot fit in 300 seconds, and pretending otherwise just wastes the run.
- * The weekly scheduled task rotates through them three at a time. */
-const MAX_PARAMS_PER_RUN = 4;
-
-const CACHE_KEY = "calibration:last";
-const HISTORY_KEY = (id: number, upTo: number) => `backtest:hist:${id}:${upTo}`;
-const HISTORY_TTL_SECONDS = 60 * 60 * 24 * 14;
-
-async function mapWithLimit<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>
-): Promise<R[]> {
-  const out = new Array<R>(items.length);
-  let cursor = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      for (;;) {
-        const i = cursor++;
-        if (i >= items.length) return;
-        out[i] = await fn(items[i]);
-      }
-    })
-  );
-  return out;
-}
-
-function chooseSample(elements: FplElement[], size: number): FplElement[] {
-  const perPosition = Math.max(4, Math.floor(size / 8));
-  const chosen = new Map<number, FplElement>();
-  for (const type of [1, 2, 3, 4]) {
-    elements
-      .filter((el) => el.element_type === type)
-      .sort((a, b) => b.total_points - a.total_points)
-      .slice(0, perPosition)
-      .forEach((el) => chosen.set(el.id, el));
-  }
-  for (const el of [...elements].sort((a, b) => b.total_points - a.total_points)) {
-    if (chosen.size >= size) break;
-    chosen.set(el.id, el);
-  }
-  return [...chosen.values()];
-}
-
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
-  const redis = getRedis();
 
   if (params.get("cached") === "1") {
-    const cached = redis ? await redis.get<CalibrationReport>(CACHE_KEY) : null;
+    const redis = getRedis();
+    const cached = redis ? await redis.get<CalibrationReport>(CALIBRATION_CACHE_KEY) : null;
     if (!cached) {
       return NextResponse.json(
         { error: "ainda não há calibração guardada", configured: !!redis },
@@ -99,89 +51,43 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(unauthorizedBody(auth), { status: 401 });
   }
 
-  const startedAt = Date.now();
+  const int = (name: string): number | undefined => {
+    const raw = params.get(name);
+    if (raw === null) return undefined;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? n : undefined;
+  };
+
+  const requested = (params.get("params") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s in PARAM_GRIDS) as TunableParam[];
+
+  const entry = await startJobRun("calibration", "manual");
   try {
-    const [bootstrap, fixtures] = await Promise.all([getBootstrap(), getFixtures()]);
-    const finishedEvents = bootstrap.events
-      .filter((e) => e.finished)
-      .map((e) => e.id)
-      .sort((a, b) => a - b);
-
-    if (finishedEvents.length < 2) {
-      return NextResponse.json(
-        {
-          error: "jornadas terminadas insuficientes para calibrar",
-          finished: finishedEvents.length,
-          note: "A calibração precisa de jornadas passadas para reconstruir. Volta quando houver mais.",
-        },
-        { status: 409 }
-      );
-    }
-
-    const lastFinished = finishedEvents[finishedEvents.length - 1];
-    const fromEvent = Math.max(2, parseInt(params.get("from") ?? "2", 10) || 2);
-    const toEvent = Math.min(
-      lastFinished,
-      parseInt(params.get("to") ?? String(lastFinished), 10) || lastFinished
-    );
-    const sampleSize = Math.min(
-      300,
-      Math.max(40, parseInt(params.get("sample") ?? "150", 10) || 150)
-    );
-
-    const requested = (params.get("params") ?? "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .filter((s) => s in PARAM_GRIDS) as TunableParam[];
-
-    const sample = chooseSample(bootstrap.elements, sampleSize);
-    const histories = await mapWithLimit(sample, 8, async (el) => {
-      const key = HISTORY_KEY(el.id, lastFinished);
-      if (redis) {
-        const hit = await redis.get<ElementHistoryRow[]>(key);
-        if (hit) return [el.id, hit] as const;
-      }
-      try {
-        const summary = await getElementSummary(el.id);
-        const rows = (summary.history ?? []) as ElementHistoryRow[];
-        if (redis) await redis.set(key, rows, { ex: HISTORY_TTL_SECONDS });
-        return [el.id, rows] as const;
-      } catch {
-        return [el.id, [] as ElementHistoryRow[]] as const;
-      }
+    const out = await runCalibrationJob({
+      fromEvent: int("from"),
+      toEvent: int("to"),
+      sampleSize: int("sample"),
+      params: requested.length > 0 ? requested : undefined,
+      deadlineMs: Date.now() + SWEEP_BUDGET_MS,
+      rotate: false,
     });
-
-    const historyByElement = new Map<number, ElementHistoryRow[]>(
-      histories.filter(([, rows]) => rows.length > 0)
-    );
-    if (historyByElement.size === 0) {
-      return NextResponse.json(
-        { error: "não foi possível obter histórico de nenhum jogador" },
-        { status: 502 }
-      );
-    }
-
-    const report = calibrate({
-      bootstrap,
-      fixtures,
-      historyByElement,
-      fromEvent,
-      toEvent,
-      params:
-        requested.length > 0
-          ? requested.slice(0, MAX_PARAMS_PER_RUN)
-          : (Object.keys(PARAM_GRIDS) as TunableParam[]).slice(0, MAX_PARAMS_PER_RUN),
-      deadlineMs: startedAt + SWEEP_BUDGET_MS,
+    await finishJobRun(entry, {
+      ok: out.ok,
+      summary: out.ok ? out.summary : out.error,
+      detail: out.ok ? out.detail : { error: out.error },
     });
-
-    if (redis) await redis.set(CACHE_KEY, report);
-
-    return NextResponse.json({ ...report, playersSampled: historyByElement.size, stored: !!redis });
+    if (!out.ok) {
+      return NextResponse.json({ error: out.error }, { status: out.retryable ? 502 : 409 });
+    }
+    // `run` is nested, not spread: the detail carries a REDUCED
+    // `recommendations` shape for the log, and spreading it would silently
+    // replace the full report's own field with the summary version.
+    return NextResponse.json({ ...out.result, run: out.detail });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "falha a calibrar" },
-      { status: 500 }
-    );
+    const message = err instanceof Error ? err.message : "falha a calibrar";
+    await finishJobRun(entry, { ok: false, summary: message });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

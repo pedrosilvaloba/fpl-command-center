@@ -41,6 +41,8 @@ import { loadSquadState, EMPTY_SQUAD_STATE } from "@/lib/squadstate";
 import { planTransfers } from "@/lib/transferplan";
 import { readCalendar, planChips } from "@/lib/chipplan";
 import ChipPlanPanel from "@/components/ChipPlanPanel";
+import AutomationPanel from "@/components/AutomationPanel";
+import { getJobHealth, mergeResearchHealth } from "@/lib/joblog";
 import { snapshotPredictions, reviewGameweek } from "@/lib/gwreview";
 import { PLAYBOOK, RULES_2026_27 } from "@/lib/strategy";
 import { DEFAULT_TEAM_ID, DEFAULT_LEAGUE_ID } from "@/lib/constants";
@@ -218,6 +220,24 @@ export default async function Home() {
     : null;
   const researchStale =
     storageConfigured && (researchAgeDays === null || researchAgeDays > 9);
+
+  // Health of every unattended job, not just the research one. The backtest
+  // and the calibration sweep now run on Vercel's own scheduler inside this
+  // deployment (see app/api/cron/refresh), and both write to the run log
+  // before they start — so a run killed by the function wall still leaves a
+  // record saying it began and never finished, which is precisely the failure
+  // that went unnoticed for six weeks.
+  const jobHealth = mergeResearchHealth(
+    await getJobHealth(),
+    lastResearchRun
+      ? {
+          at: lastResearchRun.at,
+          acceptedCount: lastResearchRun.acceptedCount,
+          rejectedCount: lastResearchRun.rejectedCount,
+        }
+      : null
+  );
+  const brokenJobs = storageConfigured ? jobHealth.filter((j) => j.stale) : [];
 
   const currentEventForPicks = bootstrap.events.find((e) => e.is_current);
   const picksEvent = currentEventForPicks?.id ?? Math.max(1, fromEvent - 1);
@@ -615,6 +635,11 @@ export default async function Home() {
 
           <ChipPlanPanel advice={chipAdvice} calendar={calendar} event={fromEvent} />
 
+          <AutomationPanel
+            jobs={jobHealth}
+            cronSecretConfigured={(process.env.CRON_SECRET ?? "").trim().length > 0}
+          />
+
           <TransferPlanPanel
             advice={transferAdvice}
             state={squadState}
@@ -664,6 +689,24 @@ export default async function Home() {
                 {activeInsights.length > 0
                   ? `Há ${activeInsights.length} nota${activeInsights.length === 1 ? "" : "s"} ativa${activeInsights.length === 1 ? "" : "s"} a mexer no modelo, mas nenhuma é recente. As tarefas semanais correm à quinta e à sexta — se isto persistir, falharam.`
                   : "Nenhuma nota ativa e nenhuma execução recente. A camada qualitativa do modelo está inerte."}
+              </AlertStrip>
+            )}
+            {/* The computational jobs, separately — the research strip above
+                covers only the layer that needs a human-ish session. These two
+                run inside the deployment on Vercel's own scheduler, so if THEY
+                are stale something is wrong with the app, not with a session
+                elsewhere. */}
+            {brokenJobs.some((j) => j.job !== "research") && (
+              <AlertStrip
+                tone="danger"
+                title={`Tarefa automática parada: ${brokenJobs
+                  .filter((j) => j.job !== "research")
+                  .map((j) => j.label)
+                  .join(", ")}.`}
+              >
+                Estas correm sozinhas todos os dias dentro da aplicação. Se estão
+                paradas, o modelo continua a decidir com a última medição que
+                conseguiu fazer — e essa pode ser antiga.
               </AlertStrip>
             )}
             {!storageConfigured && (
