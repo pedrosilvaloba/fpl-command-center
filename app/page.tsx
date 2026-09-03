@@ -237,7 +237,12 @@ export default async function Home() {
         }
       : null
   );
-  const brokenJobs = storageConfigured ? jobHealth.filter((j) => j.stale) : [];
+  const brokenJobs = storageConfigured ? jobHealth.filter((j) => j.status === "parada") : [];
+  // "Ran cleanly and produced nothing" gets its own alarm. It is the state
+  // that hides: the research pass reported OK with zero notes accepted AND
+  // zero rejected — nothing was ever submitted to be judged — and the card
+  // was green. Not a failure, not health either.
+  const emptyJobs = storageConfigured ? jobHealth.filter((j) => j.status === "vazia") : [];
 
   const currentEventForPicks = bootstrap.events.find((e) => e.is_current);
   const picksEvent = currentEventForPicks?.id ?? Math.max(1, fromEvent - 1);
@@ -707,6 +712,16 @@ export default async function Home() {
                 Estas correm sozinhas todos os dias dentro da aplicação. Se estão
                 paradas, o modelo continua a decidir com a última medição que
                 conseguiu fazer — e essa pode ser antiga.
+              </AlertStrip>
+            )}
+            {emptyJobs.length > 0 && (
+              <AlertStrip
+                tone="warn"
+                title={`Correu sem produzir nada: ${emptyJobs.map((j) => j.label).join(", ")}.`}
+              >
+                Terminou sem erro e não trouxe resultado nenhum. Não é uma avaria,
+                mas também não é trabalho feito — e a diferença entre as duas coisas
+                é exatamente o que estava escondido atrás de um visto verde.
               </AlertStrip>
             )}
             {!storageConfigured && (

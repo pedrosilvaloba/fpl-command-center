@@ -106,6 +106,7 @@ import { fileURLToPath } from "node:url";
 import { isStorageConfigured } from "../lib/kv";
 import { checkApiToken, unauthorizedBody, checkCronAuth } from "../lib/apitoken";
 import { computeJobHealth, mergeResearchHealth, type JobRun } from "../lib/joblog";
+import { planFromRequest } from "../app/api/cron/refresh/route";
 import { paramsFromCursor, allTunableParams, MAX_PARAMS_PER_RUN } from "../lib/jobs";
 import { DEFAULT_MODEL_PARAMS, PARAM_GRIDS } from "../lib/modelparams";
 import { calibrate, MIN_EVENTS, MIN_ROWS } from "../lib/calibration";
@@ -4650,6 +4651,135 @@ function testAKilledRunLeavesEvidence() {
   check("e marca a tarefa como parada", cal.stale === true);
 }
 
+// ---------------------------------------------------------------------
+// v1.37 — o visto verde para uma tarefa que não fez nada.
+//
+// No PRIMEIRO dia em que o painel esteve no ar, a investigação tática
+// apareceu a verde: "OK, há 1h — 0 notas aceites, 0 rejeitadas". Correu,
+// registou-se, e não submeteu absolutamente nada para ser avaliado.
+//
+// Zero aceites COM algumas rejeitadas é uma semana calma. Zero de ambos os
+// lados é uma passagem que não trouxe nada. Contar isso como sucesso é o
+// mesmo defeito de sempre com melhor tipografia.
+// ---------------------------------------------------------------------
+
+function testAnEmptyRunIsNotAGreenRun() {
+  const health = computeJobHealth([
+    run({
+      job: "backtest",
+      startedAt: daysAgo(0),
+      finishedAt: daysAgo(0),
+      ok: true,
+      productive: false,
+      summary: "correu sobre zero linhas",
+    }),
+  ]);
+  const bt = health.find((h) => h.job === "backtest")!;
+  check("uma execução vazia não é 'ok'", bt.status === "vazia", bt.status);
+  check("mas também não é 'parada' — não está avariada", bt.stale === false);
+  check("e não conta como resultado", bt.lastProductive === null);
+
+  // O contraste obrigatório: a mesma execução, mas produtiva, é verde.
+  const productive = computeJobHealth([
+    run({ job: "backtest", startedAt: daysAgo(0), finishedAt: daysAgo(0), ok: true, productive: true }),
+  ]);
+  check(
+    "uma execução com resultado é 'ok'",
+    productive.find((h) => h.job === "backtest")!.status === "ok"
+  );
+}
+
+function testOldEntriesAreNotRetroactivelyDowngraded() {
+  // O campo `productive` é novo. Entradas escritas antes de existir não têm
+  // opinião nenhuma, e inventar-lhes uma seria reportar um facto que ninguém
+  // mediu — precisamente o pecado que este módulo existe para acabar.
+  const legacy: JobRun = {
+    job: "calibration",
+    startedAt: daysAgo(0),
+    finishedAt: daysAgo(0),
+    ok: true,
+    durationMs: 1000,
+    summary: "antes de o campo existir",
+    trigger: "cron",
+  };
+  check(
+    "uma entrada antiga sem o campo continua a contar como resultado",
+    computeJobHealth([legacy]).find((h) => h.job === "calibration")!.status === "ok"
+  );
+}
+
+function testAResearchPassThatSubmittedNothingShowsAsEmpty() {
+  // O caso literal do ecrã: OK, há 1h, 0 aceites, 0 rejeitadas.
+  const empty = mergeResearchHealth(computeJobHealth([]), {
+    at: daysAgo(0),
+    acceptedCount: 0,
+    rejectedCount: 0,
+  });
+  const r = empty.find((h) => h.job === "research")!;
+  check("0 aceites e 0 rejeitadas dá 'vazia', não 'ok'", r.status === "vazia", r.status);
+  check("a explicação diz que não submeteu nada", r.lastSuccess!.summary.includes("não submeteu"));
+
+  // Uma semana genuinamente calma — avaliou coisas e não aceitou nenhuma —
+  // NÃO é vazia. Sem isto, o teste acima castigaria trabalho a sério.
+  const quiet = mergeResearchHealth(computeJobHealth([]), {
+    at: daysAgo(0),
+    acceptedCount: 0,
+    rejectedCount: 3,
+  });
+  check(
+    "0 aceites mas 3 rejeitadas é trabalho feito, e é 'ok'",
+    quiet.find((h) => h.job === "research")!.status === "ok"
+  );
+}
+
+function testEachScheduleRunsItsOwnJob() {
+  // Duas entradas de cron apontam para a mesma rota; a Vercel diz qual
+  // disparou pelo cabeçalho `x-vercel-cron-schedule`. Antes, as duas tarefas
+  // partilhavam uma invocação e a calibração — a coisa mais cara do projeto —
+  // ficava com os segundos que o backtest não gastasse. Ao contrário.
+  const morning = planFromRequest("0 6 * * *", null);
+  check("as 6h correm só o backtest", morning.backtest && !morning.calibration);
+  const later = planFromRequest("0 7 * * *", null);
+  check("as 7h correm só a calibração", !later.backtest && later.calibration);
+
+  // O fallback tem de ser FAZER TUDO, nunca não fazer nada: se a Vercel
+  // deixar de mandar o cabeçalho, ou se alguém editar os horários sem tocar
+  // no código, uma paragem silenciosa era exatamente a avaria que isto veio
+  // resolver.
+  const unknown = planFromRequest("0 3 * * *", null);
+  check("um horário desconhecido corre tudo, não nada", unknown.backtest && unknown.calibration);
+  const manual = planFromRequest(null, null);
+  check("um disparo manual corre tudo", manual.backtest && manual.calibration);
+  check("?only=backtest continua a mandar", planFromRequest("0 7 * * *", "backtest").backtest);
+  check(
+    "?only=calibration continua a mandar",
+    planFromRequest("0 6 * * *", "calibration").calibration
+  );
+}
+
+function testEveryScheduleInTheConfigIsHandled() {
+  // Um horário no vercel.json que o código não reconhece cai no fallback e
+  // corre as duas tarefas — o que arruína a separação que os dois horários
+  // existem para criar. Este teste liga os dois ficheiros.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const config = JSON.parse(
+    fs.readFileSync(path.join(here, "..", "vercel.json"), "utf8")
+  ) as { crons?: { path: string; schedule: string }[] };
+  for (const cron of config.crons ?? []) {
+    const plan = planFromRequest(cron.schedule, null);
+    check(
+      `o horário ${cron.schedule} corre exatamente uma tarefa`,
+      (plan.backtest ? 1 : 0) + (plan.calibration ? 1 : 0) === 1,
+      JSON.stringify(plan)
+    );
+  }
+  // E o conjunto dos horários tem de cobrir as duas tarefas, senão uma delas
+  // nunca correria sozinha.
+  const covered = (config.crons ?? []).map((c) => planFromRequest(c.schedule, null));
+  check("algum horário corre o backtest", covered.some((p) => p.backtest));
+  check("algum horário corre a calibração", covered.some((p) => p.calibration));
+}
+
 function testResearchHistoryCountsEvenThoughItPredatesTheLog() {
   // A investigação tática regista-se por outro caminho (lib/managerinsights),
   // que é anterior a este log. Uma execução bem sucedida ANTES de o log
@@ -4799,6 +4929,11 @@ testHealthMeasuresSuccessNotAttempts();
 testNeverHavingRunIsTheWorstCaseNotAnUnknownOne();
 testAKilledRunLeavesEvidence();
 testResearchHistoryCountsEvenThoughItPredatesTheLog();
+testAnEmptyRunIsNotAGreenRun();
+testOldEntriesAreNotRetroactivelyDowngraded();
+testAResearchPassThatSubmittedNothingShowsAsEmpty();
+testEachScheduleRunsItsOwnJob();
+testEveryScheduleInTheConfigIsHandled();
 testCalibrationRotatesInsteadOfMeasuringTheSameFourForever();
 testCronRefusesWhenNoSecretIsConfigured();
 testTheScheduleIsRealAndPointsAtARealRoute();

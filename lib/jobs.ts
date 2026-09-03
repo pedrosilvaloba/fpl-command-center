@@ -163,7 +163,16 @@ export async function loadHistories(
 }
 
 export type JobOutcome<T> =
-  | { ok: true; result: T; summary: string; detail: Record<string, unknown> }
+  | {
+      ok: true;
+      result: T;
+      summary: string;
+      /** Did the run actually produce something, as opposed to merely
+       * finishing without error? See the `productive` note in lib/joblog.ts:
+       * a job that completes cleanly and does nothing must not show green. */
+      productive: boolean;
+      detail: Record<string, unknown>;
+    }
   | { ok: false; error: string; retryable: boolean };
 
 export interface BacktestJobOptions {
@@ -218,7 +227,13 @@ export async function runBacktestJob(
   return {
     ok: true,
     result,
-    summary: `jornadas ${fromEvent}-${toEvent}, ${result.playersSampled} jogadores · MAE ${m.mae.toFixed(2)} (base ${m.baselineMae.toFixed(2)}) · Spearman ${m.spearman.toFixed(3)}`,
+    // A backtest over zero rows is arithmetic over nothing. It cannot fail,
+    // and it cannot tell you anything either.
+    productive: m.n > 0 && result.playersSampled > 0,
+    summary:
+      m.n > 0 && result.playersSampled > 0
+        ? `jornadas ${fromEvent}-${toEvent}, ${result.playersSampled} jogadores · MAE ${m.mae.toFixed(2)} (base ${m.baselineMae.toFixed(2)}) · Spearman ${m.spearman.toFixed(3)}`
+        : `correu sobre zero linhas (jornadas ${fromEvent}-${toEvent}) — não mediu nada`,
     detail: {
       fromEvent,
       toEvent,
@@ -358,15 +373,24 @@ export async function runCalibrationJob(
     await advanceCalibrationCursor(chosen.length - report.notCovered.length);
   }
 
+  const covered = chosen.filter((p) => !report.notCovered.includes(p));
   return {
     ok: true,
     result: report,
-    summary: report.sufficientEvidence
-      ? `${chosen.join(", ")} · ${report.recommendations.length} ajuste(s) recomendado(s) em ${report.rows} linhas`
-      : `${chosen.join(", ")} · sem evidência suficiente ainda (${report.rows} linhas, ${report.events.length} jornadas)`,
+    // A sweep that covered NO parameter did nothing, whatever the reason —
+    // usually the time budget cutting it off before the first one finished.
+    // "Not enough evidence yet" is different: it swept, it measured, and the
+    // honest answer was "too early to tell". That counts as work done.
+    productive: covered.length > 0 && report.rows > 0,
+    summary:
+      covered.length === 0 || report.rows === 0
+        ? `não chegou a varrer nenhum parâmetro (${report.rows} linhas) — provavelmente ficou sem tempo`
+        : report.sufficientEvidence
+          ? `${covered.join(", ")} · ${report.recommendations.length} ajuste(s) recomendado(s) em ${report.rows} linhas`
+          : `${covered.join(", ")} · sem evidência suficiente ainda (${report.rows} linhas, ${report.events.length} jornadas)`,
     detail: {
       params: chosen,
-      covered: chosen.filter((p) => !report.notCovered.includes(p)),
+      covered,
       notCovered: report.notCovered,
       truncated: report.truncated,
       rows: report.rows,

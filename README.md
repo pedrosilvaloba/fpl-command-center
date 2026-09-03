@@ -90,6 +90,62 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.37 — o visto verde para uma tarefa que não fez nada
+
+### O defeito voltou a aparecer, com melhor tipografia
+
+No **primeiro dia** em que o painel de tarefas esteve no ar, a *Investigação
+tática* apareceu a verde: **"OK, há 1h — 0 notas aceites, 0 rejeitadas"**.
+Tinha corrido. Tinha chegado à aplicação. Tinha-se registado. E não tinha
+submetido absolutamente nada para ser avaliado.
+
+Zero aceites **com** algumas rejeitadas é uma semana calma: avaliou coisas e
+não achou nenhuma boa. Zero de ambos os lados é uma passagem que não trouxe
+nada. Contar isso como sucesso é exatamente o mesmo defeito que este painel
+foi construído para acabar — um número velho a fazer-se passar por atual —
+só que desta vez com um visto verde por cima.
+
+**Passam a existir três estados, não dois:**
+
+- **parada** (vermelho) — não teve sucesso nenhum dentro do prazo esperado.
+- **vazia** (amarelo) — correu, acabou sem erro, e não produziu nada. Não está
+  avariada, mas também não está a servir para nada.
+- **ok** (verde) — correu e trouxe resultado.
+
+O painel passa a mostrar o **último RESULTADO**, não o último sucesso. E o
+campo novo é opcional de propósito: registos escritos antes de ele existir não
+são despromovidos retroativamente, porque inventar-lhes um facto que ninguém
+mediu seria o mesmo pecado ao contrário.
+
+A regra aplica-se às três tarefas: um backtest sobre zero linhas e uma
+calibração que não chegou a varrer parâmetro nenhum são igualmente "vazias".
+
+### Dois horários em vez de um, e a razão não é redundância
+
+A primeira versão corria as duas tarefas dentro da mesma invocação, o que
+queria dizer que a calibração — a computação mais cara do projeto — ficava com
+os segundos que o backtest não tivesse gasto. Está ao contrário: a tarefa
+barata estava a racionar a cara.
+
+A Vercel diz qual dos horários disparou através do cabeçalho
+`x-vercel-cron-schedule`, por isso as duas entradas apontam para a mesma rota e
+dividem o trabalho:
+
+- **06:00 UTC** → só o backtest. É barato, e aquece o histórico de todos os
+  jogadores para a cache.
+- **07:00 UTC** → só a calibração, com uma função inteira só para ela e a cache
+  já cheia da hora anterior.
+
+De caminho, deixam de partilhar o mesmo destino: se a das 6h morrer no limite
+de tempo, a das 7h acontece na mesma. Dois é o limite do plano Hobby, e isto
+usa exatamente o que lá está.
+
+O *fallback*, se a Vercel deixar de mandar o cabeçalho ou se alguém editar os
+horários sem tocar no código, é **fazer tudo** — nunca fazer nada. Uma paragem
+silenciosa era precisamente a avaria que isto veio resolver.
+
+---
+
 ## Novo na v1.36 — as tarefas passam a correr sozinhas, dentro da aplicação
 
 ### O que estava mal
