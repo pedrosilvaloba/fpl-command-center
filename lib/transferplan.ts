@@ -1,6 +1,7 @@
 import solver from "javascript-lp-solver";
 import type { ScoredPlayer } from "./recommend";
 import { pickBestXI, pickCaptain, orderBench } from "./recommend";
+import { WILDCARD_BREAK_PREMIUM, type CalendarContext } from "./chipplan";
 import { strategicValue, strategicValueNext } from "./optimizer";
 import { HIT_COST_POINTS, type SquadState } from "./squadstate";
 
@@ -128,6 +129,29 @@ const NOISE_FLOOR_MAX_POINTS = 3;
  * plan stays visible with its reasoning; it just cannot be the advice.
  */
 const MAX_POINTS_SACRIFICE_PER_MOVE = 2;
+
+/**
+ * INCUMBENCY — a small bonus for players you already own.
+ *
+ * The Wildcard plan is built by solving for the best squad from scratch and
+ * then diffing it against the current one. That means any player whose
+ * replacement is better by a hundredth of a point gets churned, and a
+ * fourteen-transfer rebuild full of near-ties is the result. Reported from
+ * production: a Wildcard that moved Gibbs-White and Horníček, both playing
+ * well, for no visible reason.
+ *
+ * Keeping a player you already own is genuinely worth something the model
+ * cannot otherwise see. You know how he is being used. He carries no
+ * settling-in risk, no price-change risk on the way in, and no chance that
+ * the model's read on the incoming player is simply wrong — model error is
+ * the largest single term in any of these comparisons, and it applies to the
+ * newcomer, not to the man in your squad.
+ *
+ * Half a point over a five-gameweek window is deliberately small: it settles
+ * ties and near-ties toward stability and changes nothing else. A genuine
+ * upgrade still goes through.
+ */
+const INCUMBENCY_BONUS = 0.5;
 
 /** Moves in a plan that give up more real expected points than the cap. */
 export function costlyMoves(plan: TransferPlan): TransferMove[] {
@@ -366,8 +390,12 @@ function solveSquad(opts: SolveOptions): ScoredPlayer[] | null {
     // is a decision about ONE gameweek, so it carries next-gameweek value
     // plus a discounted tail — which is also what puts the -4 hit on a
     // comparable scale. See FUTURE_DISCOUNT above.
-    const { squad: valueSquad, xi: valueXi } = playerValue(p, beta);
     const isOwned = ownedIds.has(p.element.id);
+    const raw = playerValue(p, beta);
+    // See INCUMBENCY_BONUS. Applied to squad membership only: whether a
+    // player STARTS is a pure this-week question with no switching cost.
+    const valueSquad = raw.squad + (isOwned ? INCUMBENCY_BONUS : 0);
+    const valueXi = raw.xi;
 
     variables[squadVar] = {
       score: valueSquad * BENCH_WEIGHT,
@@ -575,6 +603,10 @@ export function planTransfers(
     /** The gameweek being planned for. Used to price the option value of
      * holding a chip — see the wildcard threshold below. */
     currentEvent?: number;
+    /** Season calendar. An international break immediately ahead raises the
+     * bar for a Wildcard: it commits fifteen picks exactly when the
+     * information behind them is about to go stale. See lib/chipplan.ts. */
+    calendar?: CalendarContext;
   } = {}
 ): TransferAdvice {
   const beta = opts.beta ?? 0;
@@ -770,7 +802,28 @@ export function planTransfers(
     // by around gameweek 10. At gameweek 2 it takes roughly 32 points over
     // the window to justify the chip; at gameweek 10 onwards, 12.
     const earlySeasonPremium = Math.max(0, WILDCARD_SETTLED_EVENT - currentEvent) * 2.5;
-    const requiredGain = WILDCARD_MIN_GAIN + earlySeasonPremium;
+
+    // AN INTERNATIONAL BREAK IMMEDIATELY AHEAD.
+    //
+    // Rebuilding a squad the week before a break commits all fifteen picks at
+    // the exact moment the information behind them goes stale: injuries on
+    // national duty, new signings settling over two weeks of training,
+    // managers changing shape. Waiting one gameweek costs almost nothing and
+    // buys a whole break of news.
+    const breakPremium = opts.calendar?.breakImminent ? WILDCARD_BREAK_PREMIUM : 0;
+
+    // CONFIDENCE.
+    //
+    // The "ideal" squad is built from the same blended numbers as everything
+    // else, and early in a season most of that blend is FPL's own flat
+    // estimate. Spending the biggest one-shot chip in the game on a target
+    // the model is 40% confident about is the most expensive way to act on
+    // noise available. The bar scales inversely with confidence.
+    const wcConfidence = Math.min(1, Math.max(0.05, planConfidence(plan)));
+    const confidencePremium = Math.round((1 / wcConfidence - 1) * WILDCARD_MIN_GAIN);
+
+    const requiredGain =
+      WILDCARD_MIN_GAIN + earlySeasonPremium + breakPremium + confidencePremium;
     const advise = wildcardAvailable && distance >= 5 && gain >= requiredGain;
     wildcard = {
       distance,

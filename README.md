@@ -60,6 +60,7 @@ lib/
   managerinsights.ts Ajustes qualitativos/táticos — lista permanente manual + camada dinâmica auto-aplicada (resolução de nomes, validação, expiração, limite)
   teamrating.ts   Rating de equipa dinâmico (Elo + taxa de golos), calibrado com os resultados reais desta época
   accuracy.ts     Compara previsões do modelo com pontos reais, jornada a jornada (opcional, precisa de Redis)
+  chipplan.ts     Chips e calendário — paragens para seleções, e quando jogar Bench Boost, Triple Captain e Free Hit
   momentum.ts     Arrastamento — converte os fluxos de transferências da FPL em posse projetada; mexe no RISCO, nunca nos pontos
   modelparams.ts  As constantes do modelo, num só sítio e injetáveis — sem isto não há calibração possível
   calibration.ts  Varrimento das constantes contra jornadas reais, com validação fora da amostra e travões anti-sobreajuste
@@ -87,6 +88,89 @@ components/
   MyTeamPanel.tsx     A Minha Equipa — liga um Team ID real (client)
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
+
+## Novo na v1.34 — quando
+
+Quatro perguntas de uma vez, e as três primeiras apontavam ao mesmo buraco: o
+modelo não tinha noção nenhuma de **calendário**.
+
+### 1. "Faz sentido gastar o Wildcard já, com paragem para seleções à porta?"
+
+Não, e o modelo não tinha como saber. A FPL não marca as paragens em lado
+nenhum — mas o calendário marca-as sozinho: um intervalo de 12 dias ou mais
+entre dois deadlines é uma paragem. Estava nos dados desde sempre, por ler.
+
+Uma paragem é o momento em que a informação da liga se reinicia: lesões ao
+serviço das seleções, reforços com duas semanas para assentar, treinadores a
+mudar de sistema. Reconstruir um plantel na véspera é comprometer quinze
+escolhas exatamente quando o que se sabe está prestes a ficar velho.
+
+A barra do wildcard passa a subir 10 pontos quando há uma paragem à frente.
+Medido no teste: um ganho de 16.5 pts justifica o chip numa semana normal e
+deixa de justificar com a paragem à porta.
+
+**E uma segunda barra: a confiança.** O plantel "ideal" sai da mesma mistura
+que tudo o resto, e no início da época a maior parte dessa mistura é a
+estimativa plana da FPL. Gastar o maior chip do jogo sobre números em que o
+modelo tem 40% de confiança é a forma mais cara que existe de agir sobre
+ruído. A barra passa a escalar com o inverso da confiança.
+
+### 2. "Porque troca jogadores que estão a render, tipo Gibbs-White?"
+
+Porque o plantel ideal era construído **do zero** e depois comparado com o
+teu. Qualquer empate técnico virava troca.
+
+Medido: com o mercado melhor por **0.02 pontos por jornada**, o solver
+reconstruía os **15 jogadores** para ganhar 1.1 pts em cinco jornadas. É
+literalmente a tua queixa, reproduzida em laboratório.
+
+Manter um jogador que já tens vale algo que o modelo não via de outra forma:
+sabes como está a ser usado, não há risco de adaptação, não há risco de preço
+à entrada, e — o maior de todos — não há a hipótese de a leitura do modelo
+sobre o jogador que entra estar simplesmente errada. O erro do modelo é o
+maior termo destas comparações, e aplica-se ao que chega, não ao que já lá
+está.
+
+Meio ponto em cinco jornadas de **viés de incumbência**. Desempata a favor da
+estabilidade e não faz mais nada: uma melhoria a sério continua a passar.
+
+### 3. "O modelo pensa no Bench Boost?"
+
+Não pensava. Bench Boost, Triple Captain e Free Hit existiam como prosa em
+`lib/strategy.ts` e como contadores no cabeçalho. **Nada calculava uma
+opinião.** A resposta honesta à pergunta era "não sei".
+
+`lib/chipplan.ts` passa a avaliar os três, sobre um princípio que os separa
+das transferências: uma transferência é uma decisão repetida, um chip é uma
+**opção de um só uso**. Jogá-lo esta semana não basta ser bom — tem de ser
+melhor do que a melhor semana em que o jogarias. Quase todos os erros de
+chips na FPL são o mesmo erro: um chip gasto numa semana em que valia
+alguma coisa, abdicando de uma em que valia muito mais.
+
+Por isso cada chip é avaliado duas vezes: quanto vale **agora** e quanto vale
+**depois**. E "ainda não, e é isto que estou à espera" é uma resposta a
+sério.
+
+- **Bench Boost** vale exatamente o que o teu banco marca. Numa jornada dupla
+  vale tipicamente ~22 pts. Com o teu banco atual a valer bem menos, guarda-se.
+- **Triple Captain** vale mais uma cópia do capitão. Guarda-se para um premium
+  com jornada dupla.
+- **Free Hit** vale o que resgata: entra quando tens quatro ou mais titulares
+  sem jogo.
+
+Há um detalhe que valia a pena não errar: como as duplas só entram no
+calendário poucas semanas antes, no início da época `findScheduleAnomalies`
+não devolve nenhuma — e tratar "nenhuma dupla marcada" como "não vêm duplas"
+mandaria queimar todos os chips em setembro. O planeador usa um valor a
+priori para a dupla que ainda não está marcada, e decai-o à medida que o
+calendário se torna conhecido.
+
+### Os testes
+
+Vinte e três verificações novas. Cada travão validado ao contrário — e dois
+dos testes tiveram de ser **reescritos** porque a primeira versão passava com
+e sem a correção. A calibração dos cenários (encontrar o ganho que cai entre
+as duas barras) foi feita a medir o solver, não a adivinhar.
 
 ## Novo na v1.33 — o modelo queria vender os melhores jogadores da equipa
 

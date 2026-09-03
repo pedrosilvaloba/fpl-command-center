@@ -39,6 +39,8 @@ import {
 } from "@/lib/strategylearning";
 import { loadSquadState, EMPTY_SQUAD_STATE } from "@/lib/squadstate";
 import { planTransfers } from "@/lib/transferplan";
+import { readCalendar, planChips } from "@/lib/chipplan";
+import ChipPlanPanel from "@/components/ChipPlanPanel";
 import { snapshotPredictions, reviewGameweek } from "@/lib/gwreview";
 import { PLAYBOOK, RULES_2026_27 } from "@/lib/strategy";
 import { DEFAULT_TEAM_ID, DEFAULT_LEAGUE_ID } from "@/lib/constants";
@@ -378,12 +380,16 @@ export default async function Home() {
   const { risers, fallers } = buildPriceWatch(bootstrap, 8);
   const newsWatch = buildNewsWatch(bootstrap, 15);
 
+  // ---- season calendar: international breaks, doubles, blanks ----------
+  const calendar = readCalendar(bootstrap.events, bootstrap.teams, fixtures, fromEvent);
+
   // ---- what to actually do before the deadline -------------------------
   const transferAdvice = planTransfers(scored, squadState, {
     beta: posture.beta,
     currentEvent: fromEvent,
     likelyRisers: risers.map((r) => r.element.id),
     likelyFallers: fallers.map((r) => r.element.id),
+    calendar,
   });
 
   // ---- how the last/current gameweek actually went ---------------------
@@ -477,6 +483,19 @@ export default async function Home() {
 
   const isPreseason = scored[0]?.isPreseason ?? true;
   const bench = orderBench(squad.filter((p) => !starters.includes(p)));
+
+  // ---- chips: Bench Boost, Triple Captain, Free Hit ---------------------
+  // Uses the RECOMMENDED squad when there is one — a Bench Boost is worth
+  // what the bench you will actually field scores, not what today's bench
+  // would have scored before the transfer.
+  const chipAdvice = planChips({
+    currentEvent: fromEvent,
+    chips: squadState.chips,
+    xi: transferAdvice.recommended?.xi ?? starters,
+    bench: transferAdvice.recommended?.bench ?? bench,
+    captain: transferAdvice.recommended?.captain ?? captain,
+    calendar,
+  });
   const xiExpected = starters.reduce((s, p) => s + p.expectedPointsNext, 0);
 
   return (
@@ -585,6 +604,8 @@ export default async function Home() {
               )}
             </div>
           </div>
+
+          <ChipPlanPanel advice={chipAdvice} calendar={calendar} event={fromEvent} />
 
           <TransferPlanPanel
             advice={transferAdvice}

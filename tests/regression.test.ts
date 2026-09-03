@@ -49,6 +49,7 @@ import {
   MIN_STRATEGIC_RETENTION,
 } from "../lib/optimizer";
 import { computeMomentum, momentumReason } from "../lib/momentum";
+import { readCalendar, planChips } from "../lib/chipplan";
 import {
   simulateLeague,
   applyLearningTilt,
@@ -71,6 +72,7 @@ import {
   deriveBudget,
   summariseChips,
   type SquadState,
+  type ChipStatus,
 } from "../lib/squadstate";
 import { planTransfers, noiseFloor, costlyMoves } from "../lib/transferplan";
 import { computeSquadRisk, computeTeamExposures } from "../lib/correlation";
@@ -114,6 +116,7 @@ import {
   makeElement,
   makeFixture,
   makeTeam,
+  makeEvent,
 } from "./fixtures";
 
 // ---------------------------------------------------------------------
@@ -3983,6 +3986,269 @@ function testPlanNeverThrowsAwayRealPoints() {
   }
 }
 
+// ---------------------------------------------------------------------
+// v1.34 — quando. O modelo não tinha noção nenhuma de calendário.
+//
+// Três perguntas de uma vez: faz sentido gastar o Wildcard mesmo antes de
+// uma paragem para seleções? porque é que ele troca jogadores que estão a
+// render? e o modelo pensa sequer no Bench Boost?
+//
+// A resposta honesta à terceira era: não pensava. Bench Boost, Triple
+// Captain e Free Hit existiam como texto e como contadores no cabeçalho.
+// Nada calculava uma opinião.
+// ---------------------------------------------------------------------
+
+function mkEvents(deadlines: [number, string][]) {
+  return deadlines.map(([id, d]) => makeEvent(id, { deadline_time: d }));
+}
+
+function testCalendarFindsInternationalBreaks() {
+  // Jornadas semanais, com um intervalo de duas semanas depois da 3 — que é
+  // exatamente a forma de uma paragem para seleções no calendário da FPL.
+  const events = mkEvents([
+    [1, "2026-08-14T17:30:00Z"],
+    [2, "2026-08-21T17:30:00Z"],
+    [3, "2026-08-28T17:30:00Z"],
+    [4, "2026-09-12T10:00:00Z"],
+    [5, "2026-09-19T17:30:00Z"],
+  ]);
+  const cal = readCalendar(events, [makeTeam(1), makeTeam(2)], [], 3);
+  check(
+    "a paragem é detetada pelo intervalo entre deadlines, sem dados novos",
+    cal.breakAfterEvents.includes(3),
+    cal.breakAfterEvents.join(",")
+  );
+  check(
+    "e as semanas normais não são confundidas com paragens",
+    !cal.breakAfterEvents.includes(1) && !cal.breakAfterEvents.includes(4)
+  );
+  check(
+    "estando na jornada 3, a paragem está mesmo à frente",
+    cal.breakImminent === true
+  );
+  check(
+    "estando na jornada 5, já não está",
+    readCalendar(events, [makeTeam(1)], [], 5).breakImminent === false
+  );
+  check(
+    "sem datas válidas, não se inventam paragens",
+    readCalendar(mkEvents([[1, "lixo"], [2, "também lixo"]]), [makeTeam(1)], [], 1)
+      .breakAfterEvents.length === 0
+  );
+}
+
+function mkChips(over: Record<string, number> = {}) {
+  return ["wildcard", "bboost", "3xc", "freehit"].map((name) => ({
+    name,
+    label: name,
+    remaining: over[name] ?? 1,
+    usedAtEvents: [] as number[],
+  })) as ChipStatus[];
+}
+
+function testChipPlannerProtectsTheOption() {
+  const weakBench = [1.5, 1.2, 1.0, 0.8].map((ep, i) =>
+    mkSim(700 + i, { epNext: ep, teamId: i + 1 })
+  );
+  const strongBench = [9, 8.5, 8, 7.5].map((ep, i) =>
+    mkSim(710 + i, { epNext: ep, teamId: i + 1 })
+  );
+  const xi = Array.from({ length: 11 }, (_, i) =>
+    mkSim(720 + i, { epNext: 5, teamId: (i % 20) + 1 })
+  );
+  const captain = mkSim(799, { epNext: 8 });
+  const calendar = readCalendar(
+    mkEvents([[3, "2026-08-28T17:30:00Z"], [4, "2026-09-04T17:30:00Z"]]),
+    [makeTeam(1)],
+    [],
+    3
+  );
+
+  const weak = planChips({
+    currentEvent: 3, chips: mkChips(), xi, bench: weakBench, captain, calendar,
+  });
+  const bb = weak.find((c) => c.chip === "bboost")!;
+  check(
+    "com um banco fraco, o Bench Boost é para guardar",
+    bb.verdict === "esperar",
+    `${bb.verdict} (agora ${bb.valueNow})`
+  );
+  check(
+    "e a razão diz o que está à espera, não só que espere",
+    bb.reason.includes("dupla") && bb.reason.includes("troca"),
+    bb.reason.slice(0, 90)
+  );
+  check(
+    "o valor de agora é literalmente o que o banco marca",
+    Math.abs(bb.valueNow - 4.5) < 0.05,
+    `${bb.valueNow}`
+  );
+
+  const strong = planChips({
+    currentEvent: 3, chips: mkChips(), xi, bench: strongBench, captain, calendar,
+  });
+  const bb2 = strong.find((c) => c.chip === "bboost")!;
+  check(
+    "com um banco de 33 pontos, aí sim vale a pena jogá-lo",
+    bb2.verdict === "jogar",
+    `${bb2.verdict} (agora ${bb2.valueNow})`
+  );
+
+  // Triple Captain: um capitão normal não chega.
+  const tc = weak.find((c) => c.chip === "3xc")!;
+  check("um capitão de 8 pts não justifica o Triple Captain", tc.verdict === "esperar");
+  const bigCap = planChips({
+    currentEvent: 3, chips: mkChips(), xi, bench: weakBench,
+    captain: mkSim(798, { epNext: 20 }), calendar,
+  }).find((c) => c.chip === "3xc")!;
+  check("um capitão de 20 pts esperados já justifica", bigCap.verdict === "jogar");
+
+  // Free Hit: existe para salvar uma jornada em branco.
+  const fh = weak.find((c) => c.chip === "freehit")!;
+  check("com o onze completo, o Free Hit não resgata nada", fh.verdict === "esperar");
+  const blankXi = [
+    ...xi.slice(0, 6),
+    ...Array.from({ length: 5 }, (_, i) => mkSim(760 + i, { epNext: 0, teamId: i + 1 })),
+  ];
+  const fh2 = planChips({
+    currentEvent: 3, chips: mkChips(), xi: blankXi, bench: weakBench, captain, calendar,
+  }).find((c) => c.chip === "freehit")!;
+  check(
+    "com 5 jogadores sem jogo, o Free Hit é para jogar",
+    fh2.verdict === "jogar",
+    fh2.verdict
+  );
+
+  // Chips já gastos não são recomendados.
+  const spent = planChips({
+    currentEvent: 3, chips: mkChips({ bboost: 0 }), xi, bench: strongBench, captain, calendar,
+  }).find((c) => c.chip === "bboost")!;
+  check("um chip já usado nunca é recomendado", spent.verdict === "indisponível");
+}
+
+function testWildcardWaitsForTheInternationalBreak() {
+  // Um plantel longe do ideal, calibrado para o ganho cair ENTRE as duas
+  // barras: sem paragem o wildcard é aconselhado, com paragem já não.
+  // Sem essa calibração o teste era vazio — passava com e sem a correção.
+  const owned: ScoredPlayer[] = [];
+  const shape: [number, number][] = [[1, 2], [2, 5], [3, 5], [4, 3]];
+  let id = 1;
+  let club = 0;
+  for (const [type, count] of shape) {
+    for (let i = 0; i < count; i++) {
+      owned.push(mkSim(id++, { teamId: (club++ % 20) + 1, type, epNext: 3, price: 6 }));
+    }
+  }
+  const market: ScoredPlayer[] = [];
+  for (const [type] of shape) {
+    for (let i = 0; i < 8; i++) {
+      market.push(mkSim(id++, { teamId: (club++ % 20) + 1, type, epNext: 3.3, price: 6 }));
+    }
+  }
+  const scored = [...owned, ...market];
+  const state = mkState(owned, 1);
+
+  const noBreak = {
+    breakAfterEvents: [] as number[],
+    breakImminent: false,
+    knownDoubleEvents: [] as number[],
+    knownBlankEvents: [] as number[],
+  };
+  const withBreak = { ...noBreak, breakAfterEvents: [12], breakImminent: true };
+
+  const a = planTransfers(scored, state, { currentEvent: 12, calendar: noBreak });
+  const b = planTransfers(scored, state, { currentEvent: 12, calendar: withBreak });
+
+  check("o sinal de wildcard é calculado nos dois casos", !!a.wildcard && !!b.wildcard);
+  check(
+    "sem paragem à frente, este ganho justifica o wildcard",
+    a.wildcard?.advise === true,
+    `ganho ${a.wildcard?.gain}`
+  );
+  check(
+    "com uma paragem à frente, o MESMO ganho já não justifica",
+    b.wildcard?.advise === false,
+    `ganho ${b.wildcard?.gain}`
+  );
+  check(
+    "e o ganho medido é idêntico — só o critério mudou",
+    !!a.wildcard && !!b.wildcard && a.wildcard.gain === b.wildcard.gain,
+    `${a.wildcard?.gain} vs ${b.wildcard?.gain}`
+  );
+
+  // O MESMO ganho, mas com o modelo pouco confiante nos números que o
+  // produziram. Gastar o maior chip do jogo sobre uma estimativa de 40% de
+  // confiança é a forma mais cara que existe de agir sobre ruído.
+  const unsure = scored.map((p) => ({ ...p, modelTrust: 0.4 }));
+  const unsureOwned = owned.map((p) => ({ ...p, modelTrust: 0.4 }));
+  const c = planTransfers(unsure, mkState(unsureOwned, 1), {
+    currentEvent: 12,
+    calendar: noBreak,
+  });
+  check(
+    "com o modelo pouco confiante, o mesmo ganho não justifica o wildcard",
+    c.wildcard?.advise === false,
+    `ganho ${c.wildcard?.gain}, confiança baixa`
+  );
+  check(
+    "e o ganho continua a ser o mesmo — mudou a barra, não a medição",
+    Math.abs((c.wildcard?.gain ?? 0) - (a.wildcard?.gain ?? 0)) < 1e-9,
+    `${c.wildcard?.gain} vs ${a.wildcard?.gain}`
+  );
+}
+
+function testIncumbencyKeepsPlayersWhoAreDoingFine() {
+  // O caso reportado: o wildcard trocava jogadores que estavam a render, sem
+  // motivo visível. A causa é o plantel ideal ser construído do zero e
+  // depois comparado com o atual — qualquer empate técnico vira troca.
+  //
+  // Aqui o mercado é melhor por 0.02 pts por jornada. Medido: SEM viés de
+  // incumbência o solver reconstrói os 15 jogadores para ganhar 1.1 pts em
+  // cinco jornadas. Com o viés, não mexe em nenhum.
+  const owned: ScoredPlayer[] = [];
+  const shape: [number, number][] = [[1, 2], [2, 5], [3, 5], [4, 3]];
+  let id = 1;
+  let club = 0;
+  for (const [type, count] of shape) {
+    for (let i = 0; i < count; i++) {
+      owned.push(mkSim(id++, { teamId: (club++ % 20) + 1, type, epNext: 3, price: 6 }));
+    }
+  }
+  const market: ScoredPlayer[] = [];
+  for (const [type] of shape) {
+    for (let i = 0; i < 8; i++) {
+      market.push(mkSim(id++, { teamId: (club++ % 20) + 1, type, epNext: 3.02, price: 6 }));
+    }
+  }
+  const advice = planTransfers([...owned, ...market], mkState(owned, 2), {
+    currentEvent: 15,
+  });
+  check(
+    "uma melhoria de 0.02 pts por jornada NÃO desencadeia uma reconstrução",
+    (advice.wildcard?.distance ?? 0) === 0,
+    `distância ao ideal: ${advice.wildcard?.distance}`
+  );
+  check(
+    "e o plano recomendado não troca ninguém por essa migalha",
+    (advice.recommended?.moves.length ?? 0) === 0,
+    advice.recommended?.moves
+      .map((m) => `${m.out.element.web_name}→${m.in.element.web_name}`)
+      .join("; ") ?? "sem trocas"
+  );
+
+  // E uma melhoria a sério continua a passar — o viés desempata, não bloqueia.
+  const realUpgrades = market.map((p) => ({ ...p, expectedPoints: 25, expectedPointsNext: 5 }));
+  const better = planTransfers([...owned, ...realUpgrades], mkState(owned, 2), {
+    currentEvent: 15,
+  });
+  check(
+    "uma melhoria real de 2 pts por jornada continua a ser feita",
+    (better.recommended?.moves.length ?? 0) > 0,
+    `${better.recommended?.moves.length ?? 0} trocas`
+  );
+}
+
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testFreeTransferReconstruction();
 testSellingPriceEstimation();
@@ -4067,6 +4333,11 @@ testFormIsDeliberatelyNotAPointsMultiplier();
 testSquadEdgeDecaysInsteadOfCompoundingForever();
 testPostureCannotOverruleThePointsModel();
 testPlanNeverThrowsAwayRealPoints();
+
+testCalendarFindsInternationalBreaks();
+testChipPlannerProtectsTheOption();
+testWildcardWaitsForTheInternationalBreak();
+testIncumbencyKeepsPlayersWhoAreDoingFine();
 
 report("regressão");
 const { passed, failed } = counts();
