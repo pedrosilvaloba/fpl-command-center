@@ -98,10 +98,28 @@ const STACK_PENALTY_POINTS = 1.5; // charged per starter beyond that
  * (-0.6 to +0.9 after clamping), so no player is ever assigned a negative
  * value and pushed out of contention by arithmetic rather than by merit.
  */
+/**
+ * Ownership as the risk posture should read it: where it is HEADING, not
+ * where it is.
+ *
+ * The posture exists to price "how much does owning this player make me look
+ * like everyone else". That question is about the deadline, not about
+ * Tuesday. A player at 8% who is being bought by hundreds of thousands of
+ * managers this week will be near-template by kickoff, and scoring him as an
+ * 8% differential is precisely how a model talks you onto the wrong side of
+ * a bandwagon. Falls back to today's ownership when no trend is available.
+ */
+export function effectiveOwnershipShare(p: ScoredPlayer): number {
+  const pct =
+    typeof p.projectedOwnershipPct === "number"
+      ? p.projectedOwnershipPct
+      : p.ownershipPct;
+  return Math.min(1, Math.max(0, pct / 100));
+}
+
 export function strategicValue(p: ScoredPlayer, beta: number): number {
   if (!beta || !Number.isFinite(beta)) return p.expectedPoints;
-  const ownershipShare = Math.min(1, Math.max(0, p.ownershipPct / 100));
-  return p.expectedPoints * (1 - beta * ownershipShare);
+  return p.expectedPoints * (1 - beta * effectiveOwnershipShare(p));
 }
 
 /** The same posture applied to NEXT-GAMEWEEK points, for decisions that are
@@ -109,8 +127,7 @@ export function strategicValue(p: ScoredPlayer, beta: number): number {
  * captaincy, and pricing a -4 hit. */
 export function strategicValueNext(p: ScoredPlayer, beta: number): number {
   if (!beta || !Number.isFinite(beta)) return p.expectedPointsNext;
-  const ownershipShare = Math.min(1, Math.max(0, p.ownershipPct / 100));
-  return p.expectedPointsNext * (1 - beta * ownershipShare);
+  return p.expectedPointsNext * (1 - beta * effectiveOwnershipShare(p));
 }
 
 export interface OptimalSquadResult {

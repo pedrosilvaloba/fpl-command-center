@@ -1,4 +1,5 @@
 import type { ScoredPlayer } from "./recommend";
+import { effectiveOwnershipShare } from "./optimizer";
 
 /**
  * Rank-relative value — the metric that actually decides mini-leagues.
@@ -66,7 +67,8 @@ export interface RankValued {
 }
 
 export function computeRankValue(player: ScoredPlayer): RankValued {
-  const ownershipShare = Math.min(1, Math.max(0, player.ownershipPct / 100));
+  // Projected, not current — see effectiveOwnershipShare in lib/optimizer.ts.
+  const ownershipShare = effectiveOwnershipShare(player);
   const expectedPoints = player.expectedPointsNext;
   return {
     player,
@@ -127,10 +129,10 @@ export function computeSquadRankProfile(
       : 0;
 
   const templatePicks = valued
-    .filter((v) => v.player.ownershipPct >= TEMPLATE_THRESHOLD)
+    .filter((v) => effectiveOwnershipShare(v.player) * 100 >= TEMPLATE_THRESHOLD)
     .sort((a, b) => b.player.ownershipPct - a.player.ownershipPct);
   const differentials = valued
-    .filter((v) => v.player.ownershipPct < DIFFERENTIAL_THRESHOLD)
+    .filter((v) => effectiveOwnershipShare(v.player) * 100 < DIFFERENTIAL_THRESHOLD)
     .sort((a, b) => b.rankValue - a.rankValue);
 
   // Heavily-owned players you do NOT have. Ranked by how much damage they
@@ -138,7 +140,7 @@ export function computeSquadRankProfile(
   const ownedIds = new Set(starters.map((p) => p.element.id));
   const missingTemplate = allPlayers
     .filter(
-      (p) => !ownedIds.has(p.element.id) && p.ownershipPct >= TEMPLATE_THRESHOLD
+      (p) => !ownedIds.has(p.element.id) && effectiveOwnershipShare(p) * 100 >= TEMPLATE_THRESHOLD
     )
     .map(computeRankValue)
     .sort((a, b) => b.templateRisk - a.templateRisk)

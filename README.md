@@ -60,6 +60,7 @@ lib/
   managerinsights.ts Ajustes qualitativos/táticos — lista permanente manual + camada dinâmica auto-aplicada (resolução de nomes, validação, expiração, limite)
   teamrating.ts   Rating de equipa dinâmico (Elo + taxa de golos), calibrado com os resultados reais desta época
   accuracy.ts     Compara previsões do modelo com pontos reais, jornada a jornada (opcional, precisa de Redis)
+  momentum.ts     Arrastamento — converte os fluxos de transferências da FPL em posse projetada; mexe no RISCO, nunca nos pontos
   modelparams.ts  As constantes do modelo, num só sítio e injetáveis — sem isto não há calibração possível
   calibration.ts  Varrimento das constantes contra jornadas reais, com validação fora da amostra e travões anti-sobreajuste
   backtest.ts     Backtesting — reconstrói o estado do mundo em cada deadline passado e volta a correr o modelo real contra o que aconteceu
@@ -86,6 +87,74 @@ components/
   MyTeamPanel.tsx     A Minha Equipa — liga um Team ID real (client)
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
+
+## Novo na v1.32 — o efeito de arrastamento
+
+Pedido: *"a forma dos jogadores. Na fantasy por vezes temos jogadores em
+grande forma que todos começam a ter. Não posso ignorar isso."*
+
+A observação está certa, mas contém duas coisas diferentes, e só uma delas
+pertence ao motor de pontuação. Separá-las é o desenho todo desta versão.
+
+### O que NÃO entrou, e porquê
+
+**A forma como previsão de pontos.** O campo `form` da FPL é a média de
+pontos dos últimos quatro jogos. Pontos são grumosos — um golo são quatro ou
+cinco deles — por isso um defesa que marcou uma vez em quatro jogos mostra
+"forma 4.5" sem que a taxa subjacente dele se tenha mexido. Pontos recentes
+preveem pior do que golos esperados, assistências esperadas e minutos.
+
+E a parte real da forma **já está no modelo**: `computePlayerRates` mistura os
+números por 90 minutos publicados pela FPL com os golos e assistências que o
+jogador realmente fez. Um jogador a produzir genuinamente mais é apanhado
+pelo mecanismo que produziu os golos, não pelo resultado.
+
+Multiplicar os pontos esperados por um fator de forma por cima disso contaria
+a mesma prova duas vezes e traria o ruído junto. Há um **teste que falha** se
+alguém alguma vez o fizer.
+
+### O que entrou, e faltava mesmo
+
+A parte que o modelo ignorava não é sobre pontos — é sobre **ranking**. A FPL
+é um jogo de classificação: um jogador que metade da tua liga tem não é um
+ativo neutro, é uma posição de risco. Se ele explode e tu não o tens, perdes
+terreno numa semana boa.
+
+E toda a camada de risco — a postura de variância, as marcas de diferencial,
+o modelo de valor de ranking — lia `selected_by_percent`, que é a posse de
+**hoje**. A posse é um stock; o arrastamento é um fluxo.
+
+> Um jogador com 8% de posse que está a ser comprado por 400 mil managers
+> esta semana **não é um diferencial de 8%**. É um quase-template de 25% à
+> hora do deadline. Tratá-lo como o primeiro é exatamente como se acaba do
+> lado errado de um arrastamento com um modelo a garantir que se tem um
+> diferencial.
+
+A FPL publica o fluxo: `transfers_in_event` e `transfers_out_event`, contra
+`total_players`. Era uma medição direta do que toda a gente está prestes a
+ter, e não precisava de modelação nenhuma — só de ser lida.
+
+`lib/momentum.ts` converte esse fluxo em pontos percentuais de posse e
+projeta a posse para o deadline. Toda a camada de risco passa a usar a posse
+**projetada** em vez da atual. O churn normal de dez milhões de equipas é
+tratado como ruído, e sem saber quantos managers existem não se inventa
+denominador nenhum.
+
+Cada jogador afetado ganha uma linha que diz o que isso significa para a
+decisão, não só o número: *"posse em alta forte: +20.0 pontos percentuais
+esta jornada (8.0% → ~28.0%) — deixa de ser diferencial: não o ter passa a
+ser um risco de ranking, não uma escolha neutra"*.
+
+### Os testes
+
+Quinze verificações novas, ambas as garantias validadas ao contrário: pôr a
+camada de risco a ler a posse de hoje faz falhar três; pôr a forma a
+multiplicar os pontos faz falhar a que existe para o impedir.
+
+Uma nota de processo: o teste da forma começou por ser **vazio** — os dois
+jogadores saíam a zero pontos, por isso a diferença era zero fizesse o que
+fizesse. Só deu erro depois de lhes dar minutos e números subjacentes reais.
+Um teste que passa por não medir nada é pior do que não existir.
 
 ## Novo na v1.31 — o modelo estava a recomendar trocas dentro do ruído
 

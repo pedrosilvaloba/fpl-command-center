@@ -41,7 +41,13 @@ import {
   type PlayerRates,
   type MinutesModel,
 } from "../lib/expectedpoints";
-import { buildOptimalSquad, strategicValue } from "../lib/optimizer";
+import {
+  buildOptimalSquad,
+  strategicValue,
+  strategicValueNext,
+  effectiveOwnershipShare,
+} from "../lib/optimizer";
+import { computeMomentum, momentumReason } from "../lib/momentum";
 import { simulateLeague, applyLearningTilt, selectRivals, type RivalSquad } from "../lib/rivals";
 import {
   buildLearningState,
@@ -3647,6 +3653,171 @@ function testMarginalTransferIsRefusedEarlyInTheSeason() {
   );
 }
 
+// ---------------------------------------------------------------------
+// v1.32 — o efeito de arrastamento (bandwagon).
+//
+// Pedido: "há jogadores em grande forma que todos começam a ter, não posso
+// ignorar isso." Tem razão, mas por um motivo diferente do que parece.
+//
+// A forma como PREVISÃO de pontos é uma armadilha e continua de fora: a
+// parte real dela já está no modelo, através do xG/xA e dos golos
+// realizados. O que faltava era o ARRASTAMENTO — e esse é sobre ranking,
+// não sobre pontos. Toda a camada de risco lia `selected_by_percent`, que
+// é a posse de HOJE. A posse é um stock; o arrastamento é um fluxo.
+// ---------------------------------------------------------------------
+
+function mkBootstrapWithTransfers(rows: { id: number; own: number; in: number; out: number }[]) {
+  const { bootstrap } = makeBootstrap({ currentEvent: 5, gameweeks: 10 });
+  bootstrap.total_players = 10_000_000;
+  bootstrap.elements = rows.map((r) =>
+    makeElement({
+      id: r.id,
+      selected_by_percent: String(r.own),
+      transfers_in_event: r.in,
+      transfers_out_event: r.out,
+    })
+  );
+  return bootstrap;
+}
+
+function testMomentumReadsTheFlowNotTheStock() {
+  const bootstrap = mkBootstrapWithTransfers([
+    // 8% de posse, mas 2 milhões de managers a comprá-lo: +20 pontos
+    // percentuais. Não é um diferencial, é quase template à hora do deadline.
+    { id: 1, own: 8, in: 2_000_000, out: 0 },
+    // Toda a gente a sair.
+    { id: 2, own: 40, in: 0, out: 1_500_000 },
+    // Ruído normal de dez milhões de equipas.
+    { id: 3, own: 25, in: 12_000, out: 9_000 },
+  ]);
+  const m = computeMomentum(bootstrap);
+
+  const rising = m.get(1)!;
+  check(
+    "um jogador a ser comprado em massa vê a posse projetada subir muito",
+    Math.abs(rising.projectedOwnershipPct - 28) < 0.2,
+    `${rising.projectedOwnershipPct}`
+  );
+  check(
+    "e é classificado como em alta forte",
+    rising.label === "em alta forte",
+    rising.label
+  );
+  check(
+    "a razão diz o que isso significa para a DECISÃO, não só o número",
+    (momentumReason(rising) ?? "").includes("risco de ranking"),
+    momentumReason(rising) ?? ""
+  );
+
+  const falling = m.get(2)!;
+  check(
+    "um jogador em fuga vê a posse projetada descer",
+    falling.projectedOwnershipPct < 26 && falling.label === "em queda forte",
+    `${falling.projectedOwnershipPct} / ${falling.label}`
+  );
+
+  const stable = m.get(3)!;
+  check(
+    "o churn normal não é confundido com movimento",
+    stable.label === "estável" && momentumReason(stable) === null,
+    stable.label
+  );
+
+  // Sem o número de managers, não se inventa denominador.
+  const noManagers = mkBootstrapWithTransfers([{ id: 1, own: 8, in: 2_000_000, out: 0 }]);
+  noManagers.total_players = 0;
+  const degraded = computeMomentum(noManagers).get(1)!;
+  check(
+    "sem saber quantos managers existem, não há tendência inventada",
+    degraded.trendPct === 0 && degraded.projectedOwnershipPct === 8
+  );
+}
+
+function testPostureUsesWhereOwnershipIsHeading() {
+  const base = mkSim(1, { own: 8, epNext: 6 });
+  const rising: ScoredPlayer = { ...base, projectedOwnershipPct: 45, ownershipTrendPct: 37 };
+  const stale: ScoredPlayer = { ...base, projectedOwnershipPct: 8, ownershipTrendPct: 0 };
+
+  const beta = 0.5;
+  check(
+    "com o mesmo 8% de hoje, o que está a ser comprado por todos é penalizado",
+    strategicValue(rising, beta) < strategicValue(stale, beta),
+    `${strategicValue(rising, beta).toFixed(2)} vs ${strategicValue(stale, beta).toFixed(2)}`
+  );
+  check(
+    "e o mesmo vale para a decisão de uma só jornada",
+    strategicValueNext(rising, beta) < strategicValueNext(stale, beta)
+  );
+  check(
+    "sem postura de risco, a posse não mexe em nada",
+    strategicValue(rising, 0) === strategicValue(stale, 0)
+  );
+  check(
+    "um jogador sem dados de tendência cai para a posse atual, sem rebentar",
+    effectiveOwnershipShare(base) === 0.08,
+    `${effectiveOwnershipShare(base)}`
+  );
+  check(
+    "a posse projetada é contida entre 0 e 100",
+    effectiveOwnershipShare({ ...base, projectedOwnershipPct: 250 }) === 1 &&
+      effectiveOwnershipShare({ ...base, projectedOwnershipPct: -50 }) === 0
+  );
+}
+
+function testFormIsDeliberatelyNotAPointsMultiplier() {
+  // A regra que este módulo existe para NÃO quebrar: o arrastamento mexe no
+  // risco, nunca nos pontos esperados. Se algum dia alguém multiplicar os
+  // pontos pela forma, isto falha.
+  const { bootstrap, fixtures } = makeBootstrap({ currentEvent: 5, gameweeks: 10 });
+  bootstrap.total_players = 10_000_000;
+  const hot = bootstrap.elements[0];
+  const cold = bootstrap.elements[1];
+  // Ambos com MESMOS dados subjacentes e minutos reais — senão os dois
+  // saem a zero e o teste não testa nada (foi o que aconteceu à primeira).
+  const common = {
+    element_type: 3,
+    team: 1,
+    minutes: 900,
+    starts: 10,
+    goals_scored: 4,
+    assists: 2,
+    bps: 300,
+    ep_next: "5.0",
+    expected_goals_per_90: "0.40",
+    expected_assists_per_90: "0.20",
+  };
+  bootstrap.elements = bootstrap.elements.map((el) =>
+    el.id === hot.id
+      ? makeElement({ ...el, ...common, form: "9.0", transfers_in_event: 3_000_000, transfers_out_event: 0 })
+      : el.id === cold.id
+        ? makeElement({ ...el, ...common, form: "0.0", transfers_in_event: 0, transfers_out_event: 0 })
+        : el
+  );
+  const scored = buildScoredPlayers(bootstrap, fixtures, 5, 5, null, []);
+  const a = scored.find((p) => p.element.id === hot.id);
+  const b = scored.find((p) => p.element.id === cold.id);
+  check(
+    "os dois jogadores são pontuados com números reais (senão o teste é vazio)",
+    !!a && !!b && a.expectedPointsNext > 1 && b.expectedPointsNext > 1,
+    `${a?.expectedPointsNext} / ${b?.expectedPointsNext}`
+  );
+  check(
+    "forma altíssima e arrastamento máximo NÃO inflacionam os pontos esperados",
+    !!a && !!b && Math.abs(a.expectedPointsNext - b.expectedPointsNext) < 1e-9,
+    `${a?.expectedPointsNext} vs ${b?.expectedPointsNext}`
+  );
+  check(
+    "mas a posse projetada reflete o arrastamento",
+    !!a && (a.projectedOwnershipPct ?? 0) > (a.ownershipPct ?? 0) + 20,
+    `${a?.ownershipPct} → ${a?.projectedOwnershipPct}`
+  );
+  check(
+    "e o jogador vê isso explicado nas razões",
+    !!a && a.reasons.some((r) => r.includes("posse em alta")),
+    a?.reasons.join(" | ").slice(0, 100)
+  );
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testFreeTransferReconstruction();
 testSellingPriceEstimation();
@@ -3723,6 +3894,10 @@ testApiTokenCheck();
 
 testNoiseFloorScalesWithConfidence();
 testMarginalTransferIsRefusedEarlyInTheSeason();
+
+testMomentumReadsTheFlowNotTheStock();
+testPostureUsesWhereOwnershipIsHeading();
+testFormIsDeliberatelyNotAPointsMultiplier();
 
 report("regressão");
 const { passed, failed } = counts();

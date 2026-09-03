@@ -25,6 +25,7 @@ import {
 } from "./managerinsights";
 import type { ManagerInsight } from "./managerinsights";
 import type { ModelParams } from "./modelparams";
+import { computeMomentum, momentumReason } from "./momentum";
 
 export interface ScoredPlayer {
   element: FplElement;
@@ -80,6 +81,16 @@ export interface ScoredPlayer {
    * every consumer treats a missing value as "fully trusted", which is the
    * assumption those callers were already making implicitly. */
   modelTrust?: number;
+  /** Where ownership is HEADING, not where it is. The whole risk layer used
+   * `ownershipPct`, which is a stock; the bandwagon is a flow. See
+   * lib/momentum.ts — a player at 8% being bought by 400k managers is not an
+   * 8% differential, and treating him as one is how you end up on the wrong
+   * side of a bandwagon while the model reassures you. Optional so older
+   * callers and hand-built test objects still compile; every consumer falls
+   * back to `ownershipPct` when it is absent. */
+  projectedOwnershipPct?: number;
+  /** Change in ownership implied by this gameweek's net transfers. */
+  ownershipTrendPct?: number;
   /** Where the window's expected points come from, for transparency. */
   breakdown: ExpectedPointsBreakdown;
   score: number;
@@ -208,6 +219,8 @@ export function buildScoredPlayers(
   modelParams?: Partial<ModelParams>
 ): ScoredPlayer[] {
   const teamById = new Map(bootstrap.teams.map((t) => [t.id, t]));
+  // The bandwagon, read straight from FPL's transfer counts.
+  const momentum = computeMomentum(bootstrap);
   const ticker = buildFixtureTicker(bootstrap.teams, fixtures, fromEvent, fixtureWindow);
   const teamFactors = computeDynamicTeamFactors(bootstrap.teams, fixtures);
   const expectationsByTeam = buildFixtureExpectations(bootstrap.teams, fixtures, oddsMatches, teamFactors);
@@ -427,6 +440,11 @@ export function buildScoredPlayers(
       if (ownershipPct < 10 && priceM >= 6) reasons.push("possível diferencial de qualidade");
     }
     if (formNum >= 5) reasons.push("em grande forma recente");
+    // Momentum is about RANK, not points — see lib/momentum.ts. It never
+    // touches expectedPoints; it changes how the risk posture reads him.
+    const mom = momentum.get(el.id);
+    const momText = mom ? momentumReason(mom) : null;
+    if (momText) reasons.push(momText);
 
     if (isDefensive && cleanSheetProbability >= 0.35) {
       reasons.push(
@@ -564,6 +582,8 @@ export function buildScoredPlayers(
       expectedPoints: Math.round(expectedPoints * 100) / 100,
       expectedPointsNext: Math.round(expectedPointsNext * 100) / 100,
       modelTrust: Math.round(trust * 1000) / 1000,
+      projectedOwnershipPct: momentum.get(el.id)?.projectedOwnershipPct ?? ownershipPct,
+      ownershipTrendPct: momentum.get(el.id)?.trendPct ?? 0,
       pPlay: Math.round(Math.min(1, Math.max(0, mins.pAppear * availability)) * 1000) / 1000,
       breakdown: modelWindowPoints,
       // Alias, so nothing downstream had to change when the score became a
