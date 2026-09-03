@@ -117,9 +117,26 @@ export function effectiveOwnershipShare(p: ScoredPlayer): number {
   return Math.min(1, Math.max(0, pct / 100));
 }
 
+/**
+ * How much of a player's real expected points the risk posture may never
+ * take away, however extreme the league situation.
+ *
+ * The posture exists to break ties toward divergence. It must not be able to
+ * overrule the points model — and it did: at beta 0.90 a 60%-owned player
+ * kept 46% of his value, which is how the app came to recommend selling the
+ * highest-scoring midfielder in the game at a stated loss of 16.9 points.
+ * A floor of 0.8 bounds the distortion structurally, so no future change to
+ * the dial can reproduce that failure.
+ */
+export const MIN_STRATEGIC_RETENTION = 0.8;
+
+function postureMultiplier(p: ScoredPlayer, beta: number): number {
+  return Math.max(MIN_STRATEGIC_RETENTION, 1 - beta * effectiveOwnershipShare(p));
+}
+
 export function strategicValue(p: ScoredPlayer, beta: number): number {
   if (!beta || !Number.isFinite(beta)) return p.expectedPoints;
-  return p.expectedPoints * (1 - beta * effectiveOwnershipShare(p));
+  return p.expectedPoints * postureMultiplier(p, beta);
 }
 
 /** The same posture applied to NEXT-GAMEWEEK points, for decisions that are
@@ -127,7 +144,7 @@ export function strategicValue(p: ScoredPlayer, beta: number): number {
  * captaincy, and pricing a -4 hit. */
 export function strategicValueNext(p: ScoredPlayer, beta: number): number {
   if (!beta || !Number.isFinite(beta)) return p.expectedPointsNext;
-  return p.expectedPointsNext * (1 - beta * effectiveOwnershipShare(p));
+  return p.expectedPointsNext * postureMultiplier(p, beta);
 }
 
 export interface OptimalSquadResult {

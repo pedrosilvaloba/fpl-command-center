@@ -108,6 +108,34 @@ const FUTURE_DISCOUNT = 0.15;
  */
 const NOISE_FLOOR_MAX_POINTS = 3;
 
+/**
+ * The most REAL expected points a single swap may give up, whatever the risk
+ * posture says.
+ *
+ * Reported from production: a recommended plan contained "sai B.Fernandes,
+ * entra Gakpo — -16.9 pts / 5 jorn." and "sai João Pedro, entra Wissa —
+ * -14.6 pts". Those numbers were shown to the manager in real points, and
+ * they were real: the optimizer was maximising posture-discounted points, so
+ * a heavily-owned star could be worth selling on the objective while being
+ * an obvious loss in the currency the panel displayed and the manager cares
+ * about.
+ *
+ * Two different currencies, one recommendation, and the one on screen said
+ * the advice was nonsense. It was.
+ *
+ * The posture may reorder near-equals. It may not licence a swap that throws
+ * away real points, so any plan containing one cannot be recommended. The
+ * plan stays visible with its reasoning; it just cannot be the advice.
+ */
+const MAX_POINTS_SACRIFICE_PER_MOVE = 2;
+
+/** Moves in a plan that give up more real expected points than the cap. */
+export function costlyMoves(plan: TransferPlan): TransferMove[] {
+  return plan.moves.filter(
+    (m) => m.in.expectedPoints - m.out.expectedPoints < -MAX_POINTS_SACRIFICE_PER_MOVE
+  );
+}
+
 /** Confidence of a plan: the mean model-trust of the players it moves, or of
  * the whole XI when it moves nobody. A transfer's confidence is about the
  * two players being swapped, not about the squad at large. */
@@ -781,12 +809,25 @@ export function planTransfers(
   // shown — the reasoning stays visible — but they cannot be the advice.
   const ranked = [...plans].sort((a, b) => b.netValue - a.netValue);
   const clears = (p: TransferPlan) =>
-    p.key === "manter" || p.netValue - hold.netValue >= p.requiredEdge;
+    p.key === "manter" ||
+    (p.netValue - hold.netValue >= p.requiredEdge && costlyMoves(p).length === 0);
   const recommended = ranked.find(clears) ?? hold;
   for (const p of plans) {
     if (p.key === "manter") continue;
     const edge = Math.round((p.netValue - hold.netValue) * 10) / 10;
-    if (!clears(p)) {
+    const costly = costlyMoves(p);
+    if (costly.length > 0) {
+      p.rationale =
+        `${p.rationale} ` +
+        `NÃO recomendado: ${costly.length === 1 ? "esta troca deita fora" : "estas trocas deitam fora"} pontos esperados a sério — ` +
+        costly
+          .map(
+            (m) =>
+              `${m.out.element.web_name} → ${m.in.element.web_name} perde ${(m.out.expectedPoints - m.in.expectedPoints).toFixed(1)} pts em 5 jornadas`
+          )
+          .join("; ") +
+        `. A postura de risco pode desempatar entre jogadores parecidos; não pode justificar perder pontos desta ordem.`;
+    } else if (!clears(p)) {
       p.rationale =
         `${p.rationale} ` +
         `NÃO recomendado: ganha ${edge >= 0 ? "+" : ""}${edge} pts sobre não fazer nada, e nesta altura da época é preciso ganhar pelo menos ${p.requiredEdge.toFixed(1)} para valer a pena. ` +

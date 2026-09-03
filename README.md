@@ -88,6 +88,93 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.33 — o modelo queria vender os melhores jogadores da equipa
+
+Reportado em produção, jornada 3: *"está a sugerir coisas ridículas — mudar o
+Calafiori que tem tido boas prestações, tirar o Bruno Fernandes que foi o
+melhor jogador da última jornada, o Gibbs-White também."*
+
+Era ridículo, e não eram três erros independentes. Era um só, com três
+sintomas.
+
+### A cadeia, do sintoma à causa
+
+O plano recomendado era jogar o Wildcard com 14 transferências, e continha
+estas linhas, mostradas ao utilizador em pontos reais:
+
+```
+sai B.Fernandes  £12.0m  →  entra Gakpo   -16.9 pts / 5 jorn.
+sai João Pedro    £7.7m  →  entra Wissa   -14.6 pts / 5 jorn.
+sai Calafiori     £5.6m  →  entra White    -4.4 pts / 5 jorn.
+```
+
+O modelo estava a deitar fora 16.9 pontos esperados de propósito. Porquê:
+a inclinação de variância estava em **β = 0.90**, que multiplica o valor de
+um jogador com 40% de posse por 0.64 e um com 60% por **0.46**. Depois desse
+corte, os melhores jogadores do jogo ficam, no papel, más escolhas.
+
+E porque estava β no máximo? Porque a simulação dizia:
+
+> **0% de hipóteses** de acabar à frente do líder, com **35 jornadas por
+> jogar** e **45 pontos** de diferença.
+
+São 1.3 pontos por jornada. Chamar impossível a isso é absurdo à face. O
+modelo dizia-o de cara séria por três erros que se compunham.
+
+### Os três erros
+
+**1. Plantéis congelados.** A vantagem por jornada era medida nos dois onzes
+de hoje e multiplicada por 35, como se nenhum dos dois gestores voltasse a
+fazer uma transferência, usar um chip ou reagir a uma lesão até maio. Uma
+vantagem de plantel vale um par de meses, não uma época. Passa a **decair**
+com meia-vida de 6 jornadas: 35 jornadas de vantagem passam a valer cerca
+de 8.
+
+**2. Variância a menos.** A dispersão vinha só do ruído de uma jornada com
+plantéis fixos e jogadores partilhados. Dois gestores reais divergem muito
+mais: transferências diferentes, capitães diferentes, chips em semanas
+diferentes. Isso passa a entrar, e quase duplica a dispersão honesta da
+época.
+
+**3. Nenhuma noção de quando.** Procurar variância é uma jogada de fim de
+época — troca pontos agora por uma hipótese que só conta na meta. Na jornada
+3 não há informação para saber que se está perdido nem urgência para agir.
+A postura passa a ser **atenuada pelo ponto da época**.
+
+Nos números reais desta conta: **0% passa a ~21%, e β cai de 0.90 para
+0.04** — que é o modelo a dizer corretamente "escolhe só os melhores
+jogadores" na jornada 3.
+
+### E três travões, para isto não voltar por outro caminho
+
+Corrigir a causa não chega se a mesma falha puder reentrar por outro lado.
+
+- **Teto da inclinação: 0.35**, era 0.90. Ao máximo, o jogador mais possuído
+  do jogo perde cerca de um quinto do valor — muda casos renhidos e mais
+  nada.
+- **Piso de retenção: 80%.** Nenhum jogador pode perder mais de 20% dos
+  pontos reais por causa da postura, por muito extrema que a situação seja.
+  Isto limita a distorção pela estrutura, não pela calibração.
+- **Nenhuma troca recomendada pode deitar fora mais de 2 pontos reais.** A
+  postura pode desempatar entre jogadores parecidos; não pode justificar um
+  −16.9. Um plano que contenha uma troca dessas continua visível, mas
+  explicado e fora da recomendação.
+
+Havia duas moedas em jogo — pontos reais no ecrã, pontos descontados pela
+postura no otimizador — e a do ecrã dizia que o conselho era disparate. Era.
+
+### Os testes
+
+Quinze verificações novas, cada travão validado ao contrário: repor a
+composição por 35 jornadas falha duas; remover o piso de retenção falha duas
+(um jogador chegava a valer **−200%**); anular o travão de pontos reais falha
+uma.
+
+Nota de método: o travão de pontos reais teve de ser testado **diretamente**.
+Com o teto e o piso já no sítio, o solver deixou de conseguir gerar o cenário
+mau — o que é bom desenho, mas deixaria a terceira camada por testar se ela
+só fosse exercitada de ponta a ponta.
+
 ## Novo na v1.32 — o efeito de arrastamento
 
 Pedido: *"a forma dos jogadores. Na fantasy por vezes temos jogadores em

@@ -46,9 +46,18 @@ import {
   strategicValue,
   strategicValueNext,
   effectiveOwnershipShare,
+  MIN_STRATEGIC_RETENTION,
 } from "../lib/optimizer";
 import { computeMomentum, momentumReason } from "../lib/momentum";
-import { simulateLeague, applyLearningTilt, selectRivals, type RivalSquad } from "../lib/rivals";
+import {
+  simulateLeague,
+  applyLearningTilt,
+  selectRivals,
+  effectiveEdgeGameweeks,
+  MAX_BETA,
+  MIN_BETA,
+  type RivalSquad,
+} from "../lib/rivals";
 import {
   buildLearningState,
   applyCalibration,
@@ -63,7 +72,7 @@ import {
   summariseChips,
   type SquadState,
 } from "../lib/squadstate";
-import { planTransfers, noiseFloor } from "../lib/transferplan";
+import { planTransfers, noiseFloor, costlyMoves } from "../lib/transferplan";
 import { computeSquadRisk, computeTeamExposures } from "../lib/correlation";
 import { computeRankValue, computeSquadRankProfile } from "../lib/rankvalue";
 import {
@@ -3818,6 +3827,162 @@ function testFormIsDeliberatelyNotAPointsMultiplier() {
   );
 }
 
+// ---------------------------------------------------------------------
+// v1.33 — o modelo queria vender os melhores jogadores da equipa.
+//
+// Reportado em produção na jornada 3: vender B.Fernandes (o melhor jogador
+// da jornada anterior) com -16.9 pts declarados, mais Calafiori e
+// Gibbs-White, e jogar o Wildcard com 14 transferências.
+//
+// Tudo saiu de UM número: a simulação dava 0% de hipóteses de acabar à
+// frente do líder, com 35 jornadas por jogar e 45 pontos de diferença.
+// Isso são 1.3 pontos por jornada. Chamar-lhe impossível é absurdo, e o
+// modelo dizia-o de cara séria por três erros que se compunham.
+// ---------------------------------------------------------------------
+
+function testSquadEdgeDecaysInsteadOfCompoundingForever() {
+  check(
+    "uma vantagem de plantel não vale 35 jornadas — vale cerca de 8",
+    effectiveEdgeGameweeks(35) > 6 && effectiveEdgeGameweeks(35) < 10,
+    `${effectiveEdgeGameweeks(35).toFixed(1)}`
+  );
+  check(
+    "a curto prazo a vantagem quase não é descontada",
+    effectiveEdgeGameweeks(3) > 2.3,
+    `${effectiveEdgeGameweeks(3).toFixed(2)}`
+  );
+  check(
+    "e nunca cresce sem limite por muito longa que seja a época",
+    Math.abs(effectiveEdgeGameweeks(200) - effectiveEdgeGameweeks(38)) < 1.5
+  );
+  check("sem jornadas por jogar, não há vantagem projetada", effectiveEdgeGameweeks(0) === 0);
+}
+
+function testPostureCannotOverruleThePointsModel() {
+  check(
+    "a inclinação máxima está travada em 0.35, não em 0.9",
+    MAX_BETA === 0.35 && MIN_BETA === -0.3,
+    `${MAX_BETA} / ${MIN_BETA}`
+  );
+
+  // Um jogador muito possuído não pode perder metade do valor.
+  const star = mkSim(1, { epNext: 8, own: 60 });
+  const heavy: ScoredPlayer = { ...star, projectedOwnershipPct: 60 };
+  const kept = strategicValue(heavy, MAX_BETA) / heavy.expectedPoints;
+  check(
+    "mesmo no máximo, um jogador guarda pelo menos 80% do valor real",
+    kept >= MIN_STRATEGIC_RETENTION - 1e-9,
+    `guarda ${(kept * 100).toFixed(0)}%`
+  );
+  check(
+    "o piso aguenta mesmo que alguém force uma inclinação absurda",
+    strategicValue(heavy, 5) / heavy.expectedPoints >= MIN_STRATEGIC_RETENTION - 1e-9,
+    `${(strategicValue(heavy, 5) / heavy.expectedPoints * 100).toFixed(0)}%`
+  );
+  check(
+    "e continua a desempatar: mais possuído vale menos, só que pouco",
+    strategicValue(heavy, 0.3) <
+      strategicValue({ ...star, projectedOwnershipPct: 5 }, 0.3)
+  );
+}
+
+function testPlanNeverThrowsAwayRealPoints() {
+  // Uma troca claramente má em pontos reais, do género que apareceu no ecrã.
+  const owned: ScoredPlayer[] = [];
+  const shape: [number, number][] = [[1, 2], [2, 5], [3, 5], [4, 3]];
+  let id = 1;
+  let club = 0;
+  for (const [type, count] of shape) {
+    for (let i = 0; i < count; i++) {
+      owned.push(
+        mkSim(id++, { teamId: (club++ % 20) + 1, type, epNext: 4, price: 6, own: 15 })
+      );
+    }
+  }
+  // Uma estrela muito possuída no plantel, e um substituto pior e barato.
+  const starIdx = owned.findIndex((p) => p.element.element_type === 3);
+  const star = mkSim(900, {
+    teamId: 18, type: 3, epNext: 9, price: 6, own: 70,
+  });
+  owned[starIdx] = star;
+  const market: ScoredPlayer[] = [];
+  for (const [type] of shape) {
+    for (let i = 0; i < 6; i++) {
+      market.push(
+        mkSim(id++, { teamId: (club++ % 20) + 1, type, epNext: 3.6, price: 6, own: 8 })
+      );
+    }
+  }
+  const scored = [...owned, ...market].map((p) => ({
+    ...p,
+    projectedOwnershipPct: p.ownershipPct,
+  }));
+
+  // Com a postura no máximo — a situação exata que produziu o disparate.
+  const advice = planTransfers(scored, mkState(owned, 2), {
+    beta: MAX_BETA,
+    currentEvent: 20,
+  });
+  const recommended = advice.recommended;
+  check("o planeador produz uma recomendação", !!recommended);
+  check(
+    "a estrela NÃO é vendida por causa da postura de risco",
+    !recommended ||
+      !recommended.moves.some((m) => m.out.element.id === star.element.id),
+    recommended?.moves.map((m) => `${m.out.element.web_name}→${m.in.element.web_name}`).join("; ") ?? ""
+  );
+  check(
+    "nenhuma troca recomendada perde pontos reais a sério",
+    !recommended || costlyMoves(recommended).length === 0,
+    `${recommended ? costlyMoves(recommended).length : 0} trocas caras`
+  );
+
+  // O travão de pontos reais testado DIRETAMENTE. É a terceira camada de
+  // defesa: com o teto da inclinação e o piso de retenção já no sítio, este
+  // cenário deixou de ser gerável pelo solver — o que é bom desenho, mas
+  // deixaria a função por testar se só a testássemos de ponta a ponta.
+  const good = mkSim(501, { epNext: 9, own: 70 });
+  const worse = mkSim(502, { epNext: 5, own: 5, teamId: 7 });
+  const similar = mkSim(503, { epNext: 8.8, own: 6, teamId: 8 });
+  const fakePlan = {
+    moves: [
+      { out: good, in: worse, gain: 0, cashDeltaM: 0, outSellingPriceM: 6, urgency: null },
+    ],
+  } as unknown as Parameters<typeof costlyMoves>[0];
+  check(
+    "uma troca que perde 20 pts em 5 jornadas é marcada como cara",
+    costlyMoves(fakePlan).length === 1,
+    `${costlyMoves(fakePlan).length}`
+  );
+  const tiePlan = {
+    moves: [
+      { out: good, in: similar, gain: 0, cashDeltaM: 0, outSellingPriceM: 6, urgency: null },
+    ],
+  } as unknown as Parameters<typeof costlyMoves>[0];
+  check(
+    "mas um desempate entre jogadores parecidos NÃO é bloqueado — a postura continua a poder trabalhar",
+    costlyMoves(tiePlan).length === 0
+  );
+  const upgradePlan = {
+    moves: [
+      { out: worse, in: good, gain: 0, cashDeltaM: 0, outSellingPriceM: 6, urgency: null },
+    ],
+  } as unknown as Parameters<typeof costlyMoves>[0];
+  check("uma melhoria nunca é marcada como cara", costlyMoves(upgradePlan).length === 0);
+
+  // E se um plano desses existir, tem de aparecer explicado, não escondido.
+  const bad = advice.plans.find((p) => costlyMoves(p).length > 0);
+  if (bad) {
+    check(
+      "um plano que deita pontos fora explica-o em vez de ser silenciado",
+      bad.rationale.includes("deita fora") || bad.rationale.includes("deitam fora"),
+      bad.rationale.slice(0, 90)
+    );
+  } else {
+    check("nenhum plano gerado deita pontos fora — melhor ainda", true);
+  }
+}
+
 console.log("\nSuite de regressão — FPL Command Center\n");
 testFreeTransferReconstruction();
 testSellingPriceEstimation();
@@ -3898,6 +4063,10 @@ testMarginalTransferIsRefusedEarlyInTheSeason();
 testMomentumReadsTheFlowNotTheStock();
 testPostureUsesWhereOwnershipIsHeading();
 testFormIsDeliberatelyNotAPointsMultiplier();
+
+testSquadEdgeDecaysInsteadOfCompoundingForever();
+testPostureCannotOverruleThePointsModel();
+testPlanNeverThrowsAwayRealPoints();
 
 report("regressão");
 const { passed, failed } = counts();

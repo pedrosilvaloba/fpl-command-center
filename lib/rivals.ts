@@ -83,6 +83,68 @@ const RIVAL_FETCH_CONCURRENCY = 8;
 
 const LAST_EVENT = 38;
 
+/**
+ * SEASON PROJECTION — the three assumptions that made the model give
+ * ridiculous advice, and what replaced them.
+ *
+ * Reported from production in gameweek 3: the app wanted to sell Bruno
+ * Fernandes (the highest-scoring player of the previous gameweek) at a
+ * stated loss of 16.9 expected points, plus Calafiori and Gibbs-White, and
+ * play the Wildcard for fourteen transfers. Traced back, every one of those
+ * came from a single number: the simulation reported a **0% chance** of
+ * finishing ahead of the league leader, with 35 gameweeks still to play and
+ * a 45-point gap. That drove the variance dial to 0.90, which multiplies a
+ * 40%-owned player's value by 0.64 and a 60%-owned player's by 0.46 — so
+ * the best players in the game became, on paper, bad picks.
+ *
+ * A 45-point gap over 35 gameweeks is 1.3 points a week. Calling that
+ * hopeless is absurd on its face, and the model said it with a straight
+ * face because of three compounding mistakes:
+ *
+ * 1. FROZEN SQUADS. The per-gameweek edge was measured from today's two
+ *    elevens and then multiplied by 35, as if neither manager ever made
+ *    another transfer, used a chip, or reacted to an injury. A squad
+ *    advantage is worth a couple of months, not a season: both managers
+ *    re-optimise continuously. It now DECAYS with a half-life of
+ *    `EDGE_HALF_LIFE_GW`, so 35 gameweeks of edge become about eight.
+ *
+ * 2. VARIANCE TOO SMALL. The spread came only from one gameweek's scoring
+ *    noise with squads held fixed and players shared. Two real managers
+ *    diverge far more than that: different transfers, different captains,
+ *    chips fired in different weeks. `MANAGER_DIVERGENCE_SD_PER_GW` adds
+ *    that, which roughly doubles the honest season spread.
+ *
+ * 3. NO SENSE OF WHEN. Chasing variance is a late-season move. In gameweek
+ *    3 there is neither information nor urgency, and divergence costs real
+ *    points now for an option that only pays much later. The posture is now
+ *    ramped by how far the season has actually gone.
+ *
+ * Together, on the real numbers above: 0% becomes ~21%, and the dial falls
+ * from 0.90 to 0.04 — which is the model correctly saying "just pick the
+ * best players" in gameweek 3.
+ */
+const EDGE_HALF_LIFE_GW = 6;
+
+/** Hard bounds on the variance dial. See the note in `buildPosture`. */
+export const MAX_BETA = 0.35;
+export const MIN_BETA = -0.3;
+
+/** Per-gameweek standard deviation of the difference between two managers
+ * that has nothing to do with today's squads — transfers, captaincy, chips.
+ * Roughly the spread of two competent managers' weekly scores once squad
+ * overlap is accounted for. */
+const MANAGER_DIVERGENCE_SD_PER_GW = 10;
+
+/** How much of a squad edge survives, in effective gameweeks, once decay is
+ * applied over `remaining` gameweeks. */
+export function effectiveEdgeGameweeks(remaining: number): number {
+  if (!(remaining > 0)) return 0;
+  const decay = Math.pow(0.5, 1 / EDGE_HALF_LIFE_GW);
+  let total = 0;
+  for (let k = 1; k <= remaining; k++) total += Math.pow(decay, k);
+  return total;
+}
+
 // --------------------------------------------------------------------------
 // Seeded RNG — mulberry32. Deterministic per gameweek by design.
 // --------------------------------------------------------------------------
@@ -462,7 +524,23 @@ function buildPosture(
   // capped harder on the protective side: a template squad you did not
   // choose is a worse failure mode than a differential that misses.
   const raw = (0.5 - p) * 1.8;
-  const beta = Math.round(Math.min(0.9, Math.max(-0.6, raw)) * 100) / 100;
+
+  // THE CAP. It used to be 0.90, which multiplies a 40%-owned player's value
+  // by 0.64 and a 60%-owned player's by 0.46 — enough to make the best
+  // players in the game look like bad picks, and it did exactly that in
+  // production. A variance posture is meant to break ties toward divergence,
+  // not to overrule the points model. At 0.35 the most heavily owned player
+  // in the game loses about a fifth of his value, which changes close calls
+  // and nothing else.
+  const capped = Math.min(MAX_BETA, Math.max(MIN_BETA, raw));
+
+  // THE RAMP. Chasing variance is a late-season move: it trades points now
+  // for a chance that only matters at the finish. In gameweek 3, with 35
+  // gameweeks left, there is neither the information to know you are behind
+  // nor any urgency to act on it.
+  const progress = Math.min(1, Math.max(0, (LAST_EVENT - gameweeksRemaining) / LAST_EVENT));
+  const ramp = Math.min(1, Math.max(0.05, progress * 1.6));
+  const beta = Math.round(capped * ramp * 100) / 100;
 
   let label: PostureLabel;
   let headline: string;
@@ -502,7 +580,7 @@ export function applyLearningTilt(
   reason: string | null
 ): Posture {
   if (!tilt) return posture;
-  const beta = Math.round(Math.min(0.9, Math.max(-0.6, posture.beta + tilt)) * 100) / 100;
+  const beta = Math.round(Math.min(MAX_BETA, Math.max(MIN_BETA, posture.beta + tilt)) * 100) / 100;
   if (beta === posture.beta) return posture;
   return {
     ...posture,
@@ -613,10 +691,14 @@ export function simulateLeague(
     const diffSd = Math.sqrt(diffVar);
 
     const gap = me.totalPoints - s.totalPoints;
-    // Project the season out: the per-gameweek difference compounds, and its
-    // spread grows with the square root of the gameweeks left.
-    const projectedGap = gap + diffMean * gameweeksRemaining;
-    const seasonSd = Math.max(1e-6, diffSd * Math.sqrt(Math.max(1, gameweeksRemaining)));
+    // Project the season out — see the note on SEASON PROJECTION above. The
+    // edge decays because both managers keep re-optimising, and the spread
+    // includes the divergence that has nothing to do with today's squads.
+    const projectedGap = gap + diffMean * effectiveEdgeGameweeks(gameweeksRemaining);
+    const perGwSd = Math.sqrt(
+      diffSd * diffSd + MANAGER_DIVERGENCE_SD_PER_GW * MANAGER_DIVERGENCE_SD_PER_GW
+    );
+    const seasonSd = Math.max(1e-6, perGwSd * Math.sqrt(Math.max(1, gameweeksRemaining)));
     const pAhead = s.entry === me.entry ? 1 : normalCdf(projectedGap / seasonSd);
 
     return {
