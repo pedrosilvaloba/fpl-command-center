@@ -5541,6 +5541,71 @@ function testViceCaptainIsChosenOnMeritNotOnArrayOrder() {
   );
 }
 
+
+// ---------------------------------------------------------------------
+// v1.43 — o jogador que joga e era modelado como não jogando.
+//
+// `expectedMinutes` era `pStart x avgMinutesPerStart`. Para quem começa jogos
+// isso é, algebricamente, `minutos / jogos da equipa`. Mas com ZERO
+// titularidades, `avgMinutesPerStart` é 0 pela guarda contra divisão por
+// zero, e o produto colapsava para zero minutos esperados — para alguém que
+// a FPL diz ter jogado 90 minutos.
+//
+// Atinge suplentes utilizados, jogadores em rotação e sobretudo quem regressa
+// de lesão pelo banco: o modelo dava-lhes zero pontos e mandava vendê-los.
+// ---------------------------------------------------------------------
+
+function testMinutesModelDoesNotZeroOutPlayersWhoActuallyPlay() {
+  const el = (starts: number, minutes: number) => makeElement({ starts, minutes });
+
+  const sub = computeMinutesModel(el(0, 90), 3, false);
+  check(
+    "um jogador com 90 minutos e zero titularidades NÃO tem zero minutos esperados",
+    sub.expectedMinutes > 0,
+    `${sub.expectedMinutes} minutos esperados`
+  );
+  check(
+    "e os minutos esperados são os minutos observados por jogo da equipa",
+    Math.abs(sub.expectedMinutes - 30) < 1e-9,
+    `${sub.expectedMinutes} (esperado 30)`
+  );
+  check(
+    "e passa a ter probabilidade de aparecer maior que zero",
+    sub.pAppear > 0,
+    `pAppear ${sub.pAppear}`
+  );
+
+  // A propriedade que não pode mudar: para quem começa jogos, o número é
+  // exatamente o de antes. As duas fórmulas são algebricamente iguais.
+  for (const [starts, minutes, expected] of [[3, 270, 90], [2, 180, 60], [1, 90, 30]] as [number, number, number][]) {
+    const r = computeMinutesModel(el(starts, minutes), 3, false);
+    check(
+      `titular em ${starts}/3 continua com ${expected} minutos esperados`,
+      Math.abs(r.expectedMinutes - expected) < 1e-9,
+      `${r.expectedMinutes}`
+    );
+  }
+
+  // E quem não joga mesmo continua a zero — a correção não pode inventar
+  // minutos para quem não os tem.
+  const ghost = computeMinutesModel(el(0, 0), 3, false);
+  check(
+    "quem não jogou nada continua com zero minutos esperados",
+    ghost.expectedMinutes === 0 && ghost.pAppear === 0,
+    `${ghost.expectedMinutes} / ${ghost.pAppear}`
+  );
+
+  // Os minutos esperados nunca podem passar de um jogo completo.
+  const impossible = computeMinutesModel(el(3, 400), 3, false);
+  check(
+    "os minutos esperados estão limitados a 90",
+    impossible.expectedMinutes <= 90,
+    `${impossible.expectedMinutes}`
+  );
+}
+
+testMinutesModelDoesNotZeroOutPlayersWhoActuallyPlay();
+
 testViceCaptainIsChosenOnMeritNotOnArrayOrder();
 
 function testPostureCannotStealTheArmband() {

@@ -90,6 +90,59 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.43 — o jogador que joga e era modelado como não jogando
+
+Auditoria ao modelo de minutos, que é a entrada mais importante de todo o
+modelo: quem não joga não pontua, por muito bom que seja.
+
+### O defeito
+
+`expectedMinutes` era `pStart x avgMinutesPerStart`. Para quem começa jogos
+isso é, algebricamente, exatamente `minutos / jogos da equipa`:
+
+```
+(titularidades/jogos) x (minutos/titularidades) = minutos/jogos
+```
+
+Mas quando `titularidades` é **zero**, `avgMinutesPerStart` é 0 por causa da
+guarda contra divisão por zero, e o produto colapsa. Medido:
+
+```
+0 titularidades, 90 minutos jogados em 3 jornadas  →  0 minutos esperados
+```
+
+Zero. Para alguém que a própria FPL diz ter jogado noventa minutos. Os pontos
+esperados dele iam a praticamente nada.
+
+Quem isto atinge não é gente irrelevante: **suplentes utilizados, jogadores em
+rotação e sobretudo quem regressa de lesão pelo banco**. O modelo dava-lhes
+zero e, se estivessem no plantel, mandava vendê-los — mais um caso da queixa
+que deu origem a esta auditoria.
+
+A correção é a forma direta, idêntica para titulares e correta para os outros:
+minutos observados por jogo da equipa. Verificado que 3/3, 2/3 e 1/3 continuam
+a dar exatamente 90, 60 e 30 minutos como antes, e que quem não jogou nada
+continua a zero — a correção não inventa minutos.
+
+`pAppear` (que alimenta a ordem do banco e o seguro do vice) passa a ter um
+limite inferior honesto: quem joga em média M minutos por jogo apareceu em
+pelo menos M/90 dos jogos. É um limite inferior, e está assumido como tal.
+
+### O que fica por fazer, e porque não o fiz agora
+
+`pStart` continua a ser `titularidades / jogos da equipa`, sem encolhimento.
+À jornada 3 só pode dar 0, 0.33, 0.67 ou 1: quem falhou um jogo por uma mazela
+fica carimbado a 0.67 e perde um terço dos minutos esperados a partir de uma
+única observação.
+
+Corrigir isto a sério exige encolher em direção a um *prior* externo — o preço
+é o candidato óbvio, porque a FPL fixa-o antes da época a pensar no papel de
+cada jogador. **Não o fiz porque não o consigo validar sem dados**, e este
+projeto já foi prejudicado várias vezes por afinações plausíveis que ninguém
+mediu. Fica identificado e por medir, em vez de ficar feito e por verificar.
+
+---
+
 ## Novo na v1.42 — arrumar o que estava à frente do que interessa
 
 Auditoria ao layout, a pedido do dono, com a página vista a sério em produção.

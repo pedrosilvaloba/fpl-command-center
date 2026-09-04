@@ -165,9 +165,37 @@ export function computeMinutesModel(
   }
 
   const pPlay60 = pStart * pPlay60GivenStart;
-  // Substitute cameos are deliberately not modelled (see bias note).
-  const pAppear = pStart;
-  const expectedMinutes = pStart * avgMinutesPerStart;
+
+  // ═══ v1.43 — O JOGADOR QUE JOGA E ERA MODELADO COMO NÃO JOGANDO ═══
+  //
+  // `expectedMinutes` era `pStart x avgMinutesPerStart`. Para quem começa
+  // jogos isso é, algebricamente, exatamente `minutos / jogos da equipa`:
+  //
+  //     (titularidades/jogos) x (minutos/titularidades) = minutos/jogos
+  //
+  // Mas quando `titularidades` é ZERO, `avgMinutesPerStart` é 0 por causa da
+  // guarda contra divisão por zero, e o produto colapsa para **zero minutos
+  // esperados** — para um jogador que a própria FPL diz ter jogado 90
+  // minutos. Medido: 0 titularidades, 90 minutos em 3 jornadas → 0 minutos
+  // esperados, logo praticamente 0 pontos esperados.
+  //
+  // Quem isto atinge não é gente irrelevante: suplentes utilizados, jogadores
+  // em rotação, e sobretudo QUEM REGRESSA DE LESÃO pelo banco. O modelo
+  // dava-lhes zero e, se estivessem no teu plantel, mandava vendê-los.
+  //
+  // A correção é a forma direta, que é idêntica para titulares e correta
+  // para os outros: minutos observados por jogo da equipa.
+  const expectedMinutes = Math.min(90, minutes / teamFinishedFixtures);
+
+  // `pAppear` responde a "chega a entrar em campo?" e alimenta a ordem do
+  // banco e o seguro do vice-capitão. Usar só `pStart` dizia que um suplente
+  // habitual nunca aparece.
+  //
+  // Sem dados jogo a jogo não dá para saber a resposta exata, mas dá para
+  // dar um LIMITE INFERIOR honesto: quem joga em média M minutos por jogo
+  // apareceu em pelo menos M/90 dos jogos. Fica o maior dos dois limites, e
+  // fica assumido que é um limite inferior, não uma medição.
+  const pAppear = Math.min(1, Math.max(pStart, expectedMinutes / 90));
 
   return { pStart, avgMinutesPerStart, pPlay60, pAppear, expectedMinutes, reasons };
 }
