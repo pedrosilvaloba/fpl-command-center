@@ -787,6 +787,29 @@ export function pickBestXIChecked(squad: ScoredPlayer[]): {
  * Returns `undefined` for either slot when the XI is too short to fill it,
  * rather than claiming a `ScoredPlayer` that isn't there.
  */
+/**
+ * How much of a player's real expected points the risk posture may never
+ * take away, however extreme the league situation.
+ *
+ * The posture exists to break ties toward divergence. It must not be able to
+ * overrule the points model — and it did: at beta 0.90 a 60%-owned player
+ * kept 46% of his value, which is how the app came to recommend selling the
+ * highest-scoring midfielder in the game at a stated loss of 16.9 points.
+ * A floor of 0.8 bounds the distortion structurally, so no future change to
+ * the dial can reproduce that failure.
+ */
+export const MIN_STRATEGIC_RETENTION = 0.8;
+
+/**
+ * A probabilidade mínima de o capitão NÃO aparecer, por muito garantido que
+ * pareça. Lesões no aquecimento, doenças, castigos tardios e decisões
+ * táticas de última hora não são raras ao ponto de serem zero, e tratá-las
+ * como zero foi o que tornou a escolha do vice arbitrária. Dois por cento é
+ * deliberadamente conservador: chega para o vice ser escolhido por mérito e
+ * é pequeno de mais para mudar quem leva a braçadeira.
+ */
+export const MIN_CAPTAIN_MISS_RISK = 0.02;
+
 export function pickCaptain(
   starters: ScoredPlayer[],
   /**
@@ -820,23 +843,84 @@ export function pickCaptain(
   //
   // Eleven starters give 110 ordered pairs. Evaluating all of them costs
   // nothing and removes the approximation entirely.
+  // ═══ v1.41 — O VICE ESTAVA A SER ESCOLHIDO AO ACASO ═══
+  //
+  // O modelo acima está certo. A sua implementação tinha um buraco que o
+  // anulava no caso NORMAL.
+  //
+  // O termo do vice é `(1 - P(capitão joga)) x EP(vice)`. Quando o capitão é
+  // um titular indiscutível, `pPlay` vale exatamente 1, esse termo vale
+  // exatamente ZERO — e nessa altura TODOS os vices dão o mesmo valor. O
+  // laço ficava com o primeiro que aparecesse na lista.
+  //
+  // Demonstrado: o mesmo onze, com a lista por outra ordem, produzia vices
+  // diferentes. Com o Haaland (9.0) capitão, o vice saía "Fodder-A" (2.0) em
+  // vez do Salah (7.5), só porque vinha antes no array.
+  //
+  // O comentário acima chama a este termo "seguro grátis" e o código estava
+  // a atirá-lo fora. Quando a braçadeira passa mesmo para o vice — uma
+  // jornada em cada vinte, e sempre no pior momento — a diferença entre o
+  // segundo melhor do onze e um jogador de enchimento são vários pontos.
+  //
+  // DUAS CORREÇÕES, E A PRIMEIRA É DE MODELO, NÃO DE PROGRAMAÇÃO:
+  //
+  // 1. `pPlay = 1` é falso. Ninguém é literalmente certo: há lesões no
+  //    aquecimento, doenças, decisões táticas de última hora e castigos
+  //    tardios. Um piso de 2% na probabilidade de falhar é conservador e
+  //    torna o objetivo não-degenerado — o vice passa a ser escolhido por
+  //    mérito em vez de por posição no array.
+  //
+  // 2. Desempate explícito pelo EP do vice. Mesmo que o piso não existisse,
+  //    o resultado deixa de depender da ordem de uma lista, que é uma coisa
+  //    que nunca deve influenciar uma decisão.
+  // ═══ v1.41, SEGUNDO ACHADO — A POSTURA PODIA ROUBAR A BRAÇADEIRA ═══
+  //
+  // O desconto de postura reduz o valor de um jogador muito escolhido, para
+  // favorecer a divergência quando é preciso arriscar. Aqui não tinha teto.
+  //
+  // Medido com a postura no máximo permitido (beta = 0.35):
+  //
+  //     premium  9.0 pts, 70% de posse  →  9.0 x (1 - 0.35x0.70) = 6.79
+  //     diferencial 7.2 pts, 5% de posse →  7.2 x (1 - 0.35x0.05) = 7.07
+  //
+  // A braçadeira ia para o jogador de 7.2. Isso são 1.8 pontos esperados
+  // deitados fora — e a braçadeira DOBRA, por isso é 1.8 pontos reais por
+  // semana, na decisão semanal de maior alavancagem que existe.
+  //
+  // Este projeto já tinha aprendido esta lição noutro sítio: o optimizer
+  // tem `MIN_STRATEGIC_RETENTION = 0.8` precisamente porque a postura
+  // "pode desempatar, não pode anular o modelo de pontos" — foi assim que a
+  // app chegou a mandar vender o melhor médio do jogo com uma perda
+  // declarada de 16.9 pontos. O mesmo teto nunca tinha sido aplicado ao
+  // capitão. É o mesmo defeito, no sítio onde custa mais.
   const captainValue = (p: ScoredPlayer) =>
     beta
       ? p.expectedPointsNext *
-        (1 - beta * Math.min(1, Math.max(0, p.ownershipPct / 100)))
+        Math.max(
+          MIN_STRATEGIC_RETENTION,
+          1 - beta * Math.min(1, Math.max(0, p.ownershipPct / 100))
+        )
       : p.expectedPointsNext;
 
-  let best: { captain: ScoredPlayer; vice: ScoredPlayer; value: number } | null = null;
+  let best:
+    | { captain: ScoredPlayer; vice: ScoredPlayer; value: number; viceEp: number }
+    | null = null;
   for (const c of starters) {
     // `pPlay` may be absent on hand-built objects in older callers; a missing
-    // value is treated as a nailed starter, which is the same assumption the
-    // previous implementation made implicitly.
-    const pPlayC = typeof c.pPlay === "number" ? c.pPlay : 1;
+    // value is treated as a nailed starter.
+    const rawPlay = typeof c.pPlay === "number" ? c.pPlay : 1;
+    const pPlayC = Math.min(1 - MIN_CAPTAIN_MISS_RISK, Math.max(0, rawPlay));
     for (const v of starters) {
       if (v.element.id === c.element.id) continue;
-      // A vice who is himself a doubt is a contingency that may not fire.
-      const value = captainValue(c) + (1 - pPlayC) * v.expectedPointsNext;
-      if (!best || value > best.value) best = { captain: c, vice: v, value };
+      const viceEp = Math.max(0, v.expectedPointsNext);
+      const value = captainValue(c) + (1 - pPlayC) * viceEp;
+      const better =
+        !best ||
+        value > best.value + 1e-9 ||
+        // Empate no par: fica o vice que vale mais. Sem isto, a decisão
+        // depende da ordem do array.
+        (Math.abs(value - best.value) <= 1e-9 && viceEp > best.viceEp);
+      if (better) best = { captain: c, vice: v, value, viceEp };
     }
   }
 

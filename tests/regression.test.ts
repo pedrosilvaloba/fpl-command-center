@@ -119,6 +119,7 @@ import {
   MAX_INFLATED_CHARS,
 } from "../lib/insightsintake";
 import { isValidSubmissionId, MAX_CHUNKS } from "../lib/insightschunks";
+import { MIN_CAPTAIN_MISS_RISK } from "../lib/recommend";
 import { DEFAULT_MODEL_PARAMS, PARAM_GRIDS } from "../lib/modelparams";
 import { calibrate, MIN_EVENTS, MIN_ROWS } from "../lib/calibration";
 import {
@@ -5479,6 +5480,107 @@ function testChunkedSubmissionDoesNothingUntilComplete() {
     `${MAX_CHUNKS}`
   );
 }
+
+
+// ---------------------------------------------------------------------
+// v1.41 — o vice-capitão estava a ser escolhido ao acaso.
+//
+// O valor do par é EP(capitão) + (1 - P(capitão joga)) x EP(vice). Quando o
+// capitão é titular indiscutível, `pPlay` vale 1, esse termo vale ZERO, e
+// todos os vices davam exatamente o mesmo valor — ficava o primeiro do array.
+//
+// Demonstrado: o mesmo onze por outra ordem produzia vices diferentes, e com
+// o melhor marcador como capitão o vice saía um jogador de enchimento.
+// ---------------------------------------------------------------------
+
+function testViceCaptainIsChosenOnMeritNotOnArrayOrder() {
+  const mk = (id: number, ep: number): ScoredPlayer =>
+    mkSim(id, { teamId: 1, type: 3, epNext: ep, price: 8, own: 20 }) as ScoredPlayer;
+  const withPlay = (p: ScoredPlayer, pPlay: number): ScoredPlayer => ({ ...p, pPlay });
+
+  const star = withPlay(mk(1, 9.0), 1);
+  const second = withPlay(mk(4, 7.5), 1);
+  const fodderA = withPlay(mk(2, 2.0), 1);
+  const fodderB = withPlay(mk(3, 2.1), 1);
+
+  const a = pickCaptain([star, fodderA, fodderB, second], 0);
+  const b = pickCaptain([star, second, fodderA, fodderB], 0);
+
+  check(
+    "o capitão é o melhor marcador",
+    a.captain?.element.id === 1 && b.captain?.element.id === 1,
+    `${a.captain?.element.id} / ${b.captain?.element.id}`
+  );
+  check(
+    "o vice é o segundo melhor, e não um jogador de enchimento",
+    a.viceCaptain?.element.id === 4,
+    `vice: ${a.viceCaptain?.element.id} (esperado 4)`
+  );
+  check(
+    "e a escolha do vice NÃO depende da ordem da lista",
+    a.viceCaptain?.element.id === b.viceCaptain?.element.id,
+    `${a.viceCaptain?.element.id} vs ${b.viceCaptain?.element.id}`
+  );
+
+  // O piso de risco tem de ser pequeno o suficiente para nunca mudar quem
+  // leva a braçadeira — só serve para desempatar o vice.
+  check(
+    "o piso de risco é pequeno e não muda o capitão",
+    MIN_CAPTAIN_MISS_RISK > 0 && MIN_CAPTAIN_MISS_RISK <= 0.05,
+    `${MIN_CAPTAIN_MISS_RISK}`
+  );
+
+  // E o comportamento que já existia continua: com um capitão duvidoso, o
+  // seguro do vice conta a sério.
+  const doubtful = withPlay(mk(5, 9.5), 0.5);
+  const pair = pickCaptain([doubtful, second, fodderA], 0);
+  check(
+    "com um capitão duvidoso, o vice continua a ser o melhor disponível",
+    pair.viceCaptain?.element.id === 4,
+    `vice: ${pair.viceCaptain?.element.id}`
+  );
+}
+
+testViceCaptainIsChosenOnMeritNotOnArrayOrder();
+
+function testPostureCannotStealTheArmband() {
+  // A postura de risco pode desempatar; não pode anular o modelo de pontos.
+  // Medido antes da correção, com beta no máximo permitido (0.35):
+  //   premium 9.0 pts a 70% de posse  -> 9.0 x (1 - 0.245) = 6.79
+  //   diferencial 7.2 pts a 5%        -> 7.2 x (1 - 0.018) = 7.07
+  // A braçadeira ia para o de 7.2 — 1.8 pontos esperados deitados fora, e a
+  // braçadeira DOBRA. O optimizer já tinha o teto para isto desde a v1.29; o
+  // capitão nunca o teve.
+  const mk = (id: number, ep: number, own: number): ScoredPlayer =>
+    ({ ...mkSim(id, { teamId: 1, type: 3, epNext: ep, price: 8, own }), pPlay: 1 }) as ScoredPlayer;
+  const premium = mk(1, 9.0, 70);
+  const differential = mk(2, 7.2, 5);
+  const filler = mk(3, 3.0, 10);
+
+  const picked = pickCaptain([premium, differential, filler], 0.35);
+  check(
+    "com a postura no máximo, a braçadeira fica no melhor marcador",
+    picked.captain?.element.id === 1,
+    `capitão: ${picked.captain?.element.id} (1 = premium 9.0)`
+  );
+  check(
+    "o teto da postura é o mesmo em todo o lado",
+    MIN_STRATEGIC_RETENTION === 0.8,
+    `${MIN_STRATEGIC_RETENTION}`
+  );
+
+  // E a postura continua a servir para alguma coisa: entre quase-iguais,
+  // ainda favorece o diferencial.
+  const closeCall = pickCaptain([mk(4, 7.4, 80), mk(5, 7.2, 3), filler], 0.35);
+  check(
+    "entre quase-iguais, a postura ainda favorece o diferencial",
+    closeCall.captain?.element.id === 5,
+    `capitão: ${closeCall.captain?.element.id} (5 = diferencial)`
+  );
+}
+
+testPostureCannotStealTheArmband();
+
 
 testChunkedSubmissionDoesNothingUntilComplete();
 testCompressedSubmissionsFitWhereRawOnesDoNot();

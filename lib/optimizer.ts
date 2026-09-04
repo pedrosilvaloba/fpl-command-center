@@ -1,6 +1,6 @@
 import solver from "javascript-lp-solver";
 import type { ScoredPlayer } from "./recommend";
-import { pickBestXI, buildSuggestedSquad, isValidSquad } from "./recommend";
+import { pickBestXI, buildSuggestedSquad, isValidSquad, MIN_STRATEGIC_RETENTION } from "./recommend";
 
 const NEED: Record<number, number> = { 1: 2, 2: 5, 3: 5, 4: 3 };
 const POS_KEY: Record<number, string> = { 1: "gk", 2: "def", 3: "mid", 4: "fwd" };
@@ -117,18 +117,12 @@ export function effectiveOwnershipShare(p: ScoredPlayer): number {
   return Math.min(1, Math.max(0, pct / 100));
 }
 
-/**
- * How much of a player's real expected points the risk posture may never
- * take away, however extreme the league situation.
- *
- * The posture exists to break ties toward divergence. It must not be able to
- * overrule the points model — and it did: at beta 0.90 a 60%-owned player
- * kept 46% of his value, which is how the app came to recommend selling the
- * highest-scoring midfielder in the game at a stated loss of 16.9 points.
- * A floor of 0.8 bounds the distortion structurally, so no future change to
- * the dial can reproduce that failure.
- */
-export const MIN_STRATEGIC_RETENTION = 0.8;
+// MIN_STRATEGIC_RETENTION vive em lib/recommend.ts — ver a nota lá. Fica
+// aqui re-exportado porque foi aqui que nasceu e é aqui que continua a ser
+// mais usado, mas a definição tem de estar no módulo DE BAIXO: o capitão
+// precisa dela e este ficheiro já importa do recommend, pelo que o contrário
+// criava um ciclo. Um teto que existe em dois sítios acaba com dois valores.
+export { MIN_STRATEGIC_RETENTION } from "./recommend";
 
 function postureMultiplier(p: ScoredPlayer, beta: number): number {
   return Math.max(MIN_STRATEGIC_RETENTION, 1 - beta * effectiveOwnershipShare(p));

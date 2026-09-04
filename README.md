@@ -90,6 +90,83 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.41 — o vice-capitão estava a ser escolhido ao acaso
+
+Auditoria ao modelo de escolha de equipa, a pedido do dono. Primeiro achado, e
+é do tipo que afeta **todas as semanas**, não só quando há transferências.
+
+O valor da braçadeira é um par, não duas escolhas separadas:
+
+```
+EP(capitão) + (1 - P(capitão joga)) x EP(vice)
+```
+
+O modelo estava certo. A implementação tinha um buraco que o anulava no caso
+NORMAL: quando o capitão é titular indiscutível, `pPlay` vale exatamente 1,
+o segundo termo vale exatamente **zero**, e nessa altura todos os vices davam
+o mesmo valor. O laço ficava com o primeiro que aparecesse no array.
+
+Demonstrado com o mesmo onze por duas ordens diferentes:
+
+```
+[Haaland 9.0, Fodder-A 2.0, Fodder-B 2.1, Salah 7.5]  →  vice: Fodder-A
+[Haaland 9.0, Salah 7.5, Fodder-A 2.0, Fodder-B 2.1]  →  vice: Salah
+```
+
+O comentário no código chamava a este termo "seguro grátis" e o código estava
+a atirá-lo fora. Quando a braçadeira passa mesmo para o vice — uma jornada em
+cada vinte, e sempre no pior momento — a diferença entre o segundo melhor do
+onze e um jogador de enchimento são vários pontos.
+
+**Duas correções, e a primeira é de modelo:** `pPlay = 1` é falso — há lesões
+no aquecimento, doenças e decisões táticas de última hora. Um piso de 2% na
+probabilidade de falhar torna o objetivo não-degenerado, e o vice passa a ser
+escolhido por mérito. A segunda é um desempate explícito pelo EP do vice, para
+o resultado nunca depender da ordem de uma lista.
+
+### Segundo achado: a postura de risco podia roubar a braçadeira
+
+Medido com a postura no máximo permitido (beta = 0.35):
+
+```
+premium      9.0 pts, 70% de posse  →  9.0 x (1 - 0.245) = 6.79
+diferencial  7.2 pts,  5% de posse  →  7.2 x (1 - 0.018) = 7.07
+```
+
+A braçadeira ia para o jogador de **7.2**. São 1.8 pontos esperados deitados
+fora — e a braçadeira DOBRA, por isso são 1.8 pontos reais por semana, na
+decisão semanal de maior alavancagem que existe.
+
+Este projeto já tinha aprendido esta lição noutro sítio. O optimizer tem
+`MIN_STRATEGIC_RETENTION = 0.8` desde a v1.29, precisamente porque a postura
+"pode desempatar, não pode anular o modelo de pontos" — foi assim que a app
+chegou a mandar vender o melhor médio do jogo com uma perda declarada de 16.9
+pontos. **O mesmo teto nunca tinha sido aplicado ao capitão.** É o mesmo
+defeito, no sítio onde custa mais.
+
+A constante passou para `lib/recommend.ts` e o optimizer re-exporta-a: um teto
+que vive em dois sítios acaba com dois valores diferentes.
+
+### O que foi verificado e está bem
+
+Para não ficar só o que está mal: o onze inicial está correto (formação mínima
+e depois os melhores, ordenados pela jornada seguinte, que é a pergunta certa
+para uma decisão de uma semana); a disponibilidade publicada pela FPL é
+aplicada a sério, com força total na jornada seguinte e amortecida na janela;
+e o `pPlay` que alimenta a braçadeira e a ordem do banco combina bem a
+probabilidade de ser titular com essa disponibilidade.
+
+### O que fica por auditar
+
+O modelo de minutos usa `titularidades / jogos da equipa` sem qualquer peso
+para o que é recente nem encolhimento para amostras pequenas. À jornada 3 isso
+só pode dar 0, 0.33, 0.67 ou 1 — um jogador que falhou um jogo por uma
+mazela fica carimbado a 0.67 e perde um terço dos pontos esperados. É uma
+fraqueza real, não um defeito, e a correção precisa de dados por jornada que a
+página não tem à mão. Fica identificada, não corrigida.
+
+---
+
 ## Novo na v1.40 — perda e vazio deixam de ter a mesma resposta
 
 ### A avaria que se escondeu duas vezes no mesmo sítio
