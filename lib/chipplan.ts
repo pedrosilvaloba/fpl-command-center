@@ -254,9 +254,47 @@ export function planChips(input: ChipPlanInput): ChipAdvice[] {
   // PISO absoluto: sem ele, quando não há nenhuma branca conhecida o "depois"
   // seria zero e qualquer jogador em falta bastaria para gastar o chip.
   {
-    const playingNow = xi.filter((p) => (p.expectedPointsNext ?? 0) > 0.5).length;
-    const missing = Math.max(0, 11 - playingNow);
-    const valueNow = Math.round(missing * 4 * 10) / 10;
+    const playing = xi.filter((p) => (p.expectedPointsNext ?? 0) > 0.5);
+    const missing = Math.max(0, 11 - playing.length);
+
+    // ═══ v1.48 — A CONTA IGNORAVA AS SUBSTITUIÇÕES AUTOMÁTICAS ═══
+    //
+    // O valor era `ausências x 4`: quatro pontos por cada jogador sem jogo,
+    // como se cada ausência fosse uma perda total. Não é. A FPL substitui
+    // automaticamente por ordem de banco sempre que um titular não joga, e um
+    // banco normal cobre até três das ausências sozinho.
+    //
+    // O que se perde numa ausência COBERTA não é o que o titular valia — é a
+    // DIFERENÇA entre ele e o suplente que entrou no lugar dele. Só a partir
+    // da quarta ausência é que se perde o jogador inteiro.
+    //
+    // A conta antiga sobrestimava sistematicamente o que o chip resgata, e a
+    // v1.44 compensou isso subindo o limiar de 4 para 7 ausências. Compensar
+    // uma fórmula errada com um limiar é aceitável enquanto se sabe que é
+    // isso que se está a fazer; agora a fórmula está certa e o limiar volta a
+    // significar o que diz.
+    const cover = bench
+      .filter((b) => (b.expectedPointsNext ?? 0) > 0.5)
+      .map((b) => b.expectedPointsNext)
+      .sort((a, b) => b - a);
+
+    // O que o teu onze rende SEM o chip: quem joga, mais os suplentes que
+    // entram automaticamente, mais zero pelos lugares que ficam vazios.
+    const withoutChip =
+      playing.reduce((t, q) => t + q.expectedPointsNext, 0) +
+      cover.slice(0, missing).reduce((t, v) => t + v, 0);
+
+    // O que rende COM o chip: onze jogadores todos a jogar, ao nível de um
+    // titular teu normal. É a mesma aproximação de sempre — um Free Hit não
+    // compra estrelas, compra gente que joga — mas agora ancorada no teu
+    // plantel em vez de num 4 fixo.
+    const typicalStarter =
+      playing.length > 0
+        ? playing.reduce((t, q) => t + q.expectedPointsNext, 0) / playing.length
+        : 4;
+    const withChip = 11 * typicalStarter;
+
+    const valueNow = Math.round(Math.max(0, withChip - withoutChip) * 10) / 10;
     const available = remaining(chips, "freehit") > 0;
 
     // Uma branca ainda não marcada é tão real como uma dupla ainda não

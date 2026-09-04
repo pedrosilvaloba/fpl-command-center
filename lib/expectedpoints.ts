@@ -136,7 +136,19 @@ export function computeMinutesModel(
     };
   }
 
-  const pStart = Math.min(1, Math.max(0, starts / teamFinishedFixtures));
+  // O preço como prior de titularidade: a FPL fixa-o antes da época a pensar
+  // no papel de cada jogador, por isso é uma indicação externa e não uma
+  // segunda leitura dos mesmos dados. Ver `startPriorFixtures` em
+  // lib/modelparams.ts — está a ZERO por omissão, com a medição que levou a
+  // essa decisão escrita lá. Com peso zero esta linha devolve exatamente o
+  // que devolvia antes.
+  const priceM = toNum(el.now_cost) / 10;
+  const startPrior = Math.min(0.88, Math.max(0.3, 0.3 + (priceM - 4) * 0.11));
+  const w = Math.max(0, params.startPriorFixtures);
+  const pStart = Math.min(
+    1,
+    Math.max(0, (starts + w * startPrior) / (teamFinishedFixtures + w))
+  );
   if (pStart < 0.5 && starts > 0) {
     reasons.push(
       `risco de rotação: titular em ${Math.round(pStart * 100)}% dos jogos da equipa esta época`

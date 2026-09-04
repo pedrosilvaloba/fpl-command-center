@@ -5894,6 +5894,98 @@ function testNavOrderMatchesPageOrder() {
   );
 }
 
+
+// ---------------------------------------------------------------------
+// v1.48 — as duas fraquezas que a auditoria tinha deixado por corrigir.
+// ---------------------------------------------------------------------
+
+function testFreeHitAccountsForAutomaticSubstitutions() {
+  // O valor era `ausências x 4`, como se cada ausência fosse perda total.
+  // Não é: a FPL substitui automaticamente por ordem de banco, e um banco
+  // normal cobre até três ausências sozinho. O que se perde numa ausência
+  // COBERTA é a diferença entre o titular e o suplente, não o titular todo.
+  const p = (id: number, ep: number): ScoredPlayer =>
+    ({ ...mkSim(id, { teamId: 1, type: 3, epNext: ep, price: 6, own: 10 }), pPlay: 1 }) as ScoredPlayer;
+  const chips = [{ name: "freehit", remaining: 1 }] as unknown as Parameters<typeof planChips>[0]["chips"];
+  const cal = { breakAfterEvents: [], breakImminent: false, knownDoubleEvents: [], knownBlankEvents: [] };
+  const squad = (missing: number) => [
+    ...Array.from({ length: 11 - missing }, (_, i) => p(i + 1, 5)),
+    ...Array.from({ length: missing }, (_, i) => p(100 + i, 0)),
+  ];
+  const worth = (missing: number, benchEp: number) =>
+    planChips({
+      currentEvent: 10, chips, xi: squad(missing),
+      bench: [p(20, benchEp), p(21, benchEp), p(22, benchEp), p(23, benchEp)],
+      captain: p(1, 9), calendar: cal,
+    }).find((c) => c.chip === "freehit")!.valueNow;
+
+  const dead = worth(3, 0);
+  const weak = worth(3, 1);
+  const strong = worth(3, 5);
+
+  check(
+    "um banco forte torna o Free Hit menos valioso do que um banco morto",
+    strong < weak && weak < dead,
+    `morto ${dead}, fraco ${weak}, forte ${strong}`
+  );
+  check(
+    "com um banco tão bom como os titulares, três ausências não custam nada",
+    strong === 0,
+    `${strong}`
+  );
+  check(
+    // Sem isto, a fórmula antiga passava: dava 12 nos três casos.
+    "e o valor deixa de depender só do NÚMERO de ausências",
+    new Set([dead, weak, strong]).size === 3,
+    `${dead} / ${weak} / ${strong}`
+  );
+}
+
+function testStartPriorIsBuiltMeasuredAndDeliberatelyOff() {
+  // O encolhimento de `pStart` foi medido antes de ser lançado: estreitava a
+  // distância entre 3/3 e 2/3 em 11% e cortava 12% aos pontos esperados de
+  // TODOS os titulares indiscutíveis. Custo-benefício mau, e não há forma de
+  // o medir sem jornadas que esta época ainda não tem.
+  //
+  // Fica construído, desligado, e exposto ao varrimento de calibração.
+  const el = (starts: number, minutes: number) =>
+    makeElement({ starts, minutes, now_cost: 70 });
+
+  check(
+    "o prior de titularidade está desligado por omissão",
+    DEFAULT_MODEL_PARAMS.startPriorFixtures === 0,
+    `${DEFAULT_MODEL_PARAMS.startPriorFixtures}`
+  );
+  check(
+    "e desligado não muda absolutamente nada",
+    computeMinutesModel(el(2, 180), 3, false).pStart ===
+      computeMinutesModel(el(2, 180), 3, false, { startPriorFixtures: 0 }).pStart
+  );
+
+  // Mas o mecanismo funciona quando é ligado — senão o varrimento não teria
+  // nada para medir e o parâmetro seria decoração.
+  const off = computeMinutesModel(el(2, 180), 3, false).pStart;
+  const on = computeMinutesModel(el(2, 180), 3, false, { startPriorFixtures: 1.5 }).pStart;
+  check("ligado, o mecanismo mexe mesmo no número", Math.abs(on - off) > 1e-6, `${off} → ${on}`);
+
+  const nailedOff = computeMinutesModel(el(3, 270), 3, false).pStart;
+  const nailedOn = computeMinutesModel(el(3, 270), 3, false, { startPriorFixtures: 1.5 }).pStart;
+  check(
+    "e o efeito secundário medido é real: o titular indiscutível desce",
+    nailedOn < nailedOff,
+    `${nailedOff} → ${nailedOn}`
+  );
+
+  check(
+    "o varrimento pode concluir que o melhor é continuar desligado",
+    (PARAM_GRIDS.startPriorFixtures ?? []).includes(0),
+    `${PARAM_GRIDS.startPriorFixtures}`
+  );
+}
+
+testFreeHitAccountsForAutomaticSubstitutions();
+testStartPriorIsBuiltMeasuredAndDeliberatelyOff();
+
 testNavOrderMatchesPageOrder();
 
 testHeadlineGainCannotExceedWhatAnXiCanScore();

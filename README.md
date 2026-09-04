@@ -90,6 +90,64 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.48 — as duas fraquezas que a auditoria tinha deixado por corrigir
+
+### 1. O Free Hit ignorava as substituições automáticas
+
+O valor era `ausências x 4`: quatro pontos por cada jogador sem jogo, como se
+cada ausência fosse perda total. Não é. A FPL substitui automaticamente por
+ordem de banco, e um banco normal cobre até três ausências sozinho. O que se
+perde numa ausência COBERTA é a diferença entre o titular e o suplente que
+entrou, não o titular inteiro.
+
+Agora a conta usa o teu banco a sério. Três ausências, com bancos diferentes:
+
+```
+banco morto (0 pts)    →  o chip vale 15 pts
+banco fraco (1 pt)     →  o chip vale 12 pts
+banco forte (5 pts)    →  o chip vale  0 pts
+```
+
+Com um banco tão bom como os titulares, três ausências não te custam nada e o
+chip não resgata coisa nenhuma. **A fórmula antiga dava 12 nos três casos.**
+
+A v1.44 tinha compensado esta sobrestimação subindo o limiar de 4 para 7
+ausências. Compensar uma fórmula errada com um limiar é aceitável enquanto se
+sabe que é isso que se está a fazer — agora a fórmula está certa.
+
+### 2. `pStart` sem encolhimento — construído, medido, e deixado desligado
+
+O problema é real: à jornada 3, `titularidades / jogos` só pode dar 0, 0.33,
+0.67 ou 1, e quem falhou um jogo por uma mazela fica carimbado a 0.67.
+
+A correção óbvia é encolher em direção a um prior baseado no preço, que a FPL
+fixa antes da época a pensar no papel de cada jogador. **Foi medida antes de
+ser lançada**, com peso 1.5 e um jogador de £7.0m à jornada 3:
+
+```
+efeito pretendido:  a distância entre 3/3 e 2/3 estreita 11%
+efeito secundário:  TODOS os titulares indiscutíveis perdem 12%
+                    dos pontos esperados (1.000 → 0.877)
+```
+
+Onze por cento de benefício comprados com doze por cento de distorção
+uniforme — e essa distorção acopla-se aos limiares de transferência, que desde
+a v1.45 estão em pontos absolutos e que já tiveram de ser re-derivados uma vez
+esta sessão por terem absorvido um erro diferente.
+
+**Não lancei.** O mecanismo fica construído e a zero, exposto ao varrimento de
+calibração, com o `0` incluído na grelha para o varrimento poder concluir que
+o melhor é continuar desligado. Quando houver jornadas suficientes,
+`lib/calibration.ts` mede-o com validação fora da amostra e decide com números
+em vez de com a minha intuição.
+
+Com peso zero o comportamento é byte a byte o de antes — e há um teste que o
+verifica, outro que confirma que o mecanismo mexe mesmo quando é ligado (senão
+seria decoração), e um terceiro que reprova se alguém o ligar por omissão sem
+o ter medido.
+
+---
+
 ## Novo na v1.47 — a página passa a ter espinha
 
 Onze secções de topo (as "22" contadas antes incluíam sub-painéis), todas ao

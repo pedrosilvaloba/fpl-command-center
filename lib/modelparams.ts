@@ -61,6 +61,38 @@ export interface ModelParams {
   /** Minutes of evidence before the model's own numbers fully replace
    * FPL's `ep_next`. */
   modelTrustMinutes: number;
+
+  /**
+   * Quantas jornadas de evidência vale o PREÇO como indicação de que um
+   * jogador é titular, ao encolher `titularidades / jogos da equipa`.
+   *
+   * ═══ DESLIGADO POR OMISSÃO (0), E ISSO É UMA DECISÃO, NÃO UM ESQUECIMENTO ═══
+   *
+   * O problema é real: à jornada 3, `titularidades / jogos` só pode dar 0,
+   * 0.33, 0.67 ou 1, e quem falhou um jogo por uma mazela fica carimbado a
+   * 0.67 — perde um terço dos minutos esperados a partir de UMA observação.
+   *
+   * A correção óbvia é encolher em direção a um prior baseado no preço, que a
+   * FPL fixa antes da época a pensar no papel de cada jogador. Foi medida
+   * antes de ser lançada, com peso 1.5 e um jogador de £7.0m à jornada 3:
+   *
+   *     efeito pretendido:  a distância entre 3/3 e 2/3 estreita 11%
+   *     efeito secundário:  TODOS os titulares indiscutíveis perdem 12%
+   *                         dos pontos esperados (1.000 → 0.877)
+   *
+   * Onze por cento de benefício comprados com doze por cento de distorção
+   * uniforme — e essa distorção acopla-se aos limiares de transferência, que
+   * desde a v1.45 estão em pontos absolutos e que já tiveram de ser
+   * re-derivados uma vez por terem absorvido um erro diferente.
+   *
+   * A relação custo-benefício é má, e não há forma de a medir sem jornadas
+   * que esta época ainda não tem. Por isso o mecanismo fica CONSTRUÍDO e
+   * DESLIGADO, exposto ao varrimento de calibração: quando houver dados,
+   * `lib/calibration.ts` mede-o com validação fora da amostra e decide com
+   * números em vez de com a minha intuição. Se ajudar, liga-se; se não,
+   * fica-se a saber que não ajudava.
+   */
+  startPriorFixtures: number;
 }
 
 export const DEFAULT_MODEL_PARAMS: ModelParams = {
@@ -82,6 +114,8 @@ export const DEFAULT_MODEL_PARAMS: ModelParams = {
   minutes60Span: 45,
   minutes60Cap: 0.97,
   modelTrustMinutes: 360,
+  // Ver a nota acima: construído, medido, e deliberadamente a zero.
+  startPriorFixtures: 0,
 };
 
 /** Merge an override onto the defaults. Anything absent keeps its shipped
@@ -112,6 +146,9 @@ export const PARAM_GRIDS: Partial<Record<keyof ModelParams, number[]>> = {
   minutes60Floor: [20, 28, 35, 42, 50],
   minutes60Span: [30, 38, 45, 55, 65],
   modelTrustMinutes: [180, 270, 360, 540, 720],
+  // Inclui o 0 de propósito: o varrimento tem de poder concluir que a
+  // melhor opção é continuar desligado.
+  startPriorFixtures: [0, 0.75, 1.5, 3],
 };
 
 export type TunableParam = keyof typeof PARAM_GRIDS;
