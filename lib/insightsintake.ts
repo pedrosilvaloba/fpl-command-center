@@ -51,9 +51,87 @@ import {
 /** The most notes a single submission may carry. */
 const MAX_NOTES = 20;
 /** Bounds the URL-encoded payload on the GET path — Vercel rejects request
- * lines beyond roughly 14KB, and a research pass that needs more than this
- * is submitting noise rather than findings. */
+ * lines beyond roughly 14KB. Note what this limit must NOT be read as saying:
+ * a research pass needing more than this is not "submitting noise", it is
+ * submitting more than a query string can carry. See `decodeCompressedPayload`
+ * below for what that mistaken reading cost. */
 export const MAX_PAYLOAD_CHARS = 8000;
+
+/** Decompressed JSON may exceed the URL budget — that is the point — but not
+ * without bound. Twelve times over is far more than any honest submission and
+ * far short of anything that could hurt. */
+export const MAX_INFLATED_CHARS = MAX_PAYLOAD_CHARS * 12;
+
+/**
+ * Decodes a compressed submission.
+ *
+ * ═══ WHY THIS EXISTS: THE RESEARCH LAYER WAS NEVER SILENT ═══
+ *
+ * The dashboard reported the research job as "vazia" — it ran, it recorded
+ * itself, it submitted zero notes. The comfortable reading was that a Premier
+ * League week had produced nothing worth reporting, which is not credible.
+ * The run had left its own diagnosis in the note field:
+ *
+ *     "Push c/ insights reais falha (URL longo). So vazio funciona."
+ *
+ * The research WAS finding things and WAS trying to send them. The submission
+ * failed on SIZE — six to ten findings, each carrying a reason and a source,
+ * URL-encoded into a query string, exceeds what a request line will carry.
+ * The empty submission fit. So the empty submission was the only thing that
+ * ever arrived, week after week.
+ *
+ * That is a bug in the transport I designed, not a shortage of findings. A
+ * write path that only works for payloads carrying no information is not a
+ * write path — and the 413 error told the caller to "send fewer notes",
+ * which actively instructed it to throw information away.
+ *
+ * Insight JSON is repetitive prose and deflates roughly eight to one:
+ * measured on a realistic ten-note submission, 4,445 URL characters became
+ * 562. One request, no chunking protocol to get wrong.
+ *
+ * Accepts both zlib and gzip streams, because a caller reaching for
+ * compression should not have to guess which of Python's two obvious calls
+ * this expects — and a wrong guess would look exactly like the silent failure
+ * this replaces.
+ *
+ * The decompressors are injected rather than imported so this stays testable
+ * and free of a Node-only dependency in a file the client bundle can reach.
+ */
+export function decodeCompressedPayload(
+  value: string,
+  inflate: (b: Uint8Array) => Uint8Array,
+  gunzip: (b: Uint8Array) => Uint8Array
+): { ok: true; json: string } | { ok: false; error: string } {
+  let bytes: Uint8Array;
+  try {
+    const padded = value.replace(/-/g, "+").replace(/_/g, "/");
+    const b64 = padded + "=".repeat((4 - (padded.length % 4)) % 4);
+    const bin = atob(b64);
+    bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  } catch {
+    return { ok: false, error: "'payloadz' não é base64url válido" };
+  }
+  if (bytes.length === 0) {
+    return { ok: false, error: "'payloadz' está vazio depois de descodificar o base64url" };
+  }
+  let out: Uint8Array;
+  try {
+    out = bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzip(bytes) : inflate(bytes);
+  } catch {
+    return {
+      ok: false,
+      error:
+        "'payloadz' não descomprime — usa zlib.compress(json.encode()) ou gzip.compress(...), e depois base64.urlsafe_b64encode",
+    };
+  }
+  if (out.length > MAX_INFLATED_CHARS) {
+    return {
+      ok: false,
+      error: `payload descomprimido demasiado grande (${out.length} caracteres, máx ${MAX_INFLATED_CHARS})`,
+    };
+  }
+  return { ok: true, json: new TextDecoder().decode(out) };
+}
 
 export interface IntakeResult {
   status: number;

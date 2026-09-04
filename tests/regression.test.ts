@@ -110,7 +110,10 @@ import { isStorageConfigured } from "../lib/kv";
 import { checkApiToken, unauthorizedBody, checkCronAuth } from "../lib/apitoken";
 import { computeJobHealth, mergeResearchHealth, type JobRun } from "../lib/joblog";
 import { planFromRequest } from "../app/api/cron/refresh/route";
-import { paramsFromCursor, allTunableParams, MAX_PARAMS_PER_RUN } from "../lib/jobs";
+import { paramsFromCursor, allTunableParams, MAX_PARAMS_PER_RUN, chooseSample } from "../lib/jobs";
+import type { FplElement } from "../lib/types";
+import { deflateSync, inflateSync, gzipSync, gunzipSync } from "node:zlib";
+import { decodeCompressedPayload, MAX_INFLATED_CHARS } from "../lib/insightsintake";
 import { DEFAULT_MODEL_PARAMS, PARAM_GRIDS } from "../lib/modelparams";
 import { calibrate, MIN_EVENTS, MIN_ROWS } from "../lib/calibration";
 import {
@@ -5239,6 +5242,149 @@ function testTheRefusedMoveIsStillShown() {
   );
 }
 
+// ---------------------------------------------------------------------
+// v1.39 — o instrumento de medição tinha um viés de seleção lá dentro.
+//
+// O primeiro backtest real, na jornada 2, apareceu no painel assim:
+//
+//     MAE 4.04 (base 4.49) · Spearman -0.241
+//
+// Correlação de ordenação NEGATIVA. Um modelo que valeria a pena seguir ao
+// contrário. E não era verdade: a amostra era escolhida pelos 150 jogadores
+// com mais pontos TOTAIS na época — que, com duas jornadas jogadas, é quase
+// inteiramente feita da jornada que estava a ser testada.
+//
+// Selecionar pela consequência comum de duas variáveis anti-correlaciona-as
+// dentro da amostra mesmo quando não há relação nenhuma fora dela. É um
+// colisor, e estava dentro do instrumento de medida.
+// ---------------------------------------------------------------------
+
+function testTheSampleIsNotChosenUsingTheOutcome() {
+  const mkEl = (id: number, type: number, cost: number, points: number) =>
+    makeElement({ id, element_type: type, now_cost: cost, total_points: points });
+
+  // Dois universos idênticos em tudo menos nos pontos marcados. Se a amostra
+  // mudar entre eles, está a ser escolhida com informação do futuro.
+  const priced: FplElement[] = [];
+  const shuffledPoints: FplElement[] = [];
+  for (let i = 0; i < 200; i++) {
+    const type = (i % 4) + 1;
+    const cost = 40 + (i % 60);
+    priced.push(mkEl(i + 1, type, cost, i));
+    // Mesmos ids, mesmos preços, pontos ao contrário.
+    shuffledPoints.push(mkEl(i + 1, type, cost, 200 - i));
+  }
+
+  const a = chooseSample(priced, 60).map((e) => e.id).sort((x, y) => x - y);
+  const b = chooseSample(shuffledPoints, 60).map((e) => e.id).sort((x, y) => x - y);
+  check(
+    "a amostra do backtest não muda quando os pontos mudam",
+    a.length === b.length && a.every((id, i) => id === b[i]),
+    `${a.length} vs ${b.length}, iguais: ${a.every((id, i) => id === b[i])}`
+  );
+  check("e continua a ter o tamanho pedido", a.length === 60, `${a.length}`);
+
+  // A defesa que já existia tem de sobreviver: sem chão por posição, uma
+  // ordenação única produz uma amostra sem guarda-redes.
+  const sample = chooseSample(priced, 60);
+  for (const type of [1, 2, 3, 4]) {
+    check(
+      `a amostra inclui jogadores da posição ${type}`,
+      sample.some((e) => e.element_type === type)
+    );
+  }
+}
+
+// ---------------------------------------------------------------------
+// v1.39 — a camada de investigação nunca esteve calada.
+//
+// O painel dizia "vazia": correu, registou-se, submeteu zero notas. A leitura
+// confortável era que uma semana de Premier League não tinha produzido nada
+// digno de registo, o que não é credível. A própria execução tinha deixado o
+// diagnóstico escrito no campo `note`:
+//
+//     "Push c/ insights reais falha (URL longo). So vazio funciona."
+//
+// Estava a encontrar coisas e a tentar enviá-las. A submissão falhava por
+// TAMANHO. A vazia cabia — por isso a vazia era a única que alguma vez
+// chegou. E o erro 413 mandava "enviar menos notas", ou seja, mandava deitar
+// informação fora.
+// ---------------------------------------------------------------------
+
+function testCompressedSubmissionsFitWhereRawOnesDoNot() {
+  const inflate = (b: Uint8Array) => new Uint8Array(inflateSync(b));
+  const gunzip = (b: Uint8Array) => new Uint8Array(gunzipSync(b));
+  const b64url = (b: Uint8Array) =>
+    Buffer.from(b).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+  // Uma submissão realista: dez achados, cada um com razão e fonte. É esta
+  // que não cabia.
+  const payload = {
+    note: "Passagem de sexta: conferências de imprensa e boletins clínicos das últimas 48h.",
+    insights: Array.from({ length: 10 }, (_, i) => ({
+      scope: "player",
+      playerName: `Jogador${i}`,
+      teamShortName: "ARS",
+      factor: 0.85,
+      confidence: 0.9,
+      events: [4],
+      reason:
+        "O treinador confirmou na antevisão que vai a banco depois do jogo europeu de quarta-feira, por gestão de carga",
+      source: "Conferência de imprensa do Arsenal, 2026-09-04, via Sky Sports",
+    })),
+  };
+  const raw = JSON.stringify(payload);
+  const rawUrlChars = encodeURIComponent(raw).length;
+  const z = b64url(new Uint8Array(deflateSync(Buffer.from(raw, "utf8"), { level: 9 })));
+
+  check(
+    "a submissão comprimida é muito mais curta do que a crua",
+    z.length < rawUrlChars / 3,
+    `crua ${rawUrlChars} caracteres, comprimida ${z.length}`
+  );
+
+  const decoded = decodeCompressedPayload(z, inflate, gunzip);
+  check("e descodifica", decoded.ok, decoded.ok ? "" : decoded.error);
+  check(
+    "para exatamente o mesmo JSON, sem perder uma nota",
+    decoded.ok && decoded.json === raw,
+    decoded.ok ? `${JSON.parse(decoded.json).insights.length} notas` : ""
+  );
+
+  // gzip também: quem recorre a compressão não deve ter de adivinhar qual das
+  // duas chamadas óbvias do Python é a certa, e adivinhar mal pareceria
+  // exatamente a falha silenciosa que isto vem substituir.
+  const gz = b64url(new Uint8Array(gzipSync(Buffer.from(raw, "utf8"))));
+  const fromGzip = decodeCompressedPayload(gz, inflate, gunzip);
+  check(
+    "gzip é aceite tal como zlib",
+    fromGzip.ok && fromGzip.json === raw,
+    fromGzip.ok ? "" : fromGzip.error
+  );
+
+  // E as recusas explicam-se, em vez de falharem em silêncio.
+  const bad = decodeCompressedPayload("isto-nao-e-nada", inflate, gunzip);
+  check(
+    "lixo é recusado com uma mensagem que diz o que fazer",
+    !bad.ok && /descomprime|base64url/.test(bad.ok ? "" : bad.error),
+    bad.ok ? "aceitou lixo!" : bad.error
+  );
+  check("um payloadz vazio é recusado", !decodeCompressedPayload("", inflate, gunzip).ok);
+
+  // O limite continua a existir — comprimir não pode virar armazenamento.
+  const huge = b64url(
+    new Uint8Array(deflateSync(Buffer.from("x".repeat(MAX_INFLATED_CHARS + 10), "utf8")))
+  );
+  const tooBig = decodeCompressedPayload(huge, inflate, gunzip);
+  check(
+    "e um payload descomprimido absurdo continua a ser recusado",
+    !tooBig.ok,
+    tooBig.ok ? "aceitou!" : tooBig.error
+  );
+}
+
+testCompressedSubmissionsFitWhereRawOnesDoNot();
+testTheSampleIsNotChosenUsingTheOutcome();
 testPureNoiseProducesNoTransfers();
 testRealDifferencesStillProduceTransfers();
 testTheProtectionsNoLongerSwitchThemselvesOff();

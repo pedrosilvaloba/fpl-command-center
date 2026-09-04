@@ -70,22 +70,59 @@ export async function mapWithLimit<T, R>(
 }
 
 /**
- * The sample. Ranked by total points, but with a floor of players per
- * position so a points ranking does not quietly produce a sample of forwards
- * and no goalkeepers — the model's error profile differs most BY POSITION,
- * which is exactly what a skewed sample would hide.
+ * The sample.
+ *
+ * SELECTED ON PRICE, NOT ON POINTS — AND THE REASON IS A REAL BUG THAT
+ * PRODUCED A REAL, WRONG NUMBER ON THE LIVE DASHBOARD.
+ *
+ * This used to rank by `total_points` and take the top 150. The first live
+ * backtest, over gameweek 2, reported:
+ *
+ *     MAE 4.04 (base 4.49) · Spearman -0.241
+ *
+ * A NEGATIVE rank correlation: the model's ordering appeared to be inverted
+ * against reality. That is not a model that is merely weak, it is a model
+ * that would be worth following backwards — and it was not true.
+ *
+ * `total_points` is the season total INCLUDING the gameweek being tested.
+ * With two gameweeks played it is almost entirely made OF that gameweek. So
+ * the sample was selected on the very outcome being predicted, and selection
+ * on a common effect is the textbook way to manufacture a negative
+ * correlation out of nothing:
+ *
+ *   - A player the model rated HIGHLY is in the top 150 on that rating's
+ *     merits, whatever he scored.
+ *   - A player the model rated POORLY is only in the top 150 if he scored
+ *     heavily anyway.
+ *
+ * Condition on the total and the two become anti-correlated inside the
+ * sample even if the model is perfectly sound outside it. This is a collider,
+ * and I built one into the measuring instrument.
+ *
+ * Price is the honest alternative. FPL sets it before a ball is kicked and
+ * moves it in £0.1 steps, so after two gameweeks it is almost pure
+ * pre-season prior — and it selects exactly the players anyone would
+ * actually consider. It is not perfectly clean (prices do drift with
+ * performance over a season, so late-season samples carry a little of the
+ * same contamination), and saying so here is cheaper than discovering it
+ * again from another impossible number.
+ *
+ * The positional floor stays: the model's error profile differs most BY
+ * POSITION, and a single ranking would quietly produce a sample of forwards
+ * and no goalkeepers.
  */
 export function chooseSample(elements: FplElement[], size: number): FplElement[] {
   const perPosition = Math.max(4, Math.floor(size / 8));
+  const byPrior = (a: FplElement, b: FplElement) => b.now_cost - a.now_cost;
   const chosen = new Map<number, FplElement>();
   for (const type of [1, 2, 3, 4]) {
     elements
       .filter((el) => el.element_type === type)
-      .sort((a, b) => b.total_points - a.total_points)
+      .sort(byPrior)
       .slice(0, perPosition)
       .forEach((el) => chosen.set(el.id, el));
   }
-  for (const el of [...elements].sort((a, b) => b.total_points - a.total_points)) {
+  for (const el of [...elements].sort(byPrior)) {
     if (chosen.size >= size) break;
     chosen.set(el.id, el);
   }

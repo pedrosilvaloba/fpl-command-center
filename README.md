@@ -90,6 +90,72 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.39 — dois números impossíveis, duas causas minhas
+
+### 1. A investigação tática nunca esteve calada
+
+O painel dizia "vazia": correu, registou-se, submeteu zero notas. A leitura
+confortável era que uma semana de Premier League não tinha produzido nada
+digno de registo — o que não é credível. A própria execução tinha deixado o
+diagnóstico escrito no campo `note`:
+
+> *"Push c/ insights reais falha (URL longo). So vazio funciona."*
+
+**Estava a encontrar coisas e a tentar enviá-las.** A submissão falhava por
+TAMANHO: seis a dez achados, cada um com razão e fonte, codificados num
+*query string*, não cabem numa linha de pedido HTTP. A submissão vazia cabia.
+Por isso a submissão vazia era a única que alguma vez chegou, semana após
+semana.
+
+Pior: o erro que a app devolvia dizia *"envia menos notas por pedido"* — ou
+seja, mandava explicitamente deitar informação fora.
+
+**A correção:** o mesmo JSON, comprimido. O parâmetro novo `payloadz` aceita
+zlib (ou gzip) em base64url. Texto de notas é prosa repetitiva e comprime
+cerca de oito para um — medido numa submissão realista de dez achados,
+**4.445 caracteres de URL passaram a 562**. Um pedido, sem protocolo de
+divisão para correr mal.
+
+As duas tarefas semanais foram reescritas para usar essa via, e agora
+verificam a resposta: se enviaram achados e o servidor aceitou zero, isso é
+tratado como avaria, não como resultado.
+
+### 2. O backtest media-se a si próprio ao contrário
+
+O primeiro backtest real apareceu no painel assim:
+
+```
+jornadas 2-2, 150 jogadores · MAE 4.04 (base 4.49) · Spearman -0.241
+```
+
+Correlação de ordenação **negativa** — um modelo que valeria a pena seguir ao
+contrário. E não era verdade.
+
+A amostra era escolhida pelos 150 jogadores com mais **pontos totais na
+época**. Com duas jornadas jogadas, esse total é quase inteiramente feito da
+jornada que estava a ser testada. Selecionar pela consequência comum de duas
+variáveis anti-correlaciona-as dentro da amostra mesmo quando não há relação
+nenhuma fora dela:
+
+- um jogador que o modelo avaliou BEM entra no top 150 pelo mérito dessa
+  avaliação, marque o que marcar;
+- um jogador que o modelo avaliou MAL só entra se tiver marcado muito.
+
+É um colisor, e eu tinha-o construído dentro do instrumento de medida.
+
+**A correção:** a amostra passa a ser escolhida por **preço**, que a FPL fixa
+antes de a época começar e move em passos de £0.1 — quase puro *prior* de
+pré-época, e seleciona exatamente os jogadores que alguém consideraria. Não é
+perfeitamente limpo (os preços derivam com o rendimento ao longo da época) e
+isso está dito no código em vez de descoberto outra vez a partir de outro
+número impossível.
+
+**O que isto NÃO diz.** Não posso afirmar que o Spearman verdadeiro seja bom.
+Posso afirmar que aquele −0.241 foi medido com um instrumento partido e não
+serve para nada. O número honesto só aparece na próxima execução automática.
+
+---
+
 ## Novo na v1.38 — porque é que o modelo queria vender o Gibbs-White
 
 ### A medição que devia ter sido feita há quatro versões
