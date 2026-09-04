@@ -52,6 +52,18 @@ const DGW_PRIOR = {
 /** How much better "now" must be than "later" before spending the option. */
 const MARGIN = 1.15;
 
+/** What a Free Hit rescues in a blank gameweek that is already on the
+ * calendar: a squad with most of its eleven not playing. */
+const KNOWN_BLANK_VALUE = 30;
+/** And in a blank that has not been announced yet. Lower than the known one
+ * on purpose — it is speculative, and a chip should not be hoarded against a
+ * week nobody can see. */
+const UNKNOWN_BLANK_PRIOR = 22;
+/** Below this, the Free Hit is rescuing a couple of injuries rather than a
+ * blank, and a one-shot chip is far too expensive for that. Keeps the old
+ * behaviour as a floor beneath the new now-versus-later rule. */
+const FREE_HIT_MIN_MISSING = 4;
+
 export interface CalendarContext {
   /** Gameweeks after which an international break follows. */
   breakAfterEvents: number[];
@@ -221,32 +233,65 @@ export function planChips(input: ChipPlanInput): ChipAdvice[] {
   }
 
   // ---- Free Hit --------------------------------------------------------
-  // Exists to survive a blank. Its value now is what it rescues.
+  //
+  // ═══ v1.44 — O ÚNICO CHIP QUE NÃO SEGUIA A REGRA DA CASA ═══
+  //
+  // O cabeçalho deste módulo diz, em letra grande, que cada chip é avaliado
+  // DUAS vezes — quanto vale agora e quanto vale na melhor semana futura — e
+  // que só é aconselhado quando o agora bate o depois por uma margem. O Bench
+  // Boost faz isso. O Triple Captain faz isso. O Free Hit não fazia.
+  //
+  // O veredicto era `missing >= 4`, e mais nada. O `bestLaterValue` era
+  // calculado, guardado no objeto, mostrado ao utilizador — e ignorado pela
+  // decisão.
+  //
+  // Medido: 4 jogadores sem jogo agora (valor 16) com uma jornada em BRANCO
+  // conhecida na 15 (valor 30), e o veredicto era "jogar". O modelo mandava
+  // queimar o chip na semana pior enquanto reportava, no mesmo cartão, que
+  // havia uma melhor à frente.
+  //
+  // A correção aplica a mesma regra dos outros dois, mas mantém também um
+  // PISO absoluto: sem ele, quando não há nenhuma branca conhecida o "depois"
+  // seria zero e qualquer jogador em falta bastaria para gastar o chip.
   {
     const playingNow = xi.filter((p) => (p.expectedPointsNext ?? 0) > 0.5).length;
     const missing = Math.max(0, 11 - playingNow);
     const valueNow = Math.round(missing * 4 * 10) / 10;
     const available = remaining(chips, "freehit") > 0;
+
+    // Uma branca ainda não marcada é tão real como uma dupla ainda não
+    // marcada — só entram no calendário poucas semanas antes. O prior é mais
+    // baixo do que o de uma branca CONHECIDA porque é especulativo: não se
+    // sabe que virá a ser pior do que hoje.
+    const later = nextKnownBlank
+      ? KNOWN_BLANK_VALUE
+      : Math.round(UNKNOWN_BLANK_PRIOR * credit * 10) / 10;
+    const beatsLater = valueNow >= later * MARGIN;
     const verdict: ChipVerdict = !available
       ? "indisponível"
-      : missing >= 4
+      : missing >= FREE_HIT_MIN_MISSING && beatsLater
         ? "jogar"
         : "esperar";
+
     out.push({
       chip: "freehit",
       label: "Free Hit",
       verdict,
       valueNow,
-      bestLaterValue: nextKnownBlank ? 30 : 0,
+      bestLaterValue: later,
       bestLaterEvent: nextKnownBlank,
       bestLaterSource: "branca conhecida",
       reason: !available
         ? "Já não tens Free Hit disponível."
         : verdict === "jogar"
-          ? `Tens ${missing} jogadores do onze sem jogo nesta jornada. O Free Hit existe exatamente para isto.`
-          : nextKnownBlank
-            ? `O onze está completo nesta jornada. Há uma jornada em branco marcada na ${nextKnownBlank} — é aí que este chip costuma valer mais.`
-            : "O onze está completo nesta jornada, por isso o Free Hit não resgata nada. Guarda-o para uma jornada em branco.",
+          ? `Tens ${missing} jogadores do onze sem jogo nesta jornada (${valueNow.toFixed(0)} pts a resgatar). É mais do que uma jornada em branco costuma valer, por isso vale a pena gastá-lo agora.`
+          : missing === 0
+            ? nextKnownBlank
+              ? `O onze está completo nesta jornada. Há uma jornada em branco marcada na ${nextKnownBlank} — é aí que este chip costuma valer mais.`
+              : "O onze está completo nesta jornada, por isso o Free Hit não resgata nada. Guarda-o para uma jornada em branco."
+            : nextKnownBlank
+              ? `Tens ${missing} jogador${missing === 1 ? "" : "es"} sem jogo (${valueNow.toFixed(0)} pts), mas há uma jornada em branco marcada na ${nextKnownBlank} onde este chip vale tipicamente ~${later.toFixed(0)} pts. Gastá-lo agora troca a semana pior pela melhor.`
+              : `Tens ${missing} jogador${missing === 1 ? "" : "es"} sem jogo (${valueNow.toFixed(0)} pts) — pouco para queimar um chip de um só uso. Numa jornada em branco a sério ele resgata tipicamente ~${UNKNOWN_BLANK_PRIOR} pts, e as brancas só entram no calendário poucas semanas antes.`,
     });
   }
 

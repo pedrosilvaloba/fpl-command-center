@@ -4214,15 +4214,28 @@ function testChipPlannerProtectsTheOption() {
   // Free Hit: existe para salvar uma jornada em branco.
   const fh = weak.find((c) => c.chip === "freehit")!;
   check("com o onze completo, o Free Hit não resgata nada", fh.verdict === "esperar");
+  // LIMIAR REVISTO EM v1.44, e a razão é de modelo, não de conveniência.
+  //
+  // Este teste exigia que 5 ausências bastassem para gastar o chip, porque a
+  // regra era `missing >= 4` e mais nada. Com o Free Hit a passar a comparar
+  // agora contra depois, como os outros dois chips, o limiar passou para 7
+  // ausências quando não há nenhuma branca marcada.
+  //
+  // Não mudei o teste para acomodar o código. Cinco ausências num fim de
+  // semana normal são cinco lesões, não uma jornada em branco — e o banco
+  // cobre automaticamente até três delas. Gastar um chip de um só uso nisso,
+  // sabendo que uma branca a sério chega mais tarde na época, é o erro
+  // clássico que este módulo existe para evitar. Sete ausências já é o
+  // aspeto de uma branca verdadeira.
   const blankXi = [
-    ...xi.slice(0, 6),
-    ...Array.from({ length: 5 }, (_, i) => mkSim(760 + i, { epNext: 0, teamId: i + 1 })),
+    ...xi.slice(0, 4),
+    ...Array.from({ length: 7 }, (_, i) => mkSim(760 + i, { epNext: 0, teamId: i + 1 })),
   ];
   const fh2 = planChips({
     currentEvent: 3, chips: mkChips(), xi: blankXi, bench: weakBench, captain, calendar,
   }).find((c) => c.chip === "freehit")!;
   check(
-    "com 5 jogadores sem jogo, o Free Hit é para jogar",
+    "com 7 jogadores sem jogo — o aspeto de uma jornada em branco — o Free Hit é para jogar",
     fh2.verdict === "jogar",
     fh2.verdict
   );
@@ -5603,6 +5616,82 @@ function testMinutesModelDoesNotZeroOutPlayersWhoActuallyPlay() {
     `${impossible.expectedMinutes}`
   );
 }
+
+
+// ---------------------------------------------------------------------
+// v1.44 — o Free Hit era o único chip que não seguia a regra da casa.
+//
+// O cabeçalho do lib/chipplan.ts diz, em letra grande, que cada chip é
+// avaliado DUAS vezes — agora e na melhor semana futura — e que só é
+// aconselhado quando o agora bate o depois por uma margem. O Bench Boost faz
+// isso. O Triple Captain faz isso. O Free Hit tinha `missing >= 4` e mais
+// nada: o `bestLaterValue` era calculado, guardado e mostrado — e ignorado
+// pela decisão.
+//
+// Medido: 4 sem jogo agora (16 pts) com uma branca CONHECIDA na 15 (30 pts)
+// dava "jogar". Mandava queimar o chip na semana pior enquanto reportava,
+// no mesmo cartão, que havia uma melhor à frente.
+// ---------------------------------------------------------------------
+
+function testFreeHitComparesNowAgainstLaterLikeEveryOtherChip() {
+  const p = (id: number, ep: number): ScoredPlayer =>
+    ({ ...mkSim(id, { teamId: 1, type: 3, epNext: ep, price: 6, own: 10 }), pPlay: 1 }) as ScoredPlayer;
+  const chips = [{ name: "freehit", remaining: 1 }] as unknown as Parameters<typeof planChips>[0]["chips"];
+  const bench = [p(20, 1), p(21, 1), p(22, 1), p(23, 1)];
+  const cal = (blanks: number[]) => ({
+    breakAfterEvents: [], breakImminent: false, knownDoubleEvents: [], knownBlankEvents: blanks,
+  });
+  const squad = (missing: number) => [
+    ...Array.from({ length: 11 - missing }, (_, i) => p(i + 1, 5)),
+    ...Array.from({ length: missing }, (_, i) => p(100 + i, 0)),
+  ];
+  const fh = (missing: number, event: number, blanks: number[]) =>
+    planChips({ currentEvent: event, chips, xi: squad(missing), bench, captain: p(1, 9), calendar: cal(blanks) })
+      .find((c) => c.chip === "freehit")!;
+
+  // O caso exato que estava errado.
+  const clash = fh(4, 10, [15]);
+  check(
+    "com uma branca conhecida à frente que vale mais, o chip espera",
+    clash.verdict === "esperar",
+    `${clash.verdict}: agora ${clash.valueNow} vs depois ${clash.bestLaterValue}`
+  );
+  check(
+    "e o valor futuro deixa de ser ignorado pela decisão",
+    clash.bestLaterValue > clash.valueNow,
+    `${clash.bestLaterValue} vs ${clash.valueNow}`
+  );
+
+  // E o contraste obrigatório: isto não pode virar "nunca usar o Free Hit".
+  const realBlank = fh(9, 29, [29]);
+  check(
+    "numa jornada em branco a sério, o chip é jogado",
+    realBlank.verdict === "jogar",
+    `${realBlank.verdict}: ${realBlank.valueNow} vs ${realBlank.bestLaterValue}`
+  );
+
+  // O piso continua lá: um chip de um só uso não se gasta em duas lesões.
+  check("duas lesões não gastam o chip", fh(2, 10, []).verdict === "esperar");
+  check("nem três", fh(3, 10, []).verdict === "esperar");
+
+  // Há um ponto onde passa a valer a pena, e não é no infinito.
+  const threshold = [4, 5, 6, 7, 8, 9].find((m) => fh(m, 10, []).verdict === "jogar");
+  check(
+    "existe um número de ausências que justifica o chip, e é plausível",
+    threshold !== undefined && threshold >= 5 && threshold <= 8,
+    `dispara com ${threshold} ausências`
+  );
+
+  // Monotonia: mais ausências nunca podem tornar o chip menos atrativo.
+  const values = [3, 5, 7, 9].map((m) => fh(m, 10, []).valueNow);
+  check(
+    "mais ausências valem sempre mais",
+    values.every((v, i) => i === 0 || v > values[i - 1]),
+    values.join(" < ")
+  );
+}
+
+testFreeHitComparesNowAgainstLaterLikeEveryOtherChip();
 
 testMinutesModelDoesNotZeroOutPlayersWhoActuallyPlay();
 

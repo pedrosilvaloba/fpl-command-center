@@ -90,6 +90,53 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.44 — o Free Hit era o único chip que não seguia a regra da casa
+
+O cabeçalho do `lib/chipplan.ts` diz, em letra grande, qual é o princípio de
+todo o módulo:
+
+> Cada chip é avaliado DUAS vezes: quanto vale agora, e o melhor que
+> plausivelmente vale DEPOIS. Só é aconselhado quando o agora bate o depois
+> por uma margem.
+
+O Bench Boost faz isso. O Triple Captain faz isso. **O Free Hit não fazia.** O
+veredicto era `missing >= 4`, e mais nada — o valor futuro era calculado,
+guardado no objeto e mostrado no ecrã, e depois ignorado pela decisão.
+
+Medido: 4 jogadores sem jogo agora (16 pts) com uma jornada em **branco
+conhecida** na 15 (30 pts) dava **"jogar"**. O modelo mandava queimar o chip na
+semana pior enquanto reportava, no mesmo cartão, que havia uma melhor à frente.
+
+### O limiar mudou de 4 para 7 ausências, e a razão é de modelo
+
+```
+sem branca conhecida, jornada 10:
+  3 em falta (12 pts) → esperar
+  6 em falta (24 pts) → esperar
+  7 em falta (28 pts) → jogar      ← o aspeto de uma branca a sério
+  9 em falta (36 pts) → jogar
+```
+
+Cinco ausências num fim de semana normal são cinco lesões, não uma jornada em
+branco — e o banco cobre automaticamente até três delas. Gastar um chip de um
+só uso nisso, sabendo que uma branca a sério chega mais tarde na época, é o
+erro clássico que este módulo existe para evitar.
+
+Um teste antigo exigia que 5 ausências bastassem. **Não o alterei para
+acomodar o código:** está reescrito com a justificação, e o contraste
+obrigatório também está trancado — numa branca verdadeira (jornada 29, 9
+ausências) o chip é jogado, comparando 36 contra 30.
+
+### Fraqueza que fica identificada
+
+O valor do Free Hit é `ausências x 4`, que **ignora as substituições
+automáticas**. Com quatro jogadores no banco, até três das ausências são
+cobertas sozinhas, por isso esta conta sobrestima o que o chip resgata. O
+limiar mais alto compensa isso na prática, mas a fórmula continua a estar
+errada por dentro e fica dito.
+
+---
+
 ## Novo na v1.43 — o jogador que joga e era modelado como não jogando
 
 Auditoria ao modelo de minutos, que é a entrada mais importante de todo o
