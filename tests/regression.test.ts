@@ -114,6 +114,7 @@ import { computeJobHealth, mergeResearchHealth, type JobRun } from "../lib/joblo
 import { planFromRequest } from "../app/api/cron/refresh/route";
 import { paramsFromCursor, allTunableParams, MAX_PARAMS_PER_RUN, chooseSample } from "../lib/jobs";
 import type { FplElement } from "../lib/types";
+import { NAV_ORDER } from "../app/page";
 import { deflateSync, inflateSync, gzipSync, gunzipSync } from "node:zlib";
 import {
   decodeCompressedPayload,
@@ -5844,6 +5845,56 @@ function testHeadlineGainCannotExceedWhatAnXiCanScore() {
     );
   }
 }
+
+
+// ---------------------------------------------------------------------
+// v1.47 — a barra de navegação mentia sobre a ordem da página.
+//
+// Onze secções de topo, todas ao mesmo nível, misturando "o que fazer agora"
+// com "como correu" e com dados de consulta. E a barra listava-as por uma
+// ordem DIFERENTE da página: "A Liga" antes de "Plantel Ideal" na barra, ao
+// contrário na página.
+//
+// Uma barra que não corresponde à ordem real é uma forma discreta de mentir
+// sobre onde as coisas estão, e diverge sozinha assim que alguém mexe numa
+// das duas listas sem se lembrar da outra. Este teste liga-as.
+// ---------------------------------------------------------------------
+
+function testNavOrderMatchesPageOrder() {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const src = fs.readFileSync(path.join(here, "..", "app", "page.tsx"), "utf8");
+
+  // A ordem real: os `id` das secções, pela ordem em que aparecem no ficheiro.
+  const pageOrder = [...src.matchAll(/<Section\s+id="([a-z-]+)"/g)].map((m) => m[1]);
+  check("as secções da página são encontradas", pageOrder.length >= 10, `${pageOrder.length}`);
+
+  check(
+    "a barra de navegação tem exatamente as mesmas secções que a página",
+    NAV_ORDER.length === pageOrder.length &&
+      [...NAV_ORDER].sort().join(",") === [...pageOrder].sort().join(","),
+    `barra: ${NAV_ORDER.join(",")}\n      página: ${pageOrder.join(",")}`
+  );
+  check(
+    "e pela MESMA ordem — uma barra que mente sobre onde estão as coisas é pior que nenhuma",
+    NAV_ORDER.join(",") === pageOrder.join(","),
+    `barra: ${NAV_ORDER.join(",")}\n      página: ${pageOrder.join(",")}`
+  );
+
+  // E a decisão vem primeiro. É a razão de a app existir; se algum dia
+  // deixar de ser a primeira secção, é sinal de que algo se perdeu.
+  check(
+    "a secção da decisão é a primeira da página",
+    pageOrder[0] === "fazer",
+    `primeira: ${pageOrder[0]}`
+  );
+  check(
+    "e o diagnóstico do sistema é a última",
+    pageOrder[pageOrder.length - 1] === "sistema",
+    `última: ${pageOrder[pageOrder.length - 1]}`
+  );
+}
+
+testNavOrderMatchesPageOrder();
 
 testHeadlineGainCannotExceedWhatAnXiCanScore();
 

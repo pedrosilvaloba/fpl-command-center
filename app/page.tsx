@@ -73,21 +73,58 @@ export const dynamic = "force-dynamic";
 // nothing on a request that finishes early.
 export const maxDuration = 60;
 
-const NAV: [string, string][] = [
-  ["fazer", "O Que Fazer"],
-  ["revisao", "Revisão"],
-  ["liga", "A Liga"],
-  ["ideal", "Plantel Ideal"],
-  ["shadow", "Shadow Team"],
-  ["calendario", "Calendário"],
-  ["escolhas", "Escolhas"],
-  ["mercado", "Mercado"],
-  ["aprendizagem", "Aprendizagem"],
-  ["referencia", "Referência"],
-  // Diagnóstico da máquina, não uma decisão de FPL — último na barra, tal
-  // como é o último na página.
-  ["sistema", "Sistema"],
+/**
+ * A PÁGINA TINHA ONZE SECÇÕES DE TOPO E NENHUMA HIERARQUIA.
+ *
+ * Estavam todas ao mesmo nível, numa lista plana, misturando três coisas
+ * diferentes: o que fazer antes do deadline, como correu a semana passada, e
+ * dados de consulta. A barra de navegação listava-as por uma ordem
+ * DIFERENTE da página — "A Liga" antes de "Plantel Ideal" na barra, ao
+ * contrário na página — o que é uma forma discreta de mentir sobre onde as
+ * coisas estão.
+ *
+ * Agora há quatro camadas, e a barra é a página:
+ *
+ *   DECIDIR      o que fazer agora. É a razão de a app existir.
+ *   PERCEBER     como correu e o que o modelo aprendeu.
+ *   CONSULTAR    dados de apoio, para quando quiseres investigar.
+ *   FERRAMENTAS  ligações e diagnóstico. Só interessa quando algo falha.
+ *
+ * A ordem desta lista é a ordem da página, por construção: um teste verifica
+ * que as duas não podem divergir.
+ */
+const NAV: { tier: string; items: [string, string][] }[] = [
+  { tier: "Decidir", items: [["fazer", "O Que Fazer"], ["shadow", "Shadow Team"]] },
+  {
+    tier: "Perceber",
+    items: [["revisao", "Revisão"], ["aprendizagem", "Aprendizagem"], ["liga", "A Liga"]],
+  },
+  {
+    tier: "Consultar",
+    items: [
+      ["ideal", "Plantel Ideal"],
+      ["escolhas", "Escolhas"],
+      ["calendario", "Calendário"],
+      ["mercado", "Mercado"],
+      ["referencia", "Referência"],
+    ],
+  },
+  { tier: "Sistema", items: [["minha-equipa", "A Minha Equipa"], ["sistema", "Sistema"]] },
 ];
+
+/** Achatada, na ordem em que as secções aparecem na página. */
+export const NAV_ORDER: string[] = NAV.flatMap((g) => g.items.map(([id]) => id));
+
+/** O separador entre camadas. Não é decoração: sem ele, onze secções ao mesmo
+ * nível obrigam a ler tudo para descobrir o que é decisão e o que é consulta. */
+function TierHeading({ label, note }: { label: string; note: string }) {
+  return (
+    <div className="mt-2 flex items-baseline gap-3 border-b border-border pb-1.5">
+      <h2 className="eyebrow text-accent">{label}</h2>
+      <p className="text-[13px] text-text-muted">{note}</p>
+    </div>
+  );
+}
 
 function Section({
   id,
@@ -581,10 +618,17 @@ export default async function Home() {
           </div>
 
           <nav className="pill-scroller -mx-1 px-1 pb-2">
-            {NAV.map(([href, label]) => (
-              <a key={href} href={`#${href}`} className="pill">
-                {label}
-              </a>
+            {NAV.map((group) => (
+              <span key={group.tier} className="flex items-center gap-1.5">
+                <span className="eyebrow shrink-0 text-text-muted opacity-70">
+                  {group.tier}
+                </span>
+                {group.items.map(([href, label]) => (
+                  <a key={href} href={`#${href}`} className="pill">
+                    {label}
+                  </a>
+                ))}
+              </span>
             ))}
           </nav>
         </div>
@@ -592,6 +636,7 @@ export default async function Home() {
       </header>
 
       <main className="mx-auto flex max-w-6xl flex-col gap-8 px-4 py-6 md:px-6">
+        <TierHeading label="Decidir" note="o que fazer antes do deadline" />
         {/* ================= 1. o que fazer ================= */}
         <Section
           id="fazer"
@@ -760,227 +805,6 @@ export default async function Home() {
           </div>
         )}
 
-        {/* ================= 2. revisão da jornada ================= */}
-        <Section
-          id="revisao"
-          eyebrow={
-            gwReview.event
-              ? `Jornada ${gwReview.event}${gwReview.finished ? "" : " · ainda a decorrer"}`
-              : "Ainda sem jornadas"
-          }
-          title="Como Correu a Minha Equipa"
-          intro="Previsto contra real, jogador a jogador. Ordenado por desvio face à previsão, não por pontos: um jogador que fez o que era esperado não é notícia; um que ficou muito abaixo, é."
-        >
-          <GameweekReviewPanel review={gwReview} />
-        </Section>
-
-        {/* ================= 3. plantel ideal ================= */}
-        <Section
-          id="ideal"
-          eyebrow={`Referência (${squadMethod}) · £${totalCost.toFixed(1)}m de £${budgetM.toFixed(1)}m`}
-          title="O Plantel Ideal"
-          intro={
-            <>
-              O melhor plantel que{" "}
-              {squadState.available ? "o teu dinheiro" : "£100m"} compra hoje,
-              ignorando o custo de lá chegar. Não é um plano —{" "}
-              <strong className="text-text">
-                é o alvo contra o qual o plano acima mede a distância
-              </strong>
-              . Capitão:{" "}
-              <strong className="text-text">{captain?.element.web_name}</strong> ·
-              Vice: <strong className="text-text">{viceCaptain?.element.web_name}</strong>.{" "}
-              {oddsActive
-                ? "Pontuação enriquecida com odds de mercado."
-                : "A correr só com o modelo estatístico — liga a ODDS_API_KEY na Vercel para incluir odds de mercado."}
-            </>
-          }
-        >
-          <PitchView
-            starters={starters}
-            bench={bench}
-            captainId={captain?.element.id}
-            viceCaptainId={viceCaptain?.element.id}
-          />
-
-          <div className="mt-6 grid gap-4 lg:grid-cols-2">
-            <div className="rounded-xl border border-border bg-surface-2 p-4">
-              <SubHeading>Risco de concentração</SubHeading>
-              <div className="mb-2 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-sm">
-                <span>
-                  Pontos esperados:{" "}
-                  <strong className="font-mono tabular">{squadRisk.expectedPoints}</strong>
-                </span>
-                <span>
-                  Desvio-padrão:{" "}
-                  <strong className="font-mono tabular">±{squadRisk.stdDev}</strong>
-                </span>
-                <span>
-                  Concentração defensiva:{" "}
-                  <strong
-                    className={`font-mono tabular ${
-                      squadRisk.defensiveConcentrationRatio >= 1.7
-                        ? "text-danger"
-                        : squadRisk.defensiveConcentrationRatio >= 1.3
-                          ? "text-warn"
-                          : "text-success"
-                    }`}
-                  >
-                    {squadRisk.defensiveConcentrationRatio.toFixed(2)}×
-                  </strong>
-                </span>
-              </div>
-              {squadRisk.warnings.length > 0 && (
-                <ul className="mb-2 list-disc space-y-1 pl-5 text-sm text-warn">
-                  {squadRisk.warnings.map((w, i) => (
-                    <li key={i}>{w}</li>
-                  ))}
-                </ul>
-              )}
-              <p className="text-xs leading-relaxed text-text-muted">
-                Um clean sheet é <strong>um único acontecimento</strong>{" "}
-                partilhado por todos os teus defesas do mesmo clube. Empilhar
-                não muda os pontos esperados — multiplica a variância. 1.00× é
-                totalmente diversificado.
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-border bg-surface-2 p-4">
-              <SubHeading>Valor de ranking</SubHeading>
-              <div className="mb-2 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-sm">
-                <span>
-                  Pontos esperados:{" "}
-                  <strong className="font-mono tabular">
-                    {rankProfile.totalExpectedPoints}
-                  </strong>
-                </span>
-                <span>
-                  Ganho sobre o rival médio:{" "}
-                  <strong className="font-mono tabular text-accent">
-                    {rankProfile.totalRankValue}
-                  </strong>
-                </span>
-                <span>
-                  Posse média:{" "}
-                  <strong className="font-mono tabular">
-                    {rankProfile.weightedOwnership}%
-                  </strong>
-                </span>
-              </div>
-              <p className="mb-2 text-sm text-text-muted">{rankProfile.verdict}</p>
-              {rankProfile.missingTemplate.length > 0 && (
-                <p className="text-sm text-warn">
-                  <strong>Template que não tens:</strong>{" "}
-                  {rankProfile.missingTemplate
-                    .map(
-                      (m) =>
-                        `${m.player.element.web_name} (${Math.round(m.player.ownershipPct)}%)`
-                    )
-                    .join(" · ")}
-                  .
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-6">
-            <SubHeading>Porquê cada jogador</SubHeading>
-            <PlayerTable players={starters} showReasons />
-          </div>
-        </Section>
-
-        {/* ================= 4. a liga ================= */}
-        <Section
-          id="liga"
-          eyebrow={`Camada 2 · Liga privada #${DEFAULT_LEAGUE_ID}`}
-          title={leagueName ?? "A Minha Liga"}
-          intro="Em vez de perguntar 'que equipa faz mais pontos?', esta camada pergunta 'que equipa maximiza a probabilidade de eu acabar à frente destas pessoas em concreto?'. São perguntas diferentes, e a resposta muda conforme estejas à frente ou atrás."
-        >
-          {leagueError && <p className="mb-4 text-sm text-danger">{leagueError}</p>}
-          {!leagueError && leagueResults.length === 0 && (
-            <p className="mb-4 text-sm text-text-muted">
-              Ainda sem classificação nesta liga — a FPL só calcula rankings
-              depois da primeira jornada fechar.
-            </p>
-          )}
-
-          <LeagueSimPanel outlook={effectiveOutlook} />
-
-          {/* ALWAYS shown, not only when the simulation is unavailable.
-              This table used to be a fallback for a broken simulation, which
-              meant fixing the simulation would have made the league table
-              disappear — the opposite of what it is for. */}
-          {leagueResults.length > 0 && (
-            <div className="mt-5">
-              <p className="mb-2 flex flex-wrap items-baseline justify-between gap-2 text-xs text-text-muted">
-                <span>
-                  Liga completa — <strong className="text-text">{leagueResults.length}</strong>{" "}
-                  {leagueResults.length === 1 ? "equipa" : "equipas"}
-                  {myLeagueRank !== null && (
-                    <>
-                      {" · estás em "}
-                      <strong className="text-text">{myLeagueRank}º</strong>
-                    </>
-                  )}
-                </span>
-                {!leagueComplete && (
-                  <span className="text-warn">
-                    Liga demasiado grande para carregar por inteiro — mostradas as
-                    primeiras {leagueResults.length}.
-                  </span>
-                )}
-              </p>
-              <div className="max-h-[26rem] overflow-y-auto scroll-x rounded-lg border border-border">
-              <table className="w-full border-collapse text-sm">
-                <thead>
-                  <tr className="sticky top-0 bg-surface text-left text-xs uppercase tracking-wide text-text-muted">
-                    <th className="py-2 pl-3 pr-3 font-semibold">#</th>
-                    <th className="py-2 pr-3 font-semibold">Gestor</th>
-                    <th className="py-2 pr-3 font-semibold">Equipa</th>
-                    <th className="py-2 text-right font-semibold">Pontos</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {leagueResults.map((r) => (
-                    <tr
-                      key={r.id}
-                      className={`border-t border-border ${
-                        r.entry === myTeamIdNum
-                          ? "bg-[color-mix(in_srgb,var(--accent)_10%,var(--surface))]"
-                          : ""
-                      }`}
-                    >
-                      <td className="py-2 pl-3 pr-3 font-mono tabular">{r.rank}</td>
-                      <td className="py-2 pr-3">{r.player_name}</td>
-                      <td className="py-2 pr-3 text-text-muted">
-                        {r.entry_name}
-                        {r.entry === myTeamIdNum && (
-                          <span className="ml-2 rounded bg-accent-vivid px-1.5 py-0.5 text-[10px] font-bold uppercase text-accent-contrast">
-                            tu
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-2 text-right font-mono tabular font-semibold">
-                        {r.total}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              </div>
-            </div>
-          )}
-        </Section>
-
-        {/* ================= 5. a minha equipa ================= */}
-        <Section
-          id="minha-equipa"
-          title="A Minha Equipa na FPL"
-          eyebrow="Ligado ao teu Team ID"
-        >
-          <MyTeamPanel scored={scored} eventId={picksEvent} isPreseason={isPreseason} />
-        </Section>
-
         {/* ================= 6. shadow team ================= */}
         <Section
           id="shadow"
@@ -993,190 +817,19 @@ export default async function Home() {
           />
         </Section>
 
-        {/* ================= 7. calendário ================= */}
+        <TierHeading label="Perceber" note="como correu, e o que o modelo aprendeu com isso" />
+        {/* ================= 2. revisão da jornada ================= */}
         <Section
-          id="calendario"
-          title="Calendário"
-          eyebrow="Modelo próprio, não o dígito 1-5 da FPL"
-          intro="Ataque = golos esperados da equipa por jogo. Defesa = probabilidade de clean sheet. Uma equipa pode ser boa aposta para os teus atacantes e má para os teus defesas, por isso os dois números aparecem separados."
+          id="revisao"
+          eyebrow={
+            gwReview.event
+              ? `Jornada ${gwReview.event}${gwReview.finished ? "" : " · ainda a decorrer"}`
+              : "Ainda sem jornadas"
+          }
+          title="Como Correu a Minha Equipa"
+          intro="Previsto contra real, jogador a jogador. Ordenado por desvio face à previsão, não por pontos: um jogador que fez o que era esperado não é notícia; um que ficou muito abaixo, é."
         >
-          <FixtureTicker
-            teams={bootstrap.teams}
-            ticker={ticker}
-            oddsActive={oddsActive}
-            strengthsUsable={strengthsUsable}
-          />
-
-          <div className="mt-6 border-t border-border pt-5">
-            <SubHeading>
-              Jornadas duplas e brancas — próximas {scheduleHorizon - fromEvent + 1}
-            </SubHeading>
-            {scheduleEvents.length === 0 ? (
-              <p className="text-sm text-text-muted">
-                Nenhuma jornada dupla ou em branco confirmada ainda. É normal no
-                início da época — reagendamentos só costumam ser confirmados
-                algumas semanas antes; esta secção preenche-se sozinha.
-              </p>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {scheduleEvents.map((event) => {
-                  const bucket = anomaliesByEvent.get(event)!;
-                  return (
-                    <div
-                      key={event}
-                      className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-border px-3 py-2 text-sm"
-                    >
-                      <span className="font-display font-bold tracking-tight">
-                        GW{event}
-                      </span>
-                      {bucket.doubles.length > 0 && (
-                        <span className="text-success">
-                          Dupla: {bucket.doubles.join(", ")}
-                        </span>
-                      )}
-                      {bucket.blanks.length > 0 && (
-                        <span className="text-danger">
-                          Branca: {bucket.blanks.join(", ")}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </Section>
-
-        {/* ================= 8. escolhas ================= */}
-        <Section
-          id="escolhas"
-          title="Melhores Escolhas"
-          eyebrow="Por posição, e diferenciais"
-        >
-          <div className="grid gap-6 lg:grid-cols-2">
-            {(
-              [
-                [1, "Guarda-Redes"],
-                [2, "Defesas"],
-                [3, "Médios"],
-                [4, "Avançados"],
-              ] as [number, string][]
-            ).map(([id, label]) => (
-              <div key={id}>
-                <SubHeading>{label}</SubHeading>
-                <PlayerTable players={byPos(id)} showReasons />
-              </div>
-            ))}
-          </div>
-          <div className="mt-6 border-t border-border pt-5">
-            <SubHeading>Diferenciais (menos de 10% de posse)</SubHeading>
-            <PlayerTable players={differentials} showReasons />
-          </div>
-        </Section>
-
-        {/* ================= 9. mercado ================= */}
-        <Section
-          id="mercado"
-          title="Mercado"
-          eyebrow="Preços e disponibilidade"
-          intro="A FPL não publica o algoritmo real de mudança de preços. As previsões abaixo são estimativas a partir das transferências líquidas de hoje — úteis para decidires se vale a pena antecipar uma transferência, não garantias."
-        >
-          <div className="grid gap-6 lg:grid-cols-2">
-            <div>
-              <SubHeading>
-                <span className="text-success">Prováveis subidas</span>
-              </SubHeading>
-              {risers.length === 0 ? (
-                <p className="text-sm text-text-muted">Sem sinal forte de subida agora.</p>
-              ) : (
-                <div className="divide-y divide-border rounded-lg border border-border">
-                  {risers.map((r) => (
-                    <div
-                      key={r.element.id}
-                      className="flex items-center justify-between gap-2 px-3 py-2 text-sm"
-                    >
-                      <span>
-                        {r.element.web_name}{" "}
-                        <span className="text-xs text-text-muted">
-                          ({r.team.short_name})
-                        </span>
-                      </span>
-                      <span className="flex items-center gap-3 font-mono text-xs tabular text-text-muted">
-                        <span>£{r.priceM.toFixed(1)}m</span>
-                        <span className="font-semibold text-success">
-                          +{r.netTransfers.toLocaleString("pt-PT")}
-                        </span>
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div>
-              <SubHeading>
-                <span className="text-danger">Prováveis descidas</span>
-              </SubHeading>
-              {fallers.length === 0 ? (
-                <p className="text-sm text-text-muted">Sem sinal forte de descida agora.</p>
-              ) : (
-                <div className="divide-y divide-border rounded-lg border border-border">
-                  {fallers.map((r) => (
-                    <div
-                      key={r.element.id}
-                      className="flex items-center justify-between gap-2 px-3 py-2 text-sm"
-                    >
-                      <span>
-                        {r.element.web_name}{" "}
-                        <span className="text-xs text-text-muted">
-                          ({r.team.short_name})
-                        </span>
-                      </span>
-                      <span className="flex items-center gap-3 font-mono text-xs tabular text-text-muted">
-                        <span>£{r.priceM.toFixed(1)}m</span>
-                        <span className="font-semibold text-danger">
-                          {r.netTransfers.toLocaleString("pt-PT")}
-                        </span>
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-6 border-t border-border pt-5">
-            <SubHeading>Notícias e lesões</SubHeading>
-            {newsWatch.length === 0 ? (
-              <p className="text-sm text-text-muted">
-                Sem notas de lesão/dúvida/suspensão ativas neste momento.
-              </p>
-            ) : (
-              <div className="divide-y divide-border rounded-lg border border-border">
-                {newsWatch.map((n) => (
-                  <div
-                    key={n.element.id}
-                    className="flex items-start justify-between gap-3 px-3 py-2 text-sm"
-                  >
-                    <div className="min-w-0">
-                      <span className="font-medium">{n.element.web_name}</span>{" "}
-                      <span className="text-xs text-text-muted">
-                        ({n.team.short_name} · {n.ownershipPct.toFixed(1)}% posse)
-                      </span>
-                      {n.isRecent && (
-                        <span className="ml-2 rounded border border-[color-mix(in_srgb,var(--warn)_40%,var(--border))] bg-[color-mix(in_srgb,var(--warn)_18%,var(--surface))] px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-warn">
-                          recente
-                        </span>
-                      )}
-                      <p className="mt-0.5 text-xs text-text-muted">{n.news}</p>
-                    </div>
-                    <span className="whitespace-nowrap font-mono text-xs tabular text-text-muted">
-                      {n.chanceOfPlaying === null ? "—" : `${n.chanceOfPlaying}% jogo`}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <GameweekReviewPanel review={gwReview} />
         </Section>
 
         {/* ================= 10. aprendizagem ================= */}
@@ -1340,6 +993,391 @@ export default async function Home() {
           </div>
         </Section>
 
+        {/* ================= 4. a liga ================= */}
+        <Section
+          id="liga"
+          eyebrow={`Camada 2 · Liga privada #${DEFAULT_LEAGUE_ID}`}
+          title={leagueName ?? "A Minha Liga"}
+          intro="Em vez de perguntar 'que equipa faz mais pontos?', esta camada pergunta 'que equipa maximiza a probabilidade de eu acabar à frente destas pessoas em concreto?'. São perguntas diferentes, e a resposta muda conforme estejas à frente ou atrás."
+        >
+          {leagueError && <p className="mb-4 text-sm text-danger">{leagueError}</p>}
+          {!leagueError && leagueResults.length === 0 && (
+            <p className="mb-4 text-sm text-text-muted">
+              Ainda sem classificação nesta liga — a FPL só calcula rankings
+              depois da primeira jornada fechar.
+            </p>
+          )}
+
+          <LeagueSimPanel outlook={effectiveOutlook} />
+
+          {/* ALWAYS shown, not only when the simulation is unavailable.
+              This table used to be a fallback for a broken simulation, which
+              meant fixing the simulation would have made the league table
+              disappear — the opposite of what it is for. */}
+          {leagueResults.length > 0 && (
+            <div className="mt-5">
+              <p className="mb-2 flex flex-wrap items-baseline justify-between gap-2 text-xs text-text-muted">
+                <span>
+                  Liga completa — <strong className="text-text">{leagueResults.length}</strong>{" "}
+                  {leagueResults.length === 1 ? "equipa" : "equipas"}
+                  {myLeagueRank !== null && (
+                    <>
+                      {" · estás em "}
+                      <strong className="text-text">{myLeagueRank}º</strong>
+                    </>
+                  )}
+                </span>
+                {!leagueComplete && (
+                  <span className="text-warn">
+                    Liga demasiado grande para carregar por inteiro — mostradas as
+                    primeiras {leagueResults.length}.
+                  </span>
+                )}
+              </p>
+              <div className="max-h-[26rem] overflow-y-auto scroll-x rounded-lg border border-border">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="sticky top-0 bg-surface text-left text-xs uppercase tracking-wide text-text-muted">
+                    <th className="py-2 pl-3 pr-3 font-semibold">#</th>
+                    <th className="py-2 pr-3 font-semibold">Gestor</th>
+                    <th className="py-2 pr-3 font-semibold">Equipa</th>
+                    <th className="py-2 text-right font-semibold">Pontos</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leagueResults.map((r) => (
+                    <tr
+                      key={r.id}
+                      className={`border-t border-border ${
+                        r.entry === myTeamIdNum
+                          ? "bg-[color-mix(in_srgb,var(--accent)_10%,var(--surface))]"
+                          : ""
+                      }`}
+                    >
+                      <td className="py-2 pl-3 pr-3 font-mono tabular">{r.rank}</td>
+                      <td className="py-2 pr-3">{r.player_name}</td>
+                      <td className="py-2 pr-3 text-text-muted">
+                        {r.entry_name}
+                        {r.entry === myTeamIdNum && (
+                          <span className="ml-2 rounded bg-accent-vivid px-1.5 py-0.5 text-[10px] font-bold uppercase text-accent-contrast">
+                            tu
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 text-right font-mono tabular font-semibold">
+                        {r.total}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              </div>
+            </div>
+          )}
+        </Section>
+
+        <TierHeading label="Consultar" note="dados de apoio, para quando quiseres investigar" />
+        {/* ================= 3. plantel ideal ================= */}
+        <Section
+          id="ideal"
+          eyebrow={`Referência (${squadMethod}) · £${totalCost.toFixed(1)}m de £${budgetM.toFixed(1)}m`}
+          title="O Plantel Ideal"
+          intro={
+            <>
+              O melhor plantel que{" "}
+              {squadState.available ? "o teu dinheiro" : "£100m"} compra hoje,
+              ignorando o custo de lá chegar. Não é um plano —{" "}
+              <strong className="text-text">
+                é o alvo contra o qual o plano acima mede a distância
+              </strong>
+              . Capitão:{" "}
+              <strong className="text-text">{captain?.element.web_name}</strong> ·
+              Vice: <strong className="text-text">{viceCaptain?.element.web_name}</strong>.{" "}
+              {oddsActive
+                ? "Pontuação enriquecida com odds de mercado."
+                : "A correr só com o modelo estatístico — liga a ODDS_API_KEY na Vercel para incluir odds de mercado."}
+            </>
+          }
+        >
+          <PitchView
+            starters={starters}
+            bench={bench}
+            captainId={captain?.element.id}
+            viceCaptainId={viceCaptain?.element.id}
+          />
+
+          <div className="mt-6 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-xl border border-border bg-surface-2 p-4">
+              <SubHeading>Risco de concentração</SubHeading>
+              <div className="mb-2 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-sm">
+                <span>
+                  Pontos esperados:{" "}
+                  <strong className="font-mono tabular">{squadRisk.expectedPoints}</strong>
+                </span>
+                <span>
+                  Desvio-padrão:{" "}
+                  <strong className="font-mono tabular">±{squadRisk.stdDev}</strong>
+                </span>
+                <span>
+                  Concentração defensiva:{" "}
+                  <strong
+                    className={`font-mono tabular ${
+                      squadRisk.defensiveConcentrationRatio >= 1.7
+                        ? "text-danger"
+                        : squadRisk.defensiveConcentrationRatio >= 1.3
+                          ? "text-warn"
+                          : "text-success"
+                    }`}
+                  >
+                    {squadRisk.defensiveConcentrationRatio.toFixed(2)}×
+                  </strong>
+                </span>
+              </div>
+              {squadRisk.warnings.length > 0 && (
+                <ul className="mb-2 list-disc space-y-1 pl-5 text-sm text-warn">
+                  {squadRisk.warnings.map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-xs leading-relaxed text-text-muted">
+                Um clean sheet é <strong>um único acontecimento</strong>{" "}
+                partilhado por todos os teus defesas do mesmo clube. Empilhar
+                não muda os pontos esperados — multiplica a variância. 1.00× é
+                totalmente diversificado.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-border bg-surface-2 p-4">
+              <SubHeading>Valor de ranking</SubHeading>
+              <div className="mb-2 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-sm">
+                <span>
+                  Pontos esperados:{" "}
+                  <strong className="font-mono tabular">
+                    {rankProfile.totalExpectedPoints}
+                  </strong>
+                </span>
+                <span>
+                  Ganho sobre o rival médio:{" "}
+                  <strong className="font-mono tabular text-accent">
+                    {rankProfile.totalRankValue}
+                  </strong>
+                </span>
+                <span>
+                  Posse média:{" "}
+                  <strong className="font-mono tabular">
+                    {rankProfile.weightedOwnership}%
+                  </strong>
+                </span>
+              </div>
+              <p className="mb-2 text-sm text-text-muted">{rankProfile.verdict}</p>
+              {rankProfile.missingTemplate.length > 0 && (
+                <p className="text-sm text-warn">
+                  <strong>Template que não tens:</strong>{" "}
+                  {rankProfile.missingTemplate
+                    .map(
+                      (m) =>
+                        `${m.player.element.web_name} (${Math.round(m.player.ownershipPct)}%)`
+                    )
+                    .join(" · ")}
+                  .
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-6">
+            <SubHeading>Porquê cada jogador</SubHeading>
+            <PlayerTable players={starters} showReasons />
+          </div>
+        </Section>
+
+        {/* ================= 8. escolhas ================= */}
+        <Section
+          id="escolhas"
+          title="Melhores Escolhas"
+          eyebrow="Por posição, e diferenciais"
+        >
+          <div className="grid gap-6 lg:grid-cols-2">
+            {(
+              [
+                [1, "Guarda-Redes"],
+                [2, "Defesas"],
+                [3, "Médios"],
+                [4, "Avançados"],
+              ] as [number, string][]
+            ).map(([id, label]) => (
+              <div key={id}>
+                <SubHeading>{label}</SubHeading>
+                <PlayerTable players={byPos(id)} showReasons />
+              </div>
+            ))}
+          </div>
+          <div className="mt-6 border-t border-border pt-5">
+            <SubHeading>Diferenciais (menos de 10% de posse)</SubHeading>
+            <PlayerTable players={differentials} showReasons />
+          </div>
+        </Section>
+
+        {/* ================= 7. calendário ================= */}
+        <Section
+          id="calendario"
+          title="Calendário"
+          eyebrow="Modelo próprio, não o dígito 1-5 da FPL"
+          intro="Ataque = golos esperados da equipa por jogo. Defesa = probabilidade de clean sheet. Uma equipa pode ser boa aposta para os teus atacantes e má para os teus defesas, por isso os dois números aparecem separados."
+        >
+          <FixtureTicker
+            teams={bootstrap.teams}
+            ticker={ticker}
+            oddsActive={oddsActive}
+            strengthsUsable={strengthsUsable}
+          />
+
+          <div className="mt-6 border-t border-border pt-5">
+            <SubHeading>
+              Jornadas duplas e brancas — próximas {scheduleHorizon - fromEvent + 1}
+            </SubHeading>
+            {scheduleEvents.length === 0 ? (
+              <p className="text-sm text-text-muted">
+                Nenhuma jornada dupla ou em branco confirmada ainda. É normal no
+                início da época — reagendamentos só costumam ser confirmados
+                algumas semanas antes; esta secção preenche-se sozinha.
+              </p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {scheduleEvents.map((event) => {
+                  const bucket = anomaliesByEvent.get(event)!;
+                  return (
+                    <div
+                      key={event}
+                      className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-border px-3 py-2 text-sm"
+                    >
+                      <span className="font-display font-bold tracking-tight">
+                        GW{event}
+                      </span>
+                      {bucket.doubles.length > 0 && (
+                        <span className="text-success">
+                          Dupla: {bucket.doubles.join(", ")}
+                        </span>
+                      )}
+                      {bucket.blanks.length > 0 && (
+                        <span className="text-danger">
+                          Branca: {bucket.blanks.join(", ")}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </Section>
+
+        {/* ================= 9. mercado ================= */}
+        <Section
+          id="mercado"
+          title="Mercado"
+          eyebrow="Preços e disponibilidade"
+          intro="A FPL não publica o algoritmo real de mudança de preços. As previsões abaixo são estimativas a partir das transferências líquidas de hoje — úteis para decidires se vale a pena antecipar uma transferência, não garantias."
+        >
+          <div className="grid gap-6 lg:grid-cols-2">
+            <div>
+              <SubHeading>
+                <span className="text-success">Prováveis subidas</span>
+              </SubHeading>
+              {risers.length === 0 ? (
+                <p className="text-sm text-text-muted">Sem sinal forte de subida agora.</p>
+              ) : (
+                <div className="divide-y divide-border rounded-lg border border-border">
+                  {risers.map((r) => (
+                    <div
+                      key={r.element.id}
+                      className="flex items-center justify-between gap-2 px-3 py-2 text-sm"
+                    >
+                      <span>
+                        {r.element.web_name}{" "}
+                        <span className="text-xs text-text-muted">
+                          ({r.team.short_name})
+                        </span>
+                      </span>
+                      <span className="flex items-center gap-3 font-mono text-xs tabular text-text-muted">
+                        <span>£{r.priceM.toFixed(1)}m</span>
+                        <span className="font-semibold text-success">
+                          +{r.netTransfers.toLocaleString("pt-PT")}
+                        </span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div>
+              <SubHeading>
+                <span className="text-danger">Prováveis descidas</span>
+              </SubHeading>
+              {fallers.length === 0 ? (
+                <p className="text-sm text-text-muted">Sem sinal forte de descida agora.</p>
+              ) : (
+                <div className="divide-y divide-border rounded-lg border border-border">
+                  {fallers.map((r) => (
+                    <div
+                      key={r.element.id}
+                      className="flex items-center justify-between gap-2 px-3 py-2 text-sm"
+                    >
+                      <span>
+                        {r.element.web_name}{" "}
+                        <span className="text-xs text-text-muted">
+                          ({r.team.short_name})
+                        </span>
+                      </span>
+                      <span className="flex items-center gap-3 font-mono text-xs tabular text-text-muted">
+                        <span>£{r.priceM.toFixed(1)}m</span>
+                        <span className="font-semibold text-danger">
+                          {r.netTransfers.toLocaleString("pt-PT")}
+                        </span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-6 border-t border-border pt-5">
+            <SubHeading>Notícias e lesões</SubHeading>
+            {newsWatch.length === 0 ? (
+              <p className="text-sm text-text-muted">
+                Sem notas de lesão/dúvida/suspensão ativas neste momento.
+              </p>
+            ) : (
+              <div className="divide-y divide-border rounded-lg border border-border">
+                {newsWatch.map((n) => (
+                  <div
+                    key={n.element.id}
+                    className="flex items-start justify-between gap-3 px-3 py-2 text-sm"
+                  >
+                    <div className="min-w-0">
+                      <span className="font-medium">{n.element.web_name}</span>{" "}
+                      <span className="text-xs text-text-muted">
+                        ({n.team.short_name} · {n.ownershipPct.toFixed(1)}% posse)
+                      </span>
+                      {n.isRecent && (
+                        <span className="ml-2 rounded border border-[color-mix(in_srgb,var(--warn)_40%,var(--border))] bg-[color-mix(in_srgb,var(--warn)_18%,var(--surface))] px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-warn">
+                          recente
+                        </span>
+                      )}
+                      <p className="mt-0.5 text-xs text-text-muted">{n.news}</p>
+                    </div>
+                    <span className="whitespace-nowrap font-mono text-xs tabular text-text-muted">
+                      {n.chanceOfPlaying === null ? "—" : `${n.chanceOfPlaying}% jogo`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Section>
+
         {/* ================= 11. referência ================= */}
         <Section
           id="referencia"
@@ -1440,6 +1478,16 @@ export default async function Home() {
             vermelho lá em cima a mandar olhar para aqui. Pôr a canalização à
             frente do jogo foi exatamente a crítica que ele fez, e tinha
             razão. */}
+        <TierHeading label="Ferramentas e sistema" note="ligações e diagnóstico — só interessa quando algo falha" />
+        {/* ================= 5. a minha equipa ================= */}
+        <Section
+          id="minha-equipa"
+          title="A Minha Equipa na FPL"
+          eyebrow="Ligado ao teu Team ID"
+        >
+          <MyTeamPanel scored={scored} eventId={picksEvent} isPreseason={isPreseason} />
+        </Section>
+
         <Section id="sistema" title="Saúde do sistema">
           <AutomationPanel
             jobs={jobHealth}

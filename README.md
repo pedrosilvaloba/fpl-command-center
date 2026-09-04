@@ -90,6 +90,52 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.47 — a página passa a ter espinha
+
+Onze secções de topo (as "22" contadas antes incluíam sub-painéis), todas ao
+mesmo nível, numa lista plana. Misturavam três coisas diferentes sem o dizer:
+o que fazer antes do deadline, como correu a semana passada, e dados de
+consulta.
+
+E havia uma mentira discreta: **a barra de navegação listava as secções por
+uma ordem diferente da página.** "A Liga" antes de "Plantel Ideal" na barra,
+ao contrário na página. Uma barra que não corresponde à ordem real é pior do
+que não ter barra nenhuma.
+
+### Quatro camadas, e a barra é a página
+
+```
+DECIDIR      O Que Fazer · Shadow Team
+             o que fazer agora. É a razão de a app existir.
+
+PERCEBER     Revisão · Aprendizagem · A Liga
+             como correu, e o que o modelo aprendeu com isso.
+
+CONSULTAR    Plantel Ideal · Escolhas · Calendário · Mercado · Referência
+             dados de apoio, para quando quiseres investigar.
+
+SISTEMA      A Minha Equipa · Saúde do sistema
+             ligações e diagnóstico. Só interessa quando algo falha.
+```
+
+Duas secções mudaram de sítio por estarem no grupo errado: **A Minha Equipa**
+(um passo de ligação, feito uma vez) estava a meio da página entre a liga e o
+Shadow Team, e desceu para as ferramentas; **Aprendizagem** estava perdida no
+meio dos dados de consulta e subiu para junto da Revisão, que é a mesma
+pergunta — como está o modelo a portar-se.
+
+### E um teste que impede isto de voltar a divergir
+
+A ordem da barra e a ordem real das secções na página são agora comparadas
+diretamente: o teste lê os `id` do `page.tsx` pela ordem em que aparecem e
+exige que sejam exatamente os da barra, na mesma sequência. Verifica também
+que a decisão é a primeira secção e o diagnóstico a última.
+
+Foi assim que a divergência apareceu — duas listas mantidas à mão, uma
+esquecida. Agora não podem separar-se sem partir a suite.
+
+---
+
 ## Novo na v1.46 — o teto de plausibilidade não chegava ao número maior da página
 
 Consequência direta da v1.45, e encontrada ao verificar o deploy dela.
