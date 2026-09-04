@@ -90,6 +90,148 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.38 — porque é que o modelo queria vender o Gibbs-White
+
+### A medição que devia ter sido feita há quatro versões
+
+O dono da equipa reportou a mesma coisa quatro vezes: o modelo propunha
+vender jogadores que estavam a render. Calafiori, Bruno Fernandes,
+Gibbs-White, Horníček. Todas as vezes eu respondi com um remédio novo, e
+todas as vezes o sintoma voltou.
+
+Havia **três defesas** contra isto — encolhimento das estimativas, travão de
+ruído, viés de incumbência. A única forma honesta de arbitrar era medir
+quanta rotatividade elas impedem. A experiência: um universo de 600
+jogadores em que, dentro de cada posição, **todos têm exatamente o mesmo
+valor verdadeiro**. Qualquer troca vale zero pontos por construção, logo o
+número de trocas propostas mede diretamente quanto ruído o modelo persegue.
+
+```
+erro de estimativa      trocas propostas no wildcard
+     0.0 pts/jorn.               0 / 15
+     0.5 pts/jorn.              15 / 15
+     1.0 pts/jorn.              15 / 15
+     2.0 pts/jorn.              15 / 15
+```
+
+Meio ponto por jornada de ruído — muito menos do que a realidade — e o
+modelo reconstruía o plantel inteiro, para nada. **As três defesas não
+impediram uma única troca.**
+
+### Porque falharam, cada uma pela sua razão
+
+**1. `modelTrust` satura, e com ele todas as defesas.**
+`modelTrust = min(1, minutos/360)`: quatro jogos completos e chega a 1.0. A
+partir da jornada 4, todos os titulares tinham confiança total, o
+encolhimento passava a ser nulo e o travão de ruído passava a ser **zero**.
+As proteções desligavam-se sozinhas exatamente na semana em que as queixas
+começaram — e o comentário no código dizia-o em português claro sem ninguém
+reparar: *"com confiança total, o travão é zero e nada muda"*. Havia até um
+teste a afirmar isso como se fosse uma virtude.
+
+O erro é conceptual. `modelTrust` mede **que fração do número vem deste
+modelo em vez da estimativa da FPL** — não mede se o número está certo.
+Quatro jogos chegam para deixar de usar a estimativa de outra pessoa; não
+chegam nem de perto para saber o ritmo verdadeiro de um jogador. Uma
+quantidade estava a fazer dois trabalhos.
+
+**2. O encolhimento é uma transformação monótona.** Puxar toda a gente para
+a média da posição pelo mesmo fator não reordena ninguém. Muda os números e
+não pode mudar a escolha.
+
+**3. Meio ponto é decoração — e nem meio ponto era.** O viés de incumbência
+estava a ser somado *dentro* de um valor que depois é multiplicado por 0.12.
+O bónus que o código dizia ser de 0.5 pontos valia, no objetivo que o solver
+realmente maximiza, **seis centésimas de ponto**. Diluído oito vezes antes
+sequer de encontrar aquilo contra que devia proteger.
+
+### O que passa a existir
+
+Um único limiar, **derivado em vez de escolhido**: quanto melhor tem o
+jogador que entra de parecer, antes de valer a pena trocar.
+
+É o produto de duas coisas. A primeira é o **erro da comparação**: estimar o
+ritmo de um jogador a partir de n jornadas tem um erro que cai com √n e
+**nunca chega a zero**. A segunda é a assimetria que faz tudo isto morder —
+**o jogador que entra foi escolhido, o teu não foi**. O teu está na equipa
+por razões históricas, portanto a estimativa dele tem tanta probabilidade de
+estar alta como baixa. O candidato foi escolhido como um dos melhores de
+cerca de cem, portanto a estimativa dele é, em média, um dos erros mais
+lisonjeiros do lote. Comparar os dois como iguais favorece sistematicamente
+o estranho, e o tamanho desse favor é uma quantidade conhecida.
+
+```
+ 4 jornadas de evidência  →  8.0 pts em 5 jornadas
+10 jornadas               →  5.9 pts
+20 jornadas               →  4.4 pts
+38 jornadas               →  3.3 pts
+```
+
+Contra as 0.06 que lá estavam. É maior no início da época, quando o modelo
+sabe menos, desce com evidência real em vez de se desligar à quarta jornada,
+e nunca chega a zero — porque o modelo nunca tem o direito de acreditar que
+uma diferença de um ponto em cinco jornadas é real.
+
+### Verificado nos dois sentidos
+
+Isto é essencial: **"nunca trocar ninguém" passaria o teste acima com nota
+máxima.** Por isso há um segundo teste, com valores verdadeiros diferentes e
+o ganho verdadeiro conhecido por construção.
+
+```
+                        antes            depois
+verdade plana (0 real)  15/15 trocas     0/15 trocas
+plantel fraco           —                wildcard, +274 pts VERDADEIROS
+plantel médio           —                7 trocas, +75 pts verdadeiros
+plantel bom             —                manter, 0 trocas
+```
+
+Quanto melhor o plantel, menos o modelo lhe mexe. Que é, em uma linha, o que
+o dono da equipa andava a pedir há um mês.
+
+### Dois erros meus pelo caminho, ambos de unidades
+
+Vale a pena ficarem escritos. O objetivo do solver não está em pontos: mistura
+uma escala de cinco jornadas a 12% com uma escala de uma jornada a 88%. Um
+jogador que é T pontos-janela melhor melhora o objetivo em cerca de 0.40×T,
+não em T.
+
+Errei isto **duas vezes, em direções opostas**. Primeiro para menos (o bónus
+antigo, diluído a um oitavo). Depois para mais: a primeira versão desta
+correção somava o limiar em bruto e passava a exigir **22 pontos-janela** para
+autorizar qualquer transferência — congelava o plantel e partia uma dúzia de
+testes que verificam que melhorias reais continuam a acontecer. O fator é
+agora **derivado das próprias constantes** que definem o objetivo, para não
+poder voltar a divergir delas quando uma delas for afinada.
+
+### E continua a mostrar o que recusou
+
+Recusar sem mostrar é indistinguível de não ter opinião — que é exatamente
+como este projeto se meteu em sarilhos. Quando o limiar bloqueia a melhor
+troca, ela continua visível na lista, com a explicação e o número: *"esta é
+a melhor troca se o modelo ignorar a sua margem de erro; não é recomendada
+porque a diferença entre estes dois jogadores é menor do que o erro com que
+o modelo os estima nesta altura da época."*
+
+A barra passa também a estar **sempre à vista** no painel de transferências.
+Antes só aparecia dentro do aviso de confiança baixa — ou seja, desaparecia a
+partir da jornada 4, precisamente quando passou a ser a coisa que decidia
+tudo.
+
+### O que isto NÃO resolve
+
+A constante que domina tudo isto (o erro de estimativa por jornada) é um
+**prior declarado**, escolhido varrendo-o contra as duas experiências, não uma
+medição. O `lib/calibration.ts` existe para o substituir por um número
+medido, e precisa de jornadas que esta época ainda não tem. Até lá está
+etiquetado como prior em todos os sítios onde aparece.
+
+E o mecanismo protege até ao nível de ruído que o prior assume. Se o erro
+real for maior do que 0.8 pontos por jornada à jornada 4, alguma rotatividade
+volta. Isso está medido e dito, não escondido.
+
+---
+
 ## Novo na v1.37 — o visto verde para uma tarefa que não fez nada
 
 ### O defeito voltou a aparecer, com melhor tipografia

@@ -56,6 +56,9 @@ import {
   shrunkForSelection,
   selectionReliability,
   SELECTION_RELIABILITY_FLOOR,
+  retentionThreshold,
+  rateErrorPerGw,
+  selectionInflation,
 } from "../lib/selection";
 import {
   simulateLeague,
@@ -2055,10 +2058,20 @@ function testWildcardIsNotBurnedEarly() {
   // identical evidence must NOT trigger it. This is exactly what the live app
   // got wrong in gameweek 2: it recommended burning a wildcard on a distance
   // measurement that was mostly noise.
-  // A worthwhile but not overwhelming gap: 20 window points across five
-  // upgrades. Comfortably over the settled-season bar of 12, comfortably
-  // under the gameweek-2 bar of 32.
-  const { owned, scored } = mkTransferPool([4, 4, 4, 4, 4, 4]);
+  // Six upgrades of 8 window points each (1.6 pts/jornada). Above the
+  // retention threshold once the season has run (4.5 pts at jornada 20),
+  // below it in jornada 2 (10.6 pts) — see lib/selection.ts.
+  //
+  // ESCALA REVISTA EM v1.38. Este teste usava ganhos de 4 pontos, e passava
+  // porque nada impedia o modelo de agir sobre diferenças de 0.8 pontos por
+  // jornada. Depois de o limiar de retenção passar a ser derivado do erro de
+  // estimativa, uma diferença dessas é indistinguível de zero em qualquer
+  // altura da época — e o teste deixou de medir o que dizia medir. Foi
+  // reescalado para ganhos que são REALMENTE detetáveis a meio da época, o
+  // que é a única forma de continuar a testar a propriedade original: o mesmo
+  // plantel, a mesma diferença, e uma resposta diferente conforme o chip
+  // valha mais guardado do que gasto.
+  const { owned, scored } = mkTransferPool([8, 8, 8, 8, 8, 8]);
 
   const early = planTransfers(scored, mkState(owned, 1), { currentEvent: 2 });
   const settled = planTransfers(scored, mkState(owned, 1), { currentEvent: 20 });
@@ -2074,8 +2087,16 @@ function testWildcardIsNotBurnedEarly() {
     `ganho ${early.wildcard?.gain}, distância ${early.wildcard?.distance}`
   );
   check(
-    "a distância medida é a mesma nos dois casos — o que muda é o preço do chip",
-    early.wildcard?.distance === settled.wildcard?.distance
+    // v1.38 mudou isto de propósito e vale a pena dizer porquê. Antes, a
+    // distância ao ideal era a mesma em qualquer jornada e só o PREÇO do chip
+    // mudava. Agora o próprio "ideal" depende da evidência disponível: cedo
+    // na época, uma diferença de 1.6 pts/jornada não é distinguível de zero,
+    // por isso o ideal É o plantel atual e a distância é genuinamente menor.
+    // Isso é mais honesto do que medir uma distância grande e depois
+    // desculpá-la com um prémio.
+    "cedo, a distância ao ideal é MENOR — o ideal deixa de incluir diferenças que são ruído",
+    (early.wildcard?.distance ?? 0) < (settled.wildcard?.distance ?? 0),
+    `cedo ${early.wildcard?.distance}, assente ${settled.wildcard?.distance}`
   );
   check(
     "e cedo o plano de wildcard nem sequer entra na lista de opções",
@@ -2083,14 +2104,21 @@ function testWildcardIsNotBurnedEarly() {
       settled.plans.some((p) => p.key === "wildcard")
   );
   check(
-    "o texto explica porque está a ser guardado em vez de apenas o esconder",
-    (early.wildcard?.text ?? "").includes("ruído"),
-    early.wildcard?.text?.slice(0, 80)
+    // v1.38: a redação mudou porque a razão mudou. Antes dizia "isto é
+    // sobretudo ruído"; agora diz quantos jogadores trocaria se ignorasse a
+    // margem de erro e a partir de que diferença duas estimativas são
+    // sequer distinguíveis. Continua a ser a mesma exigência — explicar em
+    // vez de esconder — mas com um número em vez de um adjetivo.
+    "o texto explica porque está a ser guardado, com o limiar concreto",
+    /ruído|margem de erro/.test(early.wildcard?.text ?? "") &&
+      /\d/.test(early.wildcard?.text ?? ""),
+    early.wildcard?.text?.slice(0, 120)
   );
 
   // And the rule must not collapse into "never wildcard early". A gap big
-  // enough is a gap big enough whenever it appears.
-  const huge = mkTransferPool([8, 8, 8, 8, 8, 8]);
+  // enough is a gap big enough whenever it appears. 25 window points a player
+  // is five points a gameweek — far outside any plausible estimation error.
+  const huge = mkTransferPool([25, 25, 25, 25, 25, 25]);
   const earlyButHuge = planTransfers(huge.scored, mkState(huge.owned, 1), {
     currentEvent: 2,
   });
@@ -3586,27 +3614,52 @@ function testApiTokenCheck() {
 // ---------------------------------------------------------------------
 
 function testNoiseFloorScalesWithConfidence() {
+  // v1.38 — ESTE TESTE PROTEGIA O BUG.
+  //
+  // A versão anterior afirmava, textualmente, "com confiança total, não há
+  // travão nenhum" — e passava. Era a descrição exata do defeito: como
+  // `modelTrust = min(1, minutos/360)` chega a 1.0 ao fim de quatro jogos
+  // completos, a partir da jornada 4 TODOS os titulares tinham confiança
+  // total e o travão era exatamente zero. O modelo passava a poder recomendar
+  // qualquer ganho positivo, por mais pequeno que fosse, que é precisamente o
+  // "manda vender o Gibbs-White" que o dono reportou.
+  //
+  // O teste não estava errado sobre o código; estava errado sobre o que o
+  // código devia fazer. Reescrito para trancar a propriedade certa.
   check(
-    "sem confiança nenhuma, é preciso um ganho grande",
-    noiseFloor(0) === 3,
-    `${noiseFloor(0)}`
+    "o travão NUNCA é zero, por muito confiante que o modelo esteja",
+    noiseFloor(1, 37) > 0,
+    `${noiseFloor(1, 37)}`
   );
   check(
-    "com confiança total, não há travão nenhum",
-    noiseFloor(1) === 0
+    "e é maior no início da época, quando o modelo sabe menos",
+    noiseFloor(1, 1) > noiseFloor(1, 20) && noiseFloor(1, 20) > noiseFloor(1, 37),
+    `${noiseFloor(1, 1)} > ${noiseFloor(1, 20)} > ${noiseFloor(1, 37)}`
   );
   check(
-    "na jornada 2 (25% de confiança) o travão fica perto de 2.3 pts",
-    Math.abs(noiseFloor(0.25) - 2.25) < 0.01,
-    `${noiseFloor(0.25)}`
+    "minutos escassos ainda apertam o travão, mas já não o podem soltar",
+    noiseFloor(0.25, 10) > noiseFloor(1, 10),
+    `${noiseFloor(0.25, 10)} vs ${noiseFloor(1, 10)}`
   );
   check(
-    "o travão desce à medida que o modelo ganha o direito a ter opinião",
-    noiseFloor(0.25) > noiseFloor(0.5) && noiseFloor(0.5) > noiseFloor(0.9)
+    // Um plano com mais trocas acumula mais incerteza — mas como as
+    // comparações são independentes, cresce com sqrt(m), não com m.
+    "um plano com mais trocas tem de ganhar mais, mas menos que proporcional",
+    noiseFloor(1, 10, 4) > noiseFloor(1, 10, 1) &&
+      noiseFloor(1, 10, 4) < noiseFloor(1, 10, 1) * 4,
+    `1 troca ${noiseFloor(1, 10, 1)}, 4 trocas ${noiseFloor(1, 10, 4)}`
   );
   check(
     "valores absurdos são contidos, nunca produzem travões negativos",
-    noiseFloor(-5) === 3 && noiseFloor(99) === 0
+    noiseFloor(-5, -5) > 0 && noiseFloor(99, 99) > 0,
+    `${noiseFloor(-5, -5)} / ${noiseFloor(99, 99)}`
+  );
+  check(
+    // O limite superior existe para o travão não colapsar em "nunca trocar
+    // ninguém", que seria o mesmo defeito com o sinal trocado.
+    "e o travão tem um teto — não pode proibir qualquer transferência",
+    noiseFloor(1, 0) < 12,
+    `${noiseFloor(1, 0)}`
   );
 }
 
@@ -3647,17 +3700,53 @@ function testMarginalTransferIsRefusedEarlyInTheSeason() {
     `${refused?.requiredEdge}`
   );
 
-  // Mesma troca, mas com a época avançada e o modelo já com provas dadas.
+  // A MESMA propriedade, medida de outra maneira em v1.38.
+  //
+  // A versão anterior pegava nesta troca marginal (0.9 pts em cinco jornadas)
+  // e exigia que, com a época avançada, ela passasse a ser aceitável. Isso só
+  // era verdade porque o travão chegava a ZERO com confiança total — o próprio
+  // defeito. Uma diferença de 0.9 pontos em cinco jornadas não é distinguível
+  // de zero em jornada nenhuma, e o modelo não deve agir sobre ela nem em maio.
+  //
+  // O que a evidência deve mesmo fazer é BAIXAR A BARRA. Isso testa-se
+  // diretamente, e depois com uma troca de tamanho intermédio que falha cedo
+  // e passa tarde: é a propriedade original, sem a conclusão errada.
   const late = scored.map((p) => withTrust(p, 1));
   const lateOwned = owned.map((p) => withTrust(p, 1));
   const lateAdvice = planTransfers(late, mkState(lateOwned, 1), {
     currentEvent: 20,
   });
+  const earlyEdge = refused?.requiredEdge ?? 0;
+  const lateEdge =
+    lateAdvice.plans.find((p) => p.key !== "manter")?.requiredEdge ?? noiseFloor(1, 19, 1);
   check(
-    "com o modelo já confiante, a mesma troca volta a ser aceitável",
-    lateAdvice.recommended?.key !== "manter" ||
-      (lateAdvice.plans.find((p) => p.key !== "manter")?.requiredEdge ?? 1) === 0,
+    "a barra desce à medida que a época avança, mas nunca chega a zero",
+    lateEdge < earlyEdge && lateEdge > 0,
+    `cedo ${earlyEdge}, tarde ${lateEdge}`
+  );
+  check(
+    "e uma troca de 0.9 pts em cinco jornadas continua recusada mesmo tarde",
+    lateAdvice.recommended?.key === "manter",
     `recomendado: ${lateAdvice.recommended?.key}`
+  );
+
+  // Uma troca de tamanho intermédio: ruído em agosto, vantagem real em abril.
+  const mid = mkTransferPool([7]);
+  const midTrust = (gw: number) =>
+    planTransfers(
+      mid.scored.map((p) => withTrust(p, 1)),
+      mkState(
+        mid.owned.map((p) => withTrust(p, 1)),
+        5
+      ),
+      { currentEvent: gw }
+    );
+  const midEarly = midTrust(2);
+  const midLate = midTrust(32);
+  check(
+    "a mesma troca de 7 pts é recusada na jornada 2 e aceite na jornada 32",
+    midEarly.recommended?.key === "manter" && midLate.recommended?.key !== "manter",
+    `cedo ${midEarly.recommended?.key}, tarde ${midLate.recommended?.key}`
   );
 
   // Uma melhoria GRANDE tem de passar mesmo com pouca confiança — o travão
@@ -4140,22 +4229,25 @@ function testWildcardWaitsForTheInternationalBreak() {
   // Um plantel longe do ideal, calibrado para o ganho cair ENTRE as duas
   // barras: sem paragem o wildcard é aconselhado, com paragem já não.
   // Sem essa calibração o teste era vazio — passava com e sem a correção.
-  const owned: ScoredPlayer[] = [];
-  const shape: [number, number][] = [[1, 2], [2, 5], [3, 5], [4, 3]];
-  let id = 1;
-  let club = 0;
-  for (const [type, count] of shape) {
-    for (let i = 0; i < count; i++) {
-      owned.push(mkSim(id++, { teamId: (club++ % 20) + 1, type, epNext: 3, price: 6 }));
-    }
-  }
-  const market: ScoredPlayer[] = [];
-  for (const [type] of shape) {
-    for (let i = 0; i < 8; i++) {
-      market.push(mkSim(id++, { teamId: (club++ % 20) + 1, type, epNext: 3.3, price: 6 }));
-    }
-  }
-  const scored = [...owned, ...market];
+  //
+  // RECALIBRADO EM v1.38. A construção anterior dava a TODO o mercado uma
+  // vantagem pequena sobre o plantel, o que produzia um ganho enorme (77+
+  // pontos) espalhado por quinze trocas minúsculas. Depois de o limiar de
+  // retenção passar a exigir que cada troca INDIVIDUAL seja distinguível de
+  // zero, esse desenho deixou de funcionar: ou todas as trocas passavam a
+  // barra e o ganho disparava para lá das duas, ou nenhuma passava e o ganho
+  // era zero. Em nenhum dos casos o teste media o prémio da paragem.
+  //
+  // Agora são seis melhorias REAIS de 4 pontos cada, testadas na jornada 30.
+  // A jornada importa: o sinal de wildcard exige uma distância de pelo menos
+  // cinco jogadores, e cada uma dessas cinco trocas tem de ser maior do que o
+  // limiar de retenção. Na jornada 12 o limiar é 5.7 pontos, logo cinco
+  // trocas válidas valem no mínimo 28 — acima das DUAS barras, e a diferença
+  // entre elas deixa de ser observável. Na jornada 30 o limiar já desceu para
+  // 3.8, e seis trocas de 4 pontos somam 20, que cai exatamente entre as duas
+  // barras (12 sem paragem, 22 com). O teste voltou a ter uma janela onde o
+  // prémio da paragem é a única coisa que decide.
+  const { owned, scored } = mkTransferPool([4, 4, 4, 4, 4, 4]);
   const state = mkState(owned, 1);
 
   const noBreak = {
@@ -4164,10 +4256,10 @@ function testWildcardWaitsForTheInternationalBreak() {
     knownDoubleEvents: [] as number[],
     knownBlankEvents: [] as number[],
   };
-  const withBreak = { ...noBreak, breakAfterEvents: [12], breakImminent: true };
+  const withBreak = { ...noBreak, breakAfterEvents: [30], breakImminent: true };
 
-  const a = planTransfers(scored, state, { currentEvent: 12, calendar: noBreak });
-  const b = planTransfers(scored, state, { currentEvent: 12, calendar: withBreak });
+  const a = planTransfers(scored, state, { currentEvent: 30, calendar: noBreak });
+  const b = planTransfers(scored, state, { currentEvent: 30, calendar: withBreak });
 
   check("o sinal de wildcard é calculado nos dois casos", !!a.wildcard && !!b.wildcard);
   check(
@@ -4192,7 +4284,7 @@ function testWildcardWaitsForTheInternationalBreak() {
   const unsure = scored.map((p) => ({ ...p, modelTrust: 0.4 }));
   const unsureOwned = owned.map((p) => ({ ...p, modelTrust: 0.4 }));
   const c = planTransfers(unsure, mkState(unsureOwned, 1), {
-    currentEvent: 12,
+    currentEvent: 30,
     calendar: noBreak,
   });
   check(
@@ -4201,9 +4293,17 @@ function testWildcardWaitsForTheInternationalBreak() {
     `ganho ${c.wildcard?.gain}, confiança baixa`
   );
   check(
-    "e o ganho continua a ser o mesmo — mudou a barra, não a medição",
-    Math.abs((c.wildcard?.gain ?? 0) - (a.wildcard?.gain ?? 0)) < 1e-9,
-    `${c.wildcard?.gain} vs ${a.wildcard?.gain}`
+    // v1.38 mudou isto, e para melhor. A versão anterior exigia que o ganho
+    // medido fosse IDÊNTICO com e sem confiança — "mudou a barra, não a
+    // medição" — e passava apenas porque o encolhimento por confiança não
+    // fazia absolutamente nada (era uma transformação monótona, ver
+    // lib/selection.ts). Agora que a confiança baixa encolhe mesmo as
+    // estimativas em direção à média da posição, a MEDIÇÃO também desce, e
+    // deve descer: com números em que o modelo não acredita, a distância ao
+    // ideal é menor porque o ideal é menos distinguível do que já tens.
+    "com pouca confiança o próprio ganho medido encolhe, não só a barra",
+    (c.wildcard?.gain ?? 0) < (a.wildcard?.gain ?? 0),
+    `${c.wildcard?.gain} com pouca confiança vs ${a.wildcard?.gain} com confiança`
   );
 }
 
@@ -4938,6 +5038,211 @@ testCalibrationRotatesInsteadOfMeasuringTheSameFourForever();
 testCronRefusesWhenNoSecretIsConfigured();
 testTheScheduleIsRealAndPointsAtARealRoute();
 testTheSamplingRuleExistsExactlyOnce();
+
+// ---------------------------------------------------------------------
+// v1.38 — A MALDIÇÃO DO VENCEDOR, MEDIDA EM VEZ DE ARGUMENTADA.
+//
+// Reportado quatro vezes pelo dono da equipa, sempre com razão: "propõe
+// vender o Gibbs-White, que fez duas boas jornadas"; "o Horníček, que tem
+// feito muitos pontos"; "não entendo estas sugestões".
+//
+// Existiam TRÊS defesas contra isto (encolhimento, travão de ruído, viés de
+// incumbência) e a única forma honesta de arbitrar era medir quanta
+// rotatividade elas impedem. Estes dois testes são essa medição, e a razão
+// de serem dois é que sozinho nenhum deles serve: o primeiro passa com nota
+// máxima num modelo que nunca troca ninguém, e o segundo passa com nota
+// máxima num modelo que troca toda a gente.
+// ---------------------------------------------------------------------
+
+/** Gerador determinístico — o resultado tem de ser reprodutível. */
+function seeded(start: number) {
+  let seed = start;
+  return () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+}
+
+function mkNoisyPool(opts: {
+  seed: number;
+  trueSpread: number;
+  noiseSd: number;
+  /** Onde no plantel verdadeiro estão os jogadores que já tens. */
+  quality: "mau" | "medio" | "bom";
+}) {
+  const rnd = seeded(opts.seed);
+  const gauss = () => Math.sqrt(-2 * Math.log(rnd() + 1e-12)) * Math.cos(2 * Math.PI * rnd());
+  const base: Record<number, number> = { 1: 3.4, 2: 3.8, 3: 4.4, 4: 4.6 };
+  const trueEp = new Map<number, number>();
+  const scored: ScoredPlayer[] = [];
+  let id = 1;
+  for (let i = 0; i < 600; i++) {
+    const type = (i % 4) + 1;
+    const price = type === 1 ? 4.5 : type === 2 ? 5.0 : type === 3 ? 6.5 : 7.0;
+    const truth = Math.max(0.5, base[type] + gauss() * opts.trueSpread);
+    const estimate = Math.max(0.2, truth + gauss() * opts.noiseSd);
+    const pid = id++;
+    trueEp.set(pid, truth);
+    scored.push(
+      mkSim(pid, { teamId: (i % 20) + 1, type, epNext: estimate, price, own: (i % 60) + 1 })
+    );
+  }
+  const perClub = new Map<number, number>();
+  const owned: ScoredPlayer[] = [];
+  for (const [type, want] of [[1, 2], [2, 5], [3, 5], [4, 3]] as [number, number][]) {
+    let taken = 0;
+    const inPos = scored
+      .filter((q) => q.element.element_type === type)
+      .sort((a, b) => (trueEp.get(a.element.id) ?? 0) - (trueEp.get(b.element.id) ?? 0));
+    const start =
+      opts.quality === "mau"
+        ? 0
+        : opts.quality === "medio"
+          ? Math.floor(inPos.length * 0.55)
+          : Math.floor(inPos.length * 0.88);
+    for (const p of inPos.slice(start)) {
+      if (taken >= want) break;
+      const n = perClub.get(p.team.id) ?? 0;
+      if (n >= 3) continue;
+      perClub.set(p.team.id, n + 1);
+      owned.push(p);
+      taken++;
+    }
+  }
+  return { scored, owned, trueEp };
+}
+
+function testPureNoiseProducesNoTransfers() {
+  // Dentro de cada posição TODOS os jogadores têm o MESMO valor verdadeiro.
+  // Qualquer troca que o modelo proponha vale exatamente zero pontos, por
+  // construção. O número de trocas mede diretamente quanto ruído persegue.
+  //
+  // MEDIDO ANTES DA CORREÇÃO: com apenas 0.5 pontos por jornada de ruído —
+  // muito menos do que a realidade — o modelo reconstruía 15 dos 15
+  // jogadores. As três defesas não impediram nenhuma troca.
+  for (const noiseSd of [0.3, 0.5, 0.8]) {
+    const { scored, owned } = mkNoisyPool({
+      seed: 12345,
+      trueSpread: 0,
+      noiseSd,
+      quality: "medio",
+    });
+    const advice = planTransfers(scored, mkState(owned, 1), { currentEvent: 4 });
+    const wc = advice.plans.find((p) => p.key === "wildcard");
+    check(
+      `com ${noiseSd} pts/jornada de puro ruído, o wildcard não troca ninguém`,
+      (wc?.moves.length ?? 0) === 0,
+      `${wc?.moves.length ?? 0} trocas propostas`
+    );
+    check(
+      `e o plano recomendado é manter (ruído ${noiseSd})`,
+      advice.recommended?.key === "manter",
+      `${advice.recommended?.key}`
+    );
+  }
+}
+
+function testRealDifferencesStillProduceTransfers() {
+  // O TESTE INVERSO, sem o qual "nunca trocar ninguém" passaria o teste
+  // acima com nota máxima. Aqui os valores verdadeiros diferem mesmo, e o
+  // ganho VERDADEIRO das trocas é conhecido por construção — mede-se o que
+  // as trocas realmente valem, não o que o modelo julga que valem.
+  const seen: Record<string, number> = {};
+  for (const quality of ["mau", "medio", "bom"] as const) {
+    const { scored, owned, trueEp } = mkNoisyPool({
+      seed: 999,
+      trueSpread: 1.2,
+      noiseSd: 1.0,
+      quality,
+    });
+    const advice = planTransfers(scored, mkState(owned, 1), { currentEvent: 4 });
+    const moves = advice.recommended?.moves ?? [];
+    const trueGain = moves.reduce(
+      (s, m) =>
+        s + ((trueEp.get(m.in.element.id) ?? 0) - (trueEp.get(m.out.element.id) ?? 0)) * 5,
+      0
+    );
+    seen[quality] = moves.length;
+    check(
+      `plantel "${quality}": as trocas propostas ganham pontos VERDADEIROS`,
+      trueGain >= 0,
+      `${moves.length} trocas, ${trueGain.toFixed(1)} pts verdadeiros`
+    );
+  }
+  check(
+    "um plantel fraco é reconstruído a sério",
+    seen.mau >= 8,
+    `${seen.mau} trocas`
+  );
+  check(
+    // A propriedade que o dono da equipa andava a pedir, em uma linha: quanto
+    // melhor o plantel, menos o modelo lhe mexe.
+    "e quanto melhor o plantel, menos o modelo lhe mexe",
+    seen.mau > seen.medio && seen.medio >= seen.bom,
+    `mau ${seen.mau}, médio ${seen.medio}, bom ${seen.bom}`
+  );
+}
+
+function testTheProtectionsNoLongerSwitchThemselvesOff() {
+  // A CAUSA RAIZ, trancada diretamente.
+  //
+  // `modelTrust = min(1, minutos/360)` chega a 1.0 ao fim de quatro jogos
+  // completos. Todas as defesas estavam construídas sobre ele, por isso
+  // desligavam-se sozinhas na jornada 4 — exatamente a semana em que as
+  // queixas começaram. O limiar tem de depender da EVIDÊNCIA, que continua a
+  // crescer toda a época, e não da confiança, que satura.
+  check(
+    "o limiar continua a descer muito depois de os minutos saturarem",
+    retentionThreshold(4, 5) > retentionThreshold(12, 5) &&
+      retentionThreshold(12, 5) > retentionThreshold(30, 5),
+    `${retentionThreshold(4, 5)} > ${retentionThreshold(12, 5)} > ${retentionThreshold(30, 5)}`
+  );
+  check(
+    "e nunca chega a zero, nem no fim da época",
+    retentionThreshold(37, 5) > 1,
+    `${retentionThreshold(37, 5)}`
+  );
+  check(
+    "o erro de estimativa cai com a raiz da evidência, e nunca desaparece",
+    rateErrorPerGw(3) > rateErrorPerGw(15) && rateErrorPerGw(37) > 0
+  );
+  check(
+    // Se o viés de seleção fosse zero, o limiar seria zero e voltávamos ao
+    // princípio. É esta assimetria — o desafiante foi escolhido, o teu
+    // jogador não — que faz o mecanismo funcionar.
+    "e o viés de seleção é o que faz o limiar existir",
+    selectionInflation(15, 90) > 1,
+    `${selectionInflation(15, 90)}`
+  );
+  check(
+    "escolher menos jogadores de um mercado maior infla mais cada escolha",
+    selectionInflation(5, 200) > selectionInflation(60, 90)
+  );
+}
+
+function testTheRefusedMoveIsStillShown() {
+  // Recusar sem mostrar é indistinguível de não ter opinião — que é como
+  // este projeto se meteu em sarilhos. Quando o limiar bloqueia a melhor
+  // troca, ela tem de continuar visível, com a explicação e o número.
+  // 5 pontos-janela: acima do que uma transferência livre custa em valor de
+  // opção (por isso o solver SEM o limiar fá-la-ia), abaixo do limiar de
+  // retenção na jornada 4 (8.0 pts) — a janela exata onde a recusa acontece.
+  const { owned, scored } = mkTransferPool([5]);
+  const advice = planTransfers(scored, mkState(owned, 1), { currentEvent: 4 });
+  check("a troca marginal não é recomendada", advice.recommended?.key === "manter");
+  const shown = advice.plans.find((p) => p.key !== "manter");
+  check("mas continua visível na lista de planos", !!shown && shown.moves.length > 0);
+  check(
+    "e diz que a diferença é menor do que o erro com que é medida",
+    !!shown && /erro|ruído/.test(shown.rationale),
+    shown?.rationale.slice(0, 90)
+  );
+}
+
+testPureNoiseProducesNoTransfers();
+testRealDifferencesStillProduceTransfers();
+testTheProtectionsNoLongerSwitchThemselvesOff();
+testTheRefusedMoveIsStillShown();
 
 report("regressão");
 const { passed, failed } = counts();

@@ -167,10 +167,30 @@ function PlanCard({
             Confiança do modelo: {Math.round(plan.confidence * 100)}%
           </strong>{" "}
           — o resto vem da estimativa da própria FPL, que é quase igual para
-          toda a gente nesta altura da época. Por isso este plano só é
-          recomendado se ganhar mais de{" "}
-          <strong className="text-text">{plan.requiredEdge.toFixed(1)} pts</strong> sobre
-          não fazer nada.
+          toda a gente nesta altura da época.
+        </p>
+      )}
+
+      {/* THE BAR, ALWAYS VISIBLE, NOT ONLY WHEN CONFIDENCE IS LOW.
+          It used to appear only inside the low-confidence warning — which,
+          because `modelTrust` saturates after four full games, meant it
+          disappeared from gameweek four onward, exactly when the owner started
+          asking why the model wanted to sell players who were doing well. The
+          number that decides the answer should never be the hidden one. */}
+      {plan.key !== "manter" && plan.requiredEdge > 0 && (
+        <p className="mb-2 font-mono text-[11px] tabular text-text-muted">
+          barra para este plano:{" "}
+          <strong className="text-text">
+            +{plan.requiredEdge.toFixed(1)} pts
+          </strong>{" "}
+          sobre não fazer nada
+          {plan.netGainVsHold < plan.requiredEdge && (
+            <>
+              {" "}
+              · este ganha {plan.netGainVsHold >= 0 ? "+" : ""}
+              {plan.netGainVsHold.toFixed(1)}, por isso não é recomendado
+            </>
+          )}
         </p>
       )}
       <p className="text-xs leading-relaxed text-text-muted">{plan.rationale}</p>

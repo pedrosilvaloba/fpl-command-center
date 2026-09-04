@@ -7,7 +7,14 @@ import {
   shrunkForSelection,
   implausibleXiWarning,
   decisionGain,
+  retentionThreshold,
+  rateErrorPerGw,
 } from "./selection";
+
+/** The horizon every "window" number in this file is measured over. It was
+ * the literal 5 in eight different places, which is how a horizon quietly
+ * becomes two different horizons. */
+export const WINDOW_GAMEWEEKS = 5;
 import { strategicValue, strategicValueNext } from "./optimizer";
 import { HIT_COST_POINTS, type SquadState } from "./squadstate";
 
@@ -137,27 +144,77 @@ const NOISE_FLOOR_MAX_POINTS = 3;
 const MAX_POINTS_SACRIFICE_PER_MOVE = 2;
 
 /**
- * INCUMBENCY — a small bonus for players you already own.
+ * INCUMBENCY — how much better a challenger must look before he displaces a
+ * player you already own.
  *
  * The Wildcard plan is built by solving for the best squad from scratch and
- * then diffing it against the current one. That means any player whose
- * replacement is better by a hundredth of a point gets churned, and a
- * fourteen-transfer rebuild full of near-ties is the result. Reported from
- * production: a Wildcard that moved Gibbs-White and Horníček, both playing
- * well, for no visible reason.
+ * then diffing it against the current one, so any player whose replacement
+ * looks better by a hundredth of a point gets churned. Reported from
+ * production, twice: a Wildcard that moved Gibbs-White and Horníček, both
+ * playing well, for no visible reason.
  *
- * Keeping a player you already own is genuinely worth something the model
- * cannot otherwise see. You know how he is being used. He carries no
- * settling-in risk, no price-change risk on the way in, and no chance that
- * the model's read on the incoming player is simply wrong — model error is
- * the largest single term in any of these comparisons, and it applies to the
- * newcomer, not to the man in your squad.
+ * v1.37 answered this with a flat 0.5 points and the reasoning that it
+ * "settles ties toward stability". THAT WAS MEASURED IN v1.38 AND IT SETTLED
+ * NOTHING. On a pool where every player within a position has identical true
+ * value — so every possible transfer is worth exactly zero — half a point of
+ * incumbency let the model churn 15 of 15 players at just half a point per
+ * gameweek of estimation noise. The bonus was a tenth the width of the noise
+ * it was meant to absorb.
  *
- * Half a point over a five-gameweek window is deliberately small: it settles
- * ties and near-ties toward stability and changes nothing else. A genuine
- * upgrade still goes through.
+ * It is now DERIVED rather than chosen: the error in comparing two players
+ * over the window, times how much a chosen newcomer's estimate is inflated by
+ * the mere fact of having been chosen. See `retentionThreshold` in
+ * lib/selection.ts, which also explains why your own player's estimate does
+ * not carry that inflation and the challenger's does.
+ *
+ * It is largest early in the season, when the model knows least, and decays
+ * with real evidence — 6.6 points at four gameweeks played, 3.2 by gameweek
+ * twenty, 2.4 by the end. It never reaches zero, because the model is never
+ * entitled to believe a one-point difference over five gameweeks is real.
+ *
+ * Measured after the change, on the same flat-truth pool: 0 of 15 churned at
+ * every noise level, and — the check that matters just as much — a genuinely
+ * weak squad still gets a wildcard worth +256 TRUE points, while a strong one
+ * is told to hold.
  */
-const INCUMBENCY_BONUS = 0.5;
+
+/**
+ * Converts a threshold expressed in WINDOW POINTS into the units the solver's
+ * objective is actually denominated in.
+ *
+ * THE UNIT BUG, WHICH BIT TWICE IN OPPOSITE DIRECTIONS.
+ *
+ * The objective is not points. It is
+ *
+ *     valueSquad × BENCH_WEIGHT  +  valueXi × (1 − BENCH_WEIGHT)
+ *
+ * where `valueSquad` is on a five-gameweek scale and `valueXi` is on a
+ * NEXT-GAMEWEEK scale. Two different horizons, deliberately, and mixed by
+ * weight. A player who is genuinely T window-points better is T/W better in
+ * the NEXT gameweek, so he improves `valueXi` by
+ *
+ *     T/W  +  FUTURE_DISCOUNT × T × (1 − 1/W)
+ *
+ * and the objective as a whole by about 0.40 × T — not by T. A threshold
+ * added raw therefore demands roughly two and a half times what it claims.
+ *
+ * THIS WAS GOT WRONG TWICE, IN OPPOSITE DIRECTIONS, WHICH IS THE POINT.
+ * The old incumbency bonus lived inside `valueSquad`, so BENCH_WEIGHT (0.12)
+ * multiplied it and the advertised half point was worth six hundredths. The
+ * first version of this fix added the new threshold raw, so it demanded
+ * around twenty-two window points before sanctioning any transfer at all —
+ * it froze the squad solid and broke a dozen tests that check real upgrades
+ * still happen. The same mistake both times: mixing units, in a file that
+ * mixes two horizons on purpose.
+ *
+ * The factor is therefore DERIVED from the very constants that define the
+ * objective, so it cannot drift away from them when one of them is tuned.
+ */
+export function retentionInObjectiveUnits(windowPoints: number): number {
+  const perGwShare = 1 / WINDOW_GAMEWEEKS;
+  const xiShare = perGwShare + FUTURE_DISCOUNT * (1 - perGwShare);
+  return windowPoints * (BENCH_WEIGHT + (1 - BENCH_WEIGHT) * xiShare);
+}
 
 /** Moves in a plan that give up more real expected points than the cap. */
 export function costlyMoves(plan: TransferPlan): TransferMove[] {
@@ -180,10 +237,50 @@ export function planConfidence(plan: TransferPlan): number {
   return involved.reduce((s, p) => s + trustOf(p), 0) / involved.length;
 }
 
-/** How much a plan must beat holding by, given its confidence. */
-export function noiseFloor(confidence: number): number {
+/**
+ * How much a plan must beat holding by before it can be recommended.
+ *
+ * WHAT THIS USED TO BE, AND WHY IT WAS WORSE THAN NOTHING.
+ *
+ *     noiseFloor(confidence) = NOISE_FLOOR_MAX_POINTS * (1 - confidence)
+ *
+ * with `confidence` the mean `modelTrust` of the players being moved. Since
+ * `modelTrust = min(1, minutes / 360)`, every regular starter reaches 1.0
+ * after four full games — so from gameweek four the floor was EXACTLY ZERO
+ * and any positive gain, however small, could be recommended. The comment
+ * above even said so out loud: "at full confidence the floor is zero and
+ * nothing changes." It read like a reassurance. It was a description of the
+ * bug, and it was in the file the whole time.
+ *
+ * A floor that vanishes as soon as players have played is precisely backwards
+ * for the season's first months, and it is the direct cause of "why is it
+ * telling me to sell a player who just scored well".
+ *
+ * WHAT IT IS NOW, AND WHY IT IS NOT SIMPLY THE RETENTION THRESHOLD.
+ *
+ * The first attempt reused `retentionThreshold` here verbatim, which
+ * double-counted: the solver already refuses any individual swap that fails
+ * that threshold, so demanding it again of the finished plan charged for the
+ * same protection twice and blocked a genuine six-points-a-gameweek upgrade.
+ *
+ * The two checks answer different questions and deserve different numbers.
+ * The solver asks "is this player better than mine?" — a comparison between
+ * a chosen challenger and an unchosen incumbent, so it carries the selection
+ * inflation. This asks "is the whole plan better than doing nothing?", where
+ * the selection has already been paid for. What remains is the plain
+ * uncertainty of the comparison, and it grows with the NUMBER of moves — m
+ * independent comparisons stack as sqrt(m), not as m and not as a constant.
+ *
+ * `confidence` still adds a penalty for a plan built on unusually thin
+ * minutes. It can no longer relax the floor to nothing, which was the bug.
+ */
+export function noiseFloor(confidence: number, gamesOfEvidence = 0, moves = 1): number {
+  const comparisonError =
+    rateErrorPerGw(gamesOfEvidence) * WINDOW_GAMEWEEKS * Math.SQRT2;
   const c = Math.min(1, Math.max(0, confidence));
-  return Math.round(NOISE_FLOOR_MAX_POINTS * (1 - c) * 100) / 100;
+  const thinEvidencePenalty = NOISE_FLOOR_MAX_POINTS * (1 - c);
+  const floor = comparisonError * Math.sqrt(Math.max(1, moves)) + thinEvidencePenalty;
+  return Math.round(floor * 100) / 100;
 }
 
 /**
@@ -363,10 +460,14 @@ interface SolveOptions {
   freeTransfers: number;
   allowHits: boolean;
   beta: number;
+  /** How much better a challenger must look to displace an incumbent. See
+   * the INCUMBENCY note above and `retentionThreshold` in lib/selection.ts. */
+  retention: number;
 }
 
 function solveSquad(opts: SolveOptions): ScoredPlayer[] | null {
-  const { pool, ownedIds, costM, budgetM, maxTransfers, freeTransfers, allowHits, beta } = opts;
+  const { pool, ownedIds, costM, budgetM, maxTransfers, freeTransfers, allowHits, beta, retention } =
+    opts;
   const clubIds = Array.from(new Set(pool.map((p) => p.team.id)));
 
   // Positional anchors for the shrinkage below, computed once per solve.
@@ -413,13 +514,11 @@ function solveSquad(opts: SolveOptions): ScoredPlayer[] | null {
       squad: shrunkForSelection(p, rawValue.squad, meanSquad.get(p.element.element_type) ?? 0),
       xi: shrunkForSelection(p, rawValue.xi, meanXi.get(p.element.element_type) ?? 0),
     };
-    // See INCUMBENCY_BONUS. Applied to squad membership only: whether a
-    // player STARTS is a pure this-week question with no switching cost.
-    const valueSquad = raw.squad + (isOwned ? INCUMBENCY_BONUS : 0);
+    const valueSquad = raw.squad;
     const valueXi = raw.xi;
 
     variables[squadVar] = {
-      score: valueSquad * BENCH_WEIGHT,
+      score: valueSquad * BENCH_WEIGHT + (isOwned ? retentionInObjectiveUnits(retention) : 0),
       cost: costM.get(p.element.id) ?? p.priceM,
       [POS_KEY[p.element.element_type]]: 1,
       [`club_${p.team.id}`]: 1,
@@ -694,12 +793,26 @@ export function planTransfers(
   }
   const pool = [...poolMap.values()];
 
+  // How much evidence the model actually has: gameweeks already played. This
+  // sizes the retention threshold, and it is deliberately NOT `modelTrust` —
+  // see the v1.38 note in lib/selection.ts for why minutes-based trust
+  // switched every protection off after four games.
+  //
+  // It reads `currentEvent`, not `state.fromEvent`. They are different
+  // things: `fromEvent` is the gameweek the SQUAD SNAPSHOT came from, and it
+  // can lag or be a fixture default, while `currentEvent` is the gameweek
+  // being planned for. The first draft used `fromEvent` and every test that
+  // sets a gameweek was silently ignored.
+  const gamesOfEvidence = Math.max(0, currentEvent - 1);
+  const retention = retentionThreshold(gamesOfEvidence, WINDOW_GAMEWEEKS);
+
   const base = {
     pool,
     ownedIds,
     costM,
     budgetM: state.totalBudgetM,
     beta,
+    retention,
   };
 
   // --- 1. hold ---------------------------------------------------------
@@ -728,26 +841,47 @@ export function planTransfers(
       freeTransfers: state.freeTransfers,
       allowHits: false,
     });
-    if (squad) {
-      const plan = makePlan(
-        "gratuitas",
-        state.freeTransfers === 1
-          ? "Usar a transferência livre"
-          : `Usar até ${state.freeTransfers} transferências livres`,
-        squad,
-        ownedSquad,
-        state,
-        costM,
-        beta,
-        risers,
-        fallers,
-        0
-      );
-      if (plan.transfers > 0) {
-        plan.rationale =
-          "O melhor que consegues fazer sem pagar pontos. Como não há hit, qualquer ganho positivo já compensa — a única coisa que perdes é a flexibilidade de guardar a transferência.";
-        plans.push(plan);
+    const label =
+      state.freeTransfers === 1
+        ? "Usar a transferência livre"
+        : `Usar até ${state.freeTransfers} transferências livres`;
+    const mkFree = (s: ScoredPlayer[]) =>
+      makePlan("gratuitas", label, s, ownedSquad, state, costM, beta, risers, fallers, 0);
+
+    let plan = squad ? mkFree(squad) : null;
+
+    // SHOWING THE MOVE THAT WAS REFUSED, NOT JUST REFUSING IT.
+    //
+    // The retention threshold lives inside the solve, so a swap that fails it
+    // does not merely lose — it never appears. That silently removed the one
+    // thing the owner had repeatedly asked for: seeing WHAT the model
+    // considered and WHY it said no. "No plan shown" is indistinguishable
+    // from "the model had no idea", which is how this project got into
+    // trouble in the first place.
+    //
+    // So when the guarded solve finds nothing, solve again with the guard
+    // off. The result is never recommendable — `requiredEdge` below sees to
+    // that — but it is visible, with its own reasoning attached.
+    if (!plan || plan.transfers === 0) {
+      const unguarded = solveSquad({
+        ...base,
+        retention: 0,
+        maxTransfers: state.freeTransfers,
+        freeTransfers: state.freeTransfers,
+        allowHits: false,
+      });
+      const shown = unguarded ? mkFree(unguarded) : null;
+      if (shown && shown.transfers > 0) {
+        shown.rationale = `Esta é a melhor troca que o modelo encontra se ignorar a margem de erro. Não é recomendada: a diferença entre estes dois jogadores é menor do que o erro com que o modelo os estima nesta altura da época, por isso agir sobre ela é perseguir ruído, não vantagem.`;
+        plans.push(shown);
+        plan = null;
       }
+    }
+
+    if (plan && plan.transfers > 0) {
+      plan.rationale =
+        "O melhor que consegues fazer sem pagar pontos. Como não há hit, qualquer ganho positivo já compensa — a única coisa que perdes é a flexibilidade de guardar a transferência.";
+      plans.push(plan);
     }
   }
 
@@ -785,6 +919,24 @@ export function planTransfers(
     freeTransfers: SQUAD_SIZE,
     allowHits: false,
   });
+  // How different the "ideal" would be if the model ignored its own margin of
+  // error. This is not used to decide anything — it exists so the app can say
+  // WHY it is holding still, which is the difference between "you are close to
+  // ideal" and "the gaps that exist are smaller than the error with which I
+  // measure them". Those two sentences look identical on screen and mean
+  // completely different things, and only the second one is true early in a
+  // season.
+  const unguardedIdeal = solveSquad({
+    ...base,
+    retention: 0,
+    maxTransfers: SQUAD_SIZE,
+    freeTransfers: SQUAD_SIZE,
+    allowHits: false,
+  });
+  const unguardedDistance = unguardedIdeal
+    ? unguardedIdeal.filter((p) => !ownedIds.has(p.element.id)).length
+    : 0;
+
   let wildcard: WildcardSignal | null = null;
   if (idealSquad) {
     const plan = makePlan(
@@ -870,7 +1022,9 @@ export function planTransfers(
           ? `Sinal de Wildcard: o teu plantel está a ${distance} transferências do ideal e a diferença vale ${gain} pontos em 5 jornadas. Fechar isso com transferências livres levaria cerca de ${distance} jornadas; com hits custaria ${(distance - state.freeTransfers) * HIT_COST_POINTS} pontos. O chip é o caminho mais barato.`
           : distance >= 5 && currentEvent < WILDCARD_SETTLED_EVENT
             ? `Plantel a ${distance} transferências do ideal (${gain >= 0 ? "+" : ""}${gain} pts em 5 jornadas), mas ainda é a jornada ${currentEvent}: o "ideal" nesta altura assenta quase todo em estimativas de pré-época e em poucas odds, por isso essa distância mede sobretudo ruído. Um chip guardado vale mais do que os pontos que compraria hoje — só há dois por época e a informação melhora todas as semanas. Precisaria de ${requiredGain.toFixed(0)} pontos para compensar agora.`
-            : `Plantel a ${distance} transferências do ideal (${gain >= 0 ? "+" : ""}${gain} pts em 5 jornadas) — perto o suficiente para fechar com transferências livres. Guardar o Wildcard.`,
+            : distance === 0 && unguardedDistance > 0
+              ? `O modelo não encontra nenhuma mudança que valha a pena. Se ignorasse a sua própria margem de erro trocaria ${unguardedDistance} jogador${unguardedDistance === 1 ? "" : "es"} — mas nesta altura da época duas estimativas só são distinguíveis a partir de ${retention.toFixed(1)} pontos em 5 jornadas, e nenhuma dessas diferenças chega lá. Não é que estejas perto do ideal: é que a diferença que existe é menor do que o erro com que ela é medida.`
+              : `Plantel a ${distance} transferências do ideal (${gain >= 0 ? "+" : ""}${gain} pts em 5 jornadas) — perto o suficiente para fechar com transferências livres. Guardar o Wildcard.`,
     };
     if (advise) {
       plan.rationale =
@@ -885,7 +1039,8 @@ export function planTransfers(
   }
   for (const p of plans) {
     p.confidence = Math.round(planConfidence(p) * 1000) / 1000;
-    p.requiredEdge = p.key === "manter" ? 0 : noiseFloor(p.confidence);
+    p.requiredEdge =
+      p.key === "manter" ? 0 : noiseFloor(p.confidence, gamesOfEvidence, p.moves.length);
   }
 
   // THE NOISE FLOOR, APPLIED.
