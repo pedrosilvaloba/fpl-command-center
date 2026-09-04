@@ -52,13 +52,22 @@ export default function ChipPlanPanel({
             </div>
             {a.verdict !== "indisponível" && (
               <p className="mb-1 font-mono text-[11px] tabular text-text-muted">
+                {/* Este número mudou de significado na v1.50 e o rótulo tinha
+                    de mudar com ele. Dizia "numa dupla", porque era uma
+                    constante fixa — o que o chip renderia numa jornada
+                    dupla. Agora é o VALOR DE ESPERAR: quanto vale, em
+                    pontos, continuar a guardar o chip em vez de o gastar
+                    hoje, já a contar com quantas jornadas restam antes de
+                    ele expirar. Manter o rótulo antigo sobre o número novo
+                    seria o mesmo defeito de sempre — um ecrã a explicar uma
+                    conta que já não é aquela. */}
                 agora <strong className="text-text">{a.valueNow.toFixed(1)} pts</strong>
-                {a.bestLaterValue > 0 && (
-                  <>
-                    {" · "}
-                    numa dupla ~{a.bestLaterValue.toFixed(0)} pts
-                  </>
-                )}
+                {" · "}
+                esperar vale{" "}
+                <strong className="text-text">
+                  {a.bestLaterValue.toFixed(1)} pts
+                </strong>
+                {a.bestLaterValue === 0 && " — última hipótese"}
               </p>
             )}
             <p className="text-xs leading-relaxed text-text-muted">{a.reason}</p>

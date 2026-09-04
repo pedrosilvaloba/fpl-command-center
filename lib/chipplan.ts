@@ -2,6 +2,13 @@ import type { FplEvent, FplFixture, FplTeam } from "./types";
 import type { ScoredPlayer } from "./recommend";
 import type { ChipStatus } from "./squadstate";
 import { findScheduleAnomalies } from "./schedule";
+import { WINDOW_GAMEWEEKS } from "./transferplan";
+import {
+  chipOptionValue,
+  chipDeadlineEvent,
+  doubleProbability,
+  FIRST_SET_LAST_EVENT,
+} from "./chipoption";
 
 /**
  * CHIP PLANNER — when to play Bench Boost, Triple Captain and Free Hit.
@@ -49,8 +56,94 @@ const DGW_PRIOR = {
   "3xc": 16,
 } as const;
 
-/** How much better "now" must be than "later" before spending the option. */
-const MARGIN = 1.15;
+/**
+ * Quanto "agora" tem de bater "depois" antes de gastar a opção.
+ *
+ * BAIXOU DE 1,15 PARA 1,05 EM v1.50, e a razão importa: o limiar deixou de
+ * ser uma constante e passou a ser um valor de opção calculado por paragem
+ * ótima (lib/chipoption.ts). Esse cálculo JÁ contém a preferência por
+ * esperar — é literalmente o valor de continuar. Manter os 15% por cima
+ * seria contar a mesma prudência duas vezes, e foi precisamente essa dupla
+ * contagem que tornou os limiares inalcançáveis.
+ *
+ * Fica uma margem pequena, e não zero, porque o valor de opção assenta em
+ * priores sobre a variação semanal que ainda não estão medidos.
+ */
+const MARGIN = 1.05;
+
+/**
+ * Quanto o valor de um chip oscila de jornada para jornada, como fração do
+ * seu valor típico.
+ *
+ * O que faz um chip valer mais numa semana do que noutra é o calendário: um
+ * capitão premium em casa contra um promovido vale bastante mais do que o
+ * mesmo capitão fora contra um grande. 18% é a ordem de grandeza dessa
+ * oscilação e é um PRIOR DECLARADO, não uma medição — é o número que decide
+ * quanto vale esperar, por isso é o primeiro candidato a ser calibrado
+ * quando houver jornadas que cheguem.
+ */
+export const CHIP_WEEK_TO_WEEK_SD_FRACTION = 0.18;
+
+/**
+ * ═══ O ERRO QUE EU PRÓPRIO COMETI A CORRIGIR O ERRO ═══
+ *
+ * A primeira versão desta correção usava o valor de HOJE como média das
+ * semanas futuras: "sem informação em contrário, esta semana é uma amostra
+ * como as outras". Soa razoável e é fatal.
+ *
+ * Se a média futura é `μ = valorAgora` e o desvio é `0,18 μ`, então o
+ * limiar V(n) também escala com μ — e a comparação `valorAgora ≥ V(n)`
+ * torna-se `1 ≥ k(n)`, onde k não depende de μ NENHUM. O veredicto passava
+ * a depender só do número da jornada, e um banco a valer 33 pontos recebia
+ * exatamente a mesma resposta que um banco a valer 4,5.
+ *
+ * Ou seja: eu tinha trocado um limiar inalcançável por um limiar CEGO. O
+ * mesmo defeito com outra roupa. Foram dois testes antigos — "com um banco
+ * de 33 pontos, aí sim vale a pena jogá-lo" e "um capitão de 20 pts
+ * esperados já justifica" — que o apanharam. É exatamente para isto que a
+ * suite existe.
+ *
+ * A correção: a média futura tem de vir de uma fonte INDEPENDENTE do valor
+ * de hoje. Cada jogador já traz `expectedPoints`, a soma esperada sobre a
+ * janela de cinco jornadas; dividida pela janela, dá a semana típica desse
+ * jogador. É então a distância entre o que ESTA semana vale e o que uma
+ * semana TÍPICA vale que decide — que é a pergunta certa.
+ */
+function typicalWeek(
+  players: ScoredPlayer[],
+  floor: number,
+  ceiling: number
+): number {
+  const perWeek =
+    players.reduce(
+      (t, p) => t + (Number.isFinite(p.expectedPoints) ? p.expectedPoints : 0),
+      0
+    ) / WINDOW_GAMEWEEKS;
+  // O PISO protege dois casos: dados em falta, e um plantel cujo capitão de
+  // hoje é fraco — aí a semana futura relevante não é a que ele daria, é a
+  // que um capitão razoável daria depois de uma transferência. Sem piso, um
+  // plantel mau concluiria que nada melhor vem aí e queimava o chip logo.
+  //
+  // O TETO é a peça que faltou à segunda tentativa, e é a mesma disciplina
+  // que já governa os ganhos de transferência: O FUTURO NÃO PODE SER MELHOR
+  // DO QUE O FISICAMENTE POSSÍVEL. Sem ele, um banco a valer 33 pontos numa
+  // semana excecional faz o modelo assumir 33 pontos TODAS as semanas, e
+  // então esperar ganha sempre — porque o modelo passa a comparar um pico
+  // real com um futuro imaginário construído a partir desse mesmo pico.
+  // Quatro suplentes não rendem 33 pontos por semana; um capitão não rende
+  // 20. Um pico é um pico, e é precisamente por ser um pico que se gasta o
+  // chip nele.
+  return Math.min(ceiling, Math.max(floor, perWeek));
+}
+
+/** Uma semana típica de um capitão razoável, e de um banco razoável. */
+const TYPICAL_CAPTAIN_WEEK = 6.5;
+const TYPICAL_BENCH_WEEK = 9;
+/** E o melhor que qualquer um deles pode plausivelmente dar numa jornada
+ * simples. Não são recordes — são o que é sustentável semana após semana,
+ * que é a pergunta a que a média futura responde. */
+const MAX_PLAUSIBLE_CAPTAIN_WEEK = 9.5;
+const MAX_PLAUSIBLE_BENCH_WEEK = 18;
 
 /** What a Free Hit rescues in a blank gameweek that is already on the
  * calendar: a squad with most of its eleven not playing. */
@@ -168,14 +261,61 @@ export function planChips(input: ChipPlanInput): ChipAdvice[] {
   const nextKnownDouble = calendar.knownDoubleEvents.find((e) => e > currentEvent) ?? null;
   const nextKnownBlank = calendar.knownBlankEvents.find((e) => e >= currentEvent) ?? null;
 
+  // ═══ O RELÓGIO — o que faltava por completo ═══
+  //
+  // `deadlineEvent` é a última jornada em que este chip ainda pode ser
+  // jogado: GW19 para o primeiro conjunto, GW38 para o segundo. `drawsLeft`
+  // são as jornadas FUTURAS que sobram depois desta. Quando chega a zero,
+  // esta é a última hipótese e guardar o chip vale exatamente nada.
+  const deadlineEvent = chipDeadlineEvent(currentEvent);
+  const drawsLeft = Math.max(0, deadlineEvent - currentEvent);
+  const pDouble = doubleProbability(
+    currentEvent,
+    drawsLeft,
+    nextKnownDouble !== null && nextKnownDouble <= deadlineEvent
+  );
+  const isFirstSet = currentEvent <= FIRST_SET_LAST_EVENT;
+
+  /** O limiar que o valor de hoje tem de bater para valer a pena gastar. */
+  const optionFor = (valueNow: number, doubleValue: number, futureMean: number) =>
+    chipOptionValue({
+      valueNow,
+      // NÃO é o valor de hoje — ver a nota em CHIP_WEEK_TO_WEEK_SD_FRACTION.
+      // Usar hoje como média do futuro torna o limiar cego à qualidade da
+      // semana, que foi o segundo defeito desta função.
+      futureMean,
+      futureSd: futureMean * CHIP_WEEK_TO_WEEK_SD_FRACTION,
+      drawsLeft,
+      doubleValue,
+      pDouble,
+    });
+
+  /** A frase que explica o prazo. Aparece em todos os chips, porque foi a
+   * ausência exata desta informação que produziu o defeito. */
+  const clockNote = (): string => {
+    if (drawsLeft === 0) {
+      return isFirstSet
+        ? `ESTA É A ÚLTIMA JORNADA para usar o primeiro conjunto de chips — expira na GW${FIRST_SET_LAST_EVENT}. Não usar é perder.`
+        : "Esta é a última jornada da época. Não usar é perder.";
+    }
+    const window = isFirstSet
+      ? `até à GW${FIRST_SET_LAST_EVENT}, quando o primeiro conjunto expira`
+      : "até ao fim da época";
+    const doubleNote = nextKnownDouble
+      ? ` Há uma dupla marcada na GW${nextKnownDouble}.`
+      : isFirstSet
+        ? " Não há duplas marcadas, e na primeira metade da época praticamente não aparecem — nascem de adiamentos, que são remarcados depois do Ano Novo."
+        : " Ainda não há duplas marcadas, mas na segunda metade aparecem quase sempre.";
+    return `Restam ${drawsLeft} jornada${drawsLeft === 1 ? "" : "s"} ${window}.${doubleNote}`;
+  };
+
   // ---- Bench Boost -----------------------------------------------------
   // Worth exactly what the bench scores, because that is what it cashes in.
   {
     const valueNow =
       Math.round(bench.reduce((s, p) => s + p.expectedPointsNext, 0) * 10) / 10;
-    const later = nextKnownDouble
-      ? DGW_PRIOR.bboost
-      : Math.round(DGW_PRIOR.bboost * credit * 10) / 10;
+    const opt = optionFor(valueNow, DGW_PRIOR.bboost, typicalWeek(bench, TYPICAL_BENCH_WEEK, MAX_PLAUSIBLE_BENCH_WEEK));
+    const later = Math.round(opt.holdValue * 10) / 10;
     const laterEvent = nextKnownDouble;
     const available = remaining(chips, "bboost") > 0;
     const verdict: ChipVerdict = !available
@@ -194,12 +334,8 @@ export function planChips(input: ChipPlanInput): ChipAdvice[] {
       reason: !available
         ? "Já não tens Bench Boost disponível."
         : verdict === "jogar"
-          ? `O teu banco vale ${valueNow.toFixed(1)} pts nesta jornada, acima do que uma jornada dupla costuma render (~${later.toFixed(0)}). Vale a pena gastá-lo agora.`
-          : `O teu banco vale ${valueNow.toFixed(1)} pts nesta jornada. ${
-              nextKnownDouble
-                ? `Há uma jornada dupla marcada na ${nextKnownDouble}, onde o mesmo chip vale tipicamente ~${later.toFixed(0)} pts.`
-                : `Numa jornada dupla o mesmo chip vale tipicamente ~${DGW_PRIOR.bboost} pts, e ainda não há duplas marcadas — só aparecem no calendário poucas semanas antes. Não haver duplas marcadas não quer dizer que não venham.`
-            } Gastá-lo agora troca ${later.toFixed(0)} pontos por ${valueNow.toFixed(1)}.`,
+          ? `O teu banco vale ${valueNow.toFixed(1)} pts nesta jornada, contra ${later.toFixed(1)} de continuar à espera. ${clockNote()} Joga-o.`
+          : `O teu banco vale ${valueNow.toFixed(1)} pts nesta jornada, e esperar vale ${later.toFixed(1)} — numa jornada dupla o mesmo chip rende tipicamente ~${DGW_PRIOR.bboost} pts. Jogá-lo agora troca ${later.toFixed(1)} por ${valueNow.toFixed(1)}. ${clockNote()}`,
     });
   }
 
@@ -207,9 +343,8 @@ export function planChips(input: ChipPlanInput): ChipAdvice[] {
   // Worth one extra copy of the captain's score.
   {
     const valueNow = Math.round((captain?.expectedPointsNext ?? 0) * 10) / 10;
-    const later = nextKnownDouble
-      ? DGW_PRIOR["3xc"]
-      : Math.round(DGW_PRIOR["3xc"] * credit * 10) / 10;
+    const opt = optionFor(valueNow, DGW_PRIOR["3xc"], typicalWeek(captain ? [captain] : [], TYPICAL_CAPTAIN_WEEK, MAX_PLAUSIBLE_CAPTAIN_WEEK));
+    const later = Math.round(opt.holdValue * 10) / 10;
     const available = remaining(chips, "3xc") > 0;
     const verdict: ChipVerdict = !available
       ? "indisponível"
@@ -227,8 +362,8 @@ export function planChips(input: ChipPlanInput): ChipAdvice[] {
       reason: !available
         ? "Já não tens Triple Captain disponível."
         : verdict === "jogar"
-          ? `${captain?.element.web_name ?? "O teu capitão"} vale ${valueNow.toFixed(1)} pts esperados nesta jornada — o suficiente para o chip render mais agora do que numa dupla típica.`
-          : `${captain?.element.web_name ?? "O teu capitão"} vale ${valueNow.toFixed(1)} pts esperados. O Triple Captain guarda-se para um premium com jornada dupla, onde vale tipicamente ~${DGW_PRIOR["3xc"]} pts${nextKnownDouble ? ` (a próxima dupla marcada é na jornada ${nextKnownDouble})` : ""}.`,
+          ? `${captain?.element.web_name ?? "O teu capitão"} vale ${valueNow.toFixed(1)} pts esperados nesta jornada, contra ${later.toFixed(1)} de continuar à espera. ${clockNote()} Joga-o.`
+          : `${captain?.element.web_name ?? "O teu capitão"} vale ${valueNow.toFixed(1)} pts esperados, e esperar por uma semana melhor vale ${later.toFixed(1)}. ${clockNote()}`,
     });
   }
 

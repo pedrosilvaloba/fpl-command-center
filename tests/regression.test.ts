@@ -12,6 +12,13 @@
  */
 
 import { computeDynamicTeamFactors } from "../lib/teamrating";
+import { planChips, type ChipPlanInput } from "../lib/chipplan";
+import {
+  continuationValue,
+  chipDeadlineEvent,
+  doubleProbability,
+  FIRST_SET_LAST_EVENT,
+} from "../lib/chipoption";
 import {
   getBootstrap,
   getFplDataHealth,
@@ -6258,6 +6265,225 @@ async function testOneRefusalNoLongerKillsTheWholeApp() {
     `${JSON.stringify(big).length} → ${encoded.length} caracteres`
   );
 }
+
+
+
+/**
+ * DEFEITO v1.49: O TRIPLE CAPTAIN E O BENCH BOOST NÃO PODIAM SER
+ * RECOMENDADOS. NUNCA. POR CONSTRUÇÃO.
+ *
+ * Relatado pelo Pedro assim: "nem sequer ponderaste sugerir o chip". A
+ * frase está literalmente certa, e a razão é aritmética:
+ *
+ *   Triple Captain: jogava-se se `valorAgora >= 16 × 1,15 = 18,4` pontos
+ *   esperados de um capitão NUMA jornada. O melhor capitão do FPL anda
+ *   pelos 7-9. A condição não era exigente — era impossível.
+ *
+ *   Bench Boost: `22 × 1,15 = 25,3` pontos de quatro suplentes. Um banco
+ *   bom vale 8-12.
+ *
+ * E por cima disso, o planeador não sabia que o PRIMEIRO CONJUNTO DE CHIPS
+ * EXPIRA NA GW19 — regra que a própria app tem escrita em lib/strategy.ts.
+ * Os seus limiares mudavam na GW20 e GW30, um horizonte de época única.
+ * Resultado: mandava guardar o chip à espera de uma jornada dupla que quase
+ * de certeza não chega antes de o chip desaparecer.
+ *
+ * O teste que faltava — e que qualquer um destes teria apanhado — é o
+ * primeiro: EXISTE algum valor de "agora" que faça o modelo dizer que sim?
+ */
+function testAChipCanActuallyBeRecommended() {
+  const mkPlayer = (id: number, ep: number): ScoredPlayer =>
+    ({
+      element: { id, web_name: `J${id}` },
+      expectedPointsNext: ep,
+      expectedPoints: ep * 5,
+      ownershipPct: 10,
+      pPlay: 1,
+    }) as unknown as ScoredPlayer;
+
+  const plan = (over: Partial<ChipPlanInput>): ChipPlanInput => ({
+    currentEvent: 4,
+    chips: [
+      { name: "bboost", label: "Bench Boost", usedAtEvents: [], remaining: 2 },
+      { name: "3xc", label: "Triple Captain", usedAtEvents: [], remaining: 2 },
+      { name: "freehit", label: "Free Hit", usedAtEvents: [], remaining: 2 },
+    ],
+    xi: Array.from({ length: 11 }, (_, i) => mkPlayer(i + 1, 4.5)),
+    bench: Array.from({ length: 4 }, (_, i) => mkPlayer(100 + i, 1.8)),
+    captain: mkPlayer(1, 7.3),
+    calendar: {
+      breakAfterEvents: [],
+      breakImminent: false,
+      knownDoubleEvents: [],
+      knownBlankEvents: [],
+    },
+    ...over,
+  });
+
+  const tc = (input: ChipPlanInput) =>
+    planChips(input).find((c) => c.chip === "3xc")!;
+  const bb = (input: ChipPlanInput) =>
+    planChips(input).find((c) => c.chip === "bboost")!;
+
+  // ── 1. O TESTE QUE FALTAVA ───────────────────────────────────────────
+  // Percorre toda a época com um capitão excelente mas realista (10 pts,
+  // acima de qualquer capitão real numa jornada simples). Se em NENHUMA
+  // jornada o modelo disser "jogar", o limiar é inalcançável — que era
+  // exatamente o defeito.
+  let everSaysPlay = false;
+  let firstPlayEvent: number | null = null;
+  for (let ev = 1; ev <= FIRST_SET_LAST_EVENT; ev += 1) {
+    const advice = tc(plan({ currentEvent: ev, captain: mkPlayer(1, 10) }));
+    if (advice.verdict === "jogar") {
+      everSaysPlay = true;
+      if (firstPlayEvent === null) firstPlayEvent = ev;
+    }
+  }
+  check(
+    "existe alguma jornada em que o Triple Captain é recomendado",
+    everSaysPlay,
+    firstPlayEvent === null
+      ? "NUNCA — o limiar é inalcançável"
+      : `a partir da GW${firstPlayEvent}`
+  );
+
+  // ── 2. E não passou a dizer sempre que sim ───────────────────────────
+  // O erro simétrico seria igualmente mau: um modelo que manda queimar o
+  // chip em setembro. No início da época, com 15 jornadas pela frente,
+  // esperar continua a ser a resposta certa.
+  check(
+    "no início da época, com muitas jornadas pela frente, ainda espera",
+    tc(plan({ currentEvent: 4, captain: mkPlayer(1, 7.3) })).verdict ===
+      "esperar",
+    tc(plan({ currentEvent: 4, captain: mkPlayer(1, 7.3) })).verdict
+  );
+
+  // ── 3. NA ÚLTIMA HIPÓTESE, JOGA-SE ───────────────────────────────────
+  // Na GW19 o primeiro conjunto expira. Guardar vale exatamente zero, e
+  // qualquer capitão decente bate zero. Era aqui que a versão anterior
+  // ainda dizia "guarda-o para uma dupla" — sobre um chip que ia
+  // desaparecer nessa noite.
+  const lastChance = tc(
+    plan({ currentEvent: FIRST_SET_LAST_EVENT, captain: mkPlayer(1, 6.5) })
+  );
+  check(
+    "na última jornada antes de expirar, o Triple Captain joga-se",
+    lastChance.verdict === "jogar" && lastChance.bestLaterValue === 0,
+    `${lastChance.verdict}, esperar vale ${lastChance.bestLaterValue}`
+  );
+  check(
+    "e a justificação avisa que é a última hipótese",
+    /ÚLTIMA JORNADA/.test(lastChance.reason),
+    lastChance.reason.slice(0, 90)
+  );
+  const lastChanceBb = bb(
+    plan({ currentEvent: FIRST_SET_LAST_EVENT, captain: mkPlayer(1, 6.5) })
+  );
+  check(
+    "o mesmo vale para o Bench Boost",
+    lastChanceBb.verdict === "jogar",
+    lastChanceBb.verdict
+  );
+
+  // ── 4. UMA DUPLA MARCADA MUDA TUDO ───────────────────────────────────
+  // Se há mesmo uma dupla no calendário, esperar volta a ser certo — e é
+  // isto que impede a correção de degenerar em "gasta sempre".
+  const withDouble = tc(
+    plan({
+      currentEvent: 15,
+      captain: mkPlayer(1, 9),
+      calendar: {
+        breakAfterEvents: [],
+        breakImminent: false,
+        knownDoubleEvents: [18],
+        knownBlankEvents: [],
+      },
+    })
+  );
+  check(
+    "com uma dupla marcada à frente, volta a esperar",
+    withDouble.verdict === "esperar",
+    `${withDouble.verdict}, limiar ${withDouble.bestLaterValue}`
+  );
+
+  // ── 5. O LIMIAR DECRESCE — é o coração da correção ───────────────────
+  // Quantas menos jornadas restam, menos vale esperar. Se isto não for
+  // monótono, o modelo tem uma preferência por esperar que não se esgota,
+  // e volta a nunca jogar o chip.
+  const thresholds = [4, 8, 12, 16, 18, 19].map(
+    (ev) => tc(plan({ currentEvent: ev, captain: mkPlayer(1, 7.3) })).bestLaterValue
+  );
+  let monotonic = true;
+  for (let i = 1; i < thresholds.length; i += 1) {
+    if (thresholds[i] > thresholds[i - 1] + 1e-9) monotonic = false;
+  }
+  check(
+    "o valor de esperar decresce à medida que as jornadas se esgotam",
+    monotonic && thresholds[thresholds.length - 1] === 0,
+    thresholds.join(" → ")
+  );
+
+  // ── 6. O PRAZO É O DA REGRA, NÃO O FIM DA ÉPOCA ──────────────────────
+  check(
+    "antes da GW19 o prazo do chip é a GW19, não a GW38",
+    chipDeadlineEvent(4) === 19 && chipDeadlineEvent(19) === 19,
+    `GW4 → ${chipDeadlineEvent(4)}, GW19 → ${chipDeadlineEvent(19)}`
+  );
+  check(
+    "depois da GW19, o segundo conjunto vai até ao fim da época",
+    chipDeadlineEvent(20) === 38,
+    `GW20 → ${chipDeadlineEvent(20)}`
+  );
+
+  // ── 7. AS DUPLAS NÃO SÃO IGUALMENTE PROVÁVEIS NAS DUAS METADES ───────
+  // Nascem de adiamentos remarcados depois do Ano Novo. Tratar as duas
+  // metades por igual é o que fazia o modelo esperar por algo que não vem.
+  const pFirst = doubleProbability(6, 13, false);
+  const pSecond = doubleProbability(26, 12, false);
+  check(
+    "uma dupla é bastante menos provável na primeira metade da época",
+    pSecond > pFirst * 3,
+    `1ª metade ${pFirst.toFixed(2)} vs 2ª metade ${pSecond.toFixed(2)}`
+  );
+  check(
+    "uma dupla já marcada é certeza, não probabilidade",
+    doubleProbability(6, 13, true) === 1,
+    `${doubleProbability(6, 13, true)}`
+  );
+
+  // ── 8. A MATEMÁTICA DA PARAGEM ÓTIMA ─────────────────────────────────
+  // V(n) tem de ser CRESCENTE em n (mais hipóteses valem mais) e tem de
+  // ficar ABAIXO do máximo esperado de n amostras (porque se decide às
+  // cegas, sem ver as semanas seguintes). Confundir os dois repunha o
+  // defeito: o máximo de n amostras bate sempre qualquer amostra única,
+  // portanto "esperar" ganharia sempre, para sempre.
+  const v0 = continuationValue(7.3, 1.3, 0);
+  const v1 = continuationValue(7.3, 1.3, 1);
+  const v5 = continuationValue(7.3, 1.3, 5);
+  const v15 = continuationValue(7.3, 1.3, 15);
+  check(
+    "sem jornadas por vir, esperar vale zero",
+    v0 === 0,
+    `${v0}`
+  );
+  check(
+    "com uma jornada por vir, esperar vale ~o valor médio dessa jornada",
+    Math.abs(v1 - 7.3) < 0.05,
+    `${v1.toFixed(2)}`
+  );
+  check(
+    "mais hipóteses valem mais, mas com retornos decrescentes",
+    v5 > v1 && v15 > v5 && v15 - v5 < v5 - v1,
+    `V1=${v1.toFixed(2)} V5=${v5.toFixed(2)} V15=${v15.toFixed(2)}`
+  );
+  check(
+    "e o valor de esperar nunca dispara para lá do plausível",
+    v15 < 7.3 + 3 * 1.3,
+    `V15=${v15.toFixed(2)} contra um teto de ${(7.3 + 3 * 1.3).toFixed(2)}`
+  );
+}
+
+testAChipCanActuallyBeRecommended();
 
 void testLossCanNoLongerLookLikeEmptiness()
   .then(() => testOneRefusalNoLongerKillsTheWholeApp())
