@@ -13,6 +13,16 @@
 
 import { computeDynamicTeamFactors } from "../lib/teamrating";
 import {
+  getBootstrap,
+  getFplDataHealth,
+  resetFplDataHealth,
+} from "../lib/fpl-client";
+import {
+  encodeSnapshot,
+  decodeSnapshot,
+  splitEncoded,
+} from "../lib/snapshotcache";
+import {
   poissonQuantile,
   windowExpectation,
   deriveLeagueBaselines,
@@ -6048,9 +6058,229 @@ testTheRefusedMoveIsStillShown();
 // O único teste assíncrono da suite. Envolvido em vez de usar `await` no
 // topo do módulo, porque isso torna o módulo assíncrono e o tsx deixa de o
 // conseguir carregar (ERR_REQUIRE_ASYNC_MODULE).
-void testLossCanNoLongerLookLikeEmptiness().then(() => {
-  report("regressão");
-  const { passed, failed } = counts();
-  console.log(`\n${passed} verificações passaram, ${failed} falharam\n`);
-  process.exit(exitCode());
-});
+
+
+/**
+ * DEFEITO v1.48: UM 403 DA API DO FPL APAGAVA A APP INTEIRA.
+ *
+ * A 4 de setembro de 2026, às 17:27, o /bootstrap-static/ devolveu
+ * "403 Forbidden" a um pedido vindo da Vercel. O `fplFetch` lançou, o
+ * componente de servidor rebentou, e quem abrisse a app viu o ecrã 500
+ * cru da Vercel. Não houve segunda tentativa, não houve cópia dos últimos
+ * dados bons, e não houve mensagem — um único pedido recusado, num
+ * serviço externo que ninguém controla, e a app deixava de existir.
+ *
+ * O erro de desenho não foi não prever o 403. Foi tratar um serviço
+ * externo, público, não documentado e sem qualquer garantia de
+ * disponibilidade como se respondesse sempre.
+ *
+ * Estes testes trancam as três partes da correção separadamente, porque
+ * cada uma pode ser desfeita sem tocar nas outras.
+ */
+async function testOneRefusalNoLongerKillsTheWholeApp() {
+  const realFetch = globalThis.fetch;
+  const bodyOk = { events: [], teams: [], elements: [], element_types: [] };
+
+  /** Substitui o fetch global por um guião de respostas, e conta chamadas. */
+  function scriptFetch(script: (number | "network-error")[]) {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      const step = script[Math.min(calls, script.length - 1)];
+      calls += 1;
+      if (step === "network-error") throw new Error("ECONNRESET");
+      if (step === 200) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          json: async () => bodyOk,
+        } as unknown as Response;
+      }
+      return {
+        ok: false,
+        status: step,
+        statusText: "Forbidden",
+        json: async () => ({}),
+      } as unknown as Response;
+    }) as typeof fetch;
+    return () => calls;
+  }
+
+  try {
+    // 1. O CASO REAL: o primeiro pedido é recusado, o seguinte passa.
+    //    Antes, isto era uma app morta. Agora nem se nota.
+    resetFplDataHealth();
+    let calls = scriptFetch([403, 200]);
+    let recovered = true;
+    try {
+      await getBootstrap();
+    } catch {
+      recovered = false;
+    }
+    check(
+      "um 403 seguido de sucesso já não derruba a app",
+      recovered && calls() === 2,
+      `recuperou=${recovered}, tentativas=${calls()}`
+    );
+    check(
+      "e depois de recuperar, os dados não são marcados como antigos",
+      getFplDataHealth().degraded === false,
+      `degraded=${getFplDataHealth().degraded}`
+    );
+
+    // 2. Uma falha de rede (sem resposta HTTP nenhuma) também é repetida.
+    resetFplDataHealth();
+    calls = scriptFetch(["network-error", "network-error", 200]);
+    recovered = true;
+    try {
+      await getBootstrap();
+    } catch {
+      recovered = false;
+    }
+    check(
+      "uma falha de rede é repetida, não é fatal à primeira",
+      recovered && calls() === 3,
+      `recuperou=${recovered}, tentativas=${calls()}`
+    );
+
+    // 3. A repetição TEM LIMITE. Sem isto, uma API em baixo prende a
+    //    função até ao timeout da Vercel, o que é um 504 em vez de um 500
+    //    — mais lento e igualmente inútil.
+    resetFplDataHealth();
+    calls = scriptFetch([403]);
+    let threw = false;
+    try {
+      await getBootstrap();
+    } catch {
+      threw = true;
+    }
+    check(
+      "uma API sempre em baixo desiste ao fim de 3 tentativas, não infinitas",
+      threw && calls() === 3,
+      `lançou=${threw}, tentativas=${calls()}`
+    );
+    check(
+      "e o estado de saúde regista a degradação em vez de a esconder",
+      getFplDataHealth().paths.length === 1,
+      `caminhos afetados: ${getFplDataHealth().paths.length}`
+    );
+
+    // 4. NEM TODOS OS ERROS VALEM UMA REPETIÇÃO. Um 404 significa "este
+    //    pedido está errado" — repeti-lo três vezes só triplica a espera
+    //    antes da mesma resposta. Este é o teste que impede a correção de
+    //    degenerar em "repetir tudo".
+    resetFplDataHealth();
+    calls = scriptFetch([404]);
+    threw = false;
+    try {
+      await getBootstrap();
+    } catch {
+      threw = true;
+    }
+    check(
+      "um 404 falha à primeira, sem repetições inúteis",
+      threw && calls() === 1,
+      `lançou=${threw}, tentativas=${calls()}`
+    );
+
+    // 5. O User-Agent deixou de se anunciar como ferramenta automatizada.
+    //    Era isso que estava a acionar o filtro do FPL. Um teste sobre uma
+    //    string parece frágil, e é exatamente por isso que existe: sem ele
+    //    a linha volta a ser "arrumada" num futuro qualquer, e o 403 volta
+    //    sem que nada mais mude.
+    resetFplDataHealth();
+    let sentAgent = "";
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      sentAgent = String(
+        (init.headers as Record<string, string>)["User-Agent"] ?? ""
+      );
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => bodyOk,
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+    await getBootstrap();
+    check(
+      "o User-Agent já não se identifica como ferramenta/bot",
+      sentAgent.length > 0 &&
+        !/bot|tool|crawler|command-center/i.test(sentAgent),
+      sentAgent.slice(0, 60)
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    resetFplDataHealth();
+  }
+
+  // 6. A COMPRESSÃO DO SNAPSHOT tem de sobreviver a ser partida em
+  //    pedaços. Um /bootstrap-static/ real tem alguns MB e não cabe num
+  //    único pedido ao Upstash; se a junção dos pedaços estiver errada, o
+  //    modo degradado devolve JSON inválido — ou seja, troca um erro
+  //    honesto por dados corrompidos.
+  const big = {
+    elements: Array.from({ length: 700 }, (_, i) => ({
+      id: i,
+      web_name: `Jogador ${i}`,
+      now_cost: 40 + (i % 90),
+      note: "texto repetido para dar volume ao payload comprimido",
+    })),
+  };
+  const encoded = encodeSnapshot(big);
+  const parts = splitEncoded(encoded, 1000);
+  check(
+    "um snapshot grande é mesmo partido em vários pedaços",
+    parts.length > 1,
+    `${parts.length} pedaços de ${encoded.length} caracteres`
+  );
+  const roundTrip = decodeSnapshot<typeof big>(parts.join(""));
+  check(
+    "e junto de volta dá exatamente o original",
+    JSON.stringify(roundTrip) === JSON.stringify(big),
+    `${roundTrip.elements.length} jogadores recuperados`
+  );
+  // Mutação: se a junção perder um pedaço, isto TEM de rebentar. Um teste
+  // que passasse na mesma seria um teste que não está a verificar nada.
+  let corruptDetected = false;
+  try {
+    decodeSnapshot(parts.slice(0, -1).join(""));
+  } catch {
+    corruptDetected = true;
+  }
+  check(
+    "um snapshot incompleto rebenta em vez de devolver dados truncados",
+    corruptDetected,
+    `detetado=${corruptDetected}`
+  );
+  check(
+    "a compressão vale a pena (senão não caberia no armazenamento)",
+    encoded.length < JSON.stringify(big).length / 3,
+    `${JSON.stringify(big).length} → ${encoded.length} caracteres`
+  );
+}
+
+void testLossCanNoLongerLookLikeEmptiness()
+  .then(() => testOneRefusalNoLongerKillsTheWholeApp())
+  .then(() => {
+    report("regressão");
+    const { passed, failed } = counts();
+    console.log(`\n${passed} verificações passaram, ${failed} falharam\n`);
+    process.exit(exitCode());
+  })
+  // Sem isto, um teste assíncrono que lance salta o `report()` por
+  // completo: o que se vê é um stack trace do Node, sem contagem, sem
+  // saber quantas verificações chegaram a correr. É a mesma falha que
+  // esta suite existe para apanhar — perda indistinguível de vazio —
+  // desta vez no próprio arranque dos testes.
+  .catch((err) => {
+    report("regressão (interrompida)");
+    const { passed, failed } = counts();
+    console.error(
+      `\nA SUITE REBENTOU a meio: ${err instanceof Error ? err.message : String(err)}`
+    );
+    console.error(
+      `${passed} verificações passaram e ${failed} falharam ANTES do rebentamento — ` +
+        `as que vinham a seguir nem chegaram a correr.\n`
+    );
+    process.exit(1);
+  });

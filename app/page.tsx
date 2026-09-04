@@ -1,4 +1,9 @@
-import { getBootstrap, getFixtures, getFullLeagueStandings } from "@/lib/fpl-client";
+import {
+  getBootstrap,
+  getFixtures,
+  getFullLeagueStandings,
+  getFplDataHealth,
+} from "@/lib/fpl-client";
 import {
   buildScoredPlayers,
   pickCaptain,
@@ -122,6 +127,47 @@ function TierHeading({ label, note }: { label: string; note: string }) {
     <div className="mt-2 flex items-baseline gap-3 border-b border-border pb-1.5">
       <h2 className="eyebrow text-accent">{label}</h2>
       <p className="text-[13px] text-text-muted">{note}</p>
+    </div>
+  );
+}
+
+/**
+ * AVISO DE DADOS ANTIGOS.
+ *
+ * A app passou a sobreviver a uma falha da API do FPL servindo a última
+ * cópia boa em vez de morrer com um 500. Isso é uma melhoria — e seria uma
+ * armadilha se fosse silenciosa. Preços, lesões e disponibilidade mudam de
+ * hora a hora perto de um deadline, e uma transferência decidida sobre um
+ * retrato de ontem pode ser pior do que não decidir nada.
+ *
+ * Por isso este aviso não é discreto, diz a hora exata do retrato, e diz o
+ * que NÃO se deve fazer enquanto estiver lá.
+ */
+function StaleDataBanner({
+  health,
+}: {
+  health: { degraded: boolean; oldestSnapshotAt: number | null };
+}) {
+  if (!health.degraded || health.oldestSnapshotAt === null) return null;
+  const when = new Date(health.oldestSnapshotAt).toLocaleString("pt-PT", {
+    timeZone: "Europe/Lisbon",
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const hours = Math.round((Date.now() - health.oldestSnapshotAt) / 3_600_000);
+  return (
+    <div className="rounded-md border border-warn/40 bg-warn/10 px-4 py-3">
+      <p className="eyebrow text-warn">Dados desatualizados</p>
+      <p className="mt-1 text-[14px] leading-relaxed text-text">
+        A API do Fantasy não está a responder. Estás a ver a última cópia boa,
+        de <strong>{when}</strong>
+        {hours >= 1 ? ` (há ~${hours}h)` : ""}. Preços, lesões e notícias de
+        equipa podem ter mudado desde então —{" "}
+        <strong>não confirmes transferências com base neste ecrã</strong>.
+        Recarrega daqui a uns minutos.
+      </p>
     </div>
   );
 }
@@ -636,6 +682,9 @@ export default async function Home() {
       </header>
 
       <main className="mx-auto flex max-w-6xl flex-col gap-8 px-4 py-6 md:px-6">
+        {/* Antes de tudo o resto: se os dados não são de agora, isso é a
+            primeira coisa a saber, não uma nota de rodapé no fim. */}
+        <StaleDataBanner health={getFplDataHealth()} />
         <TierHeading label="Decidir" note="o que fazer antes do deadline" />
         {/* ================= 1. o que fazer ================= */}
         <Section
