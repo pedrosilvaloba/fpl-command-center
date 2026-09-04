@@ -90,6 +90,55 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.40 — perda e vazio deixam de ter a mesma resposta
+
+### A avaria que se escondeu duas vezes no mesmo sítio
+
+Depois de a v1.39 comprimir a submissão, a passagem seguinte reportou oito
+tentativas com dados reais, todas a devolverem exatamente isto:
+
+```
+{"accepted":[],"rejected":[],"acceptedCount":0,"rejectedCount":0,"recorded":true}
+```
+
+E aqui está o problema de fundo, que é maior do que qualquer uma das duas
+avarias que ele escondeu: **"a investigação correu e não encontrou nada" e "os
+achados nunca chegaram" produziam respostas byte a byte iguais.** Dois estados
+completamente diferentes, uma só resposta.
+
+Um protocolo em que a PERDA é indistinguível do VAZIO não se consegue depurar.
+Este escondeu duas avarias diferentes durante mais de um mês — primeiro o URL
+grande demais, depois o que quer que esteja a acontecer agora — e em ambos os
+casos o painel mostrava a mesma frase tranquila.
+
+### A correção: o silêncio passa a ter de ser deliberado
+
+Quem submete tem agora de **declarar quantas notas envia** (`n`), e o servidor
+confere contra o que realmente conseguiu ler:
+
+- **Bate certo** → segue.
+- **Não bate** → recusa alto, dizendo os DOIS números, e não regista nada.
+  Isso é um payload truncado, e nunca mais pode passar por semana calma.
+- **Não declarou** → recusa. Não se submete "nada" por acidente.
+
+`n=0` continua a ser um resultado válido e útil — é como se diz "verifiquei e
+não havia nada". A diferença é que passou a ser uma AFIRMAÇÃO, em vez do
+resultado por omissão de tudo o que corra mal.
+
+### E envio por partes, porque o cano é mais estreito do que se consegue medir
+
+O limite não é nosso: vive num proxy entre a sessão e a app, não está
+documentado de nenhum dos lados, e tentar sondá-lo daqui devolve 403 sem
+qualquer indicação de tamanho. Tentei — e o meu próprio pedido levou 403.
+
+Por isso o desenho deixa de adivinhar. Uma submissão pode ser dividida em
+partes (`sid`, `i`, `k`), nenhuma delas comprida, e o servidor volta a juntá-la.
+Um conjunto incompleto **não faz absolutamente nada** e a resposta diz que
+partes faltam. O modo de falha deste protocolo passa a ser "não aconteceu nada,
+e foi dito" — que é o oposto exato do que substitui.
+
+---
+
 ## Novo na v1.39 — dois números impossíveis, duas causas minhas
 
 ### 1. A investigação tática nunca esteve calada

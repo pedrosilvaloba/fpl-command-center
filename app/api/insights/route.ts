@@ -74,7 +74,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "não autorizado" }, { status: 401 });
   }
   const body = await req.json().catch(() => null);
-  const result = await processInsightSubmission(body);
+  // The declared count exists to catch a payload truncated in transit, which
+  // is a hazard of the GET path where findings ride in a query string. A POST
+  // body cannot lose array elements silently — a truncated body fails to
+  // parse as JSON and never reaches here — so this path satisfies the check
+  // from what it actually received, unless the caller declares a count itself.
+  const declared = (body as { n?: unknown } | null)?.n;
+  const insights = (body as { insights?: unknown } | null)?.insights;
+  const count =
+    typeof declared === "number"
+      ? declared
+      : Array.isArray(insights)
+        ? insights.length
+        : undefined;
+  const result = await processInsightSubmission(body, count);
   return NextResponse.json(result.body, { status: result.status });
 }
 

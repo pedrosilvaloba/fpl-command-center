@@ -143,8 +143,38 @@ export interface IntakeSubmission {
   insights?: unknown;
 }
 
+/**
+ * THE DEFECT THAT LET TWO SEPARATE FAILURES HIDE IN THE SAME PLACE.
+ *
+ * "The research ran and found nothing" and "the findings never arrived"
+ * produced BYTE-IDENTICAL responses: `accepted: [], rejected: [], recorded:
+ * true`. Two completely different states, one answer. First the oversized URL
+ * silently delivered nothing; then, when that was diagnosed, a second run
+ * reported eight submissions of real data all coming back 0/0 — and there was
+ * no way, from the response alone, to tell whether the server had received
+ * nothing or received nothing USEFUL.
+ *
+ * A protocol in which loss is indistinguishable from emptiness cannot be
+ * debugged, and this one hid two different bugs behind the same sentence for
+ * over a month.
+ *
+ * So the sender must now DECLARE how many findings it is sending, and the
+ * server checks that declaration against what it actually parsed:
+ *
+ *   - Count matches      → proceed.
+ *   - Count disagrees    → refuse loudly, naming both numbers. That is a
+ *                          truncated or mangled payload, and it must never
+ *                          again be recorded as a quiet week.
+ *   - No count declared  → refuse. Silence has to be deliberate.
+ *
+ * `expectedCount: 0` is how you say "I looked and there was genuinely
+ * nothing", which remains a valid and useful result. The difference is that
+ * it is now a STATEMENT rather than the default outcome of anything going
+ * wrong.
+ */
 export async function processInsightSubmission(
-  submission: IntakeSubmission | null
+  submission: IntakeSubmission | null,
+  expectedCount?: number
 ): Promise<IntakeResult> {
   const rawInputs = submission?.insights;
   const note =
@@ -157,10 +187,34 @@ export async function processInsightSubmission(
     };
   }
 
+  if (typeof expectedCount !== "number" || !Number.isFinite(expectedCount)) {
+    return {
+      status: 400,
+      body: {
+        error:
+          "falta o parâmetro 'n' — tens de declarar quantas notas estás a enviar. Serve para o servidor detetar um payload truncado em vez de o registar como 'semana sem notícias'. Se realmente não encontraste nada, envia n=0.",
+        received: rawInputs.length,
+      },
+    };
+  }
+
+  if (expectedCount !== rawInputs.length) {
+    return {
+      status: 400,
+      body: {
+        error: `payload incompleto: declaraste ${expectedCount} nota(s) e chegaram ${rawInputs.length}. NÃO foi registado nada — isto é quase de certeza um URL truncado pelo caminho. Comprime com 'payloadz' e, se necessário, divide em partes com 'sid'/'i'/'k'.`,
+        declared: expectedCount,
+        received: rawInputs.length,
+        recorded: false,
+      },
+    };
+  }
+
   // An EMPTY array is a legitimate, informative outcome: the research ran and
   // honestly concluded there was nothing solid enough to submit. Recording it
   // is the whole point — it is what distinguishes "ran, found nothing" from
-  // "never ran", and that distinction was invisible for weeks.
+  // "never ran". It is now only reachable by DECLARING n=0, so it can no
+  // longer be the accidental result of a payload going astray.
   if (rawInputs.length === 0) {
     await recordResearchRun({
       at: new Date().toISOString(),

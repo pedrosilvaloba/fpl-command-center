@@ -6,6 +6,12 @@ import {
   MAX_PAYLOAD_CHARS,
 } from "@/lib/insightsintake";
 import { checkApiToken, unauthorizedBody } from "@/lib/apitoken";
+import {
+  storeChunk,
+  clearChunks,
+  isValidSubmissionId,
+  MAX_CHUNKS,
+} from "@/lib/insightschunks";
 
 /**
  * The GET-shaped write path for the weekly tactical research.
@@ -67,8 +73,65 @@ export async function GET(req: NextRequest) {
   }
 
   const params = req.nextUrl.searchParams;
-  const compressed = params.get("payloadz");
+  let compressed = params.get("payloadz");
   const plain = params.get("payload");
+
+  // The declared number of findings. See `processInsightSubmission`: without
+  // it, a truncated payload and an honestly empty week are the same request.
+  const declared = params.get("n");
+  const expectedCount =
+    declared === null ? undefined : Number.parseInt(declared, 10);
+
+  // ---- chunked submission ---------------------------------------------
+  // `sid` + `i` + `k` split a compressed payload across several short URLs.
+  // An incomplete set does nothing at all and says which parts are missing.
+  const sid = params.get("sid");
+  if (sid) {
+    if (!isValidSubmissionId(sid)) {
+      return NextResponse.json(
+        { error: "'sid' inválido — usa 4 a 40 caracteres alfanuméricos" },
+        { status: 400 }
+      );
+    }
+    const i = Number.parseInt(params.get("i") ?? "", 10);
+    const k = Number.parseInt(params.get("k") ?? "", 10);
+    if (!Number.isFinite(i) || !Number.isFinite(k) || i < 1 || k < 1 || i > k || k > MAX_CHUNKS) {
+      return NextResponse.json(
+        { error: `'i' e 'k' têm de ser inteiros com 1 <= i <= k <= ${MAX_CHUNKS}` },
+        { status: 400 }
+      );
+    }
+    const part = compressed ?? plain;
+    if (!part) {
+      return NextResponse.json(
+        { error: "cada parte tem de trazer o seu pedaço em 'payloadz'" },
+        { status: 400 }
+      );
+    }
+    let status;
+    try {
+      status = await storeChunk(sid, i, k, part);
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : "falha a guardar a parte" },
+        { status: 503 }
+      );
+    }
+    if (!status.complete) {
+      // Deliberately NOT an error: the sender did its job, the set is simply
+      // not finished. Saying exactly what is missing is the whole point.
+      return NextResponse.json({
+        pending: true,
+        recorded: false,
+        sid,
+        received: status.received,
+        missing: status.missing,
+        note: `Parte ${i} de ${k} guardada. Faltam: ${status.missing.join(", ")}. Nada foi registado ainda.`,
+      });
+    }
+    compressed = status.assembled!;
+    await clearChunks(sid, k);
+  }
 
   if (!compressed && !plain) {
     return NextResponse.json(
@@ -113,7 +176,8 @@ export async function GET(req: NextRequest) {
   }
 
   const result = await processInsightSubmission(
-    parsed as { note?: unknown; insights?: unknown }
+    parsed as { note?: unknown; insights?: unknown },
+    expectedCount
   );
   return NextResponse.json(result.body, { status: result.status });
 }

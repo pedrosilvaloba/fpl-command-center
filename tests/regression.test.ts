@@ -113,7 +113,12 @@ import { planFromRequest } from "../app/api/cron/refresh/route";
 import { paramsFromCursor, allTunableParams, MAX_PARAMS_PER_RUN, chooseSample } from "../lib/jobs";
 import type { FplElement } from "../lib/types";
 import { deflateSync, inflateSync, gzipSync, gunzipSync } from "node:zlib";
-import { decodeCompressedPayload, MAX_INFLATED_CHARS } from "../lib/insightsintake";
+import {
+  decodeCompressedPayload,
+  processInsightSubmission,
+  MAX_INFLATED_CHARS,
+} from "../lib/insightsintake";
+import { isValidSubmissionId, MAX_CHUNKS } from "../lib/insightschunks";
 import { DEFAULT_MODEL_PARAMS, PARAM_GRIDS } from "../lib/modelparams";
 import { calibrate, MIN_EVENTS, MIN_ROWS } from "../lib/calibration";
 import {
@@ -5383,6 +5388,99 @@ function testCompressedSubmissionsFitWhereRawOnesDoNot() {
   );
 }
 
+async function testLossCanNoLongerLookLikeEmptiness() {
+  // ═══ O DEFEITO QUE ESCONDEU DUAS AVARIAS DIFERENTES NO MESMO SÍTIO ═══
+  //
+  // "A investigação correu e não encontrou nada" e "os achados nunca
+  // chegaram" produziam respostas BYTE A BYTE IGUAIS:
+  //
+  //     {"accepted":[],"rejected":[],"acceptedCount":0,"rejectedCount":0,
+  //      "recorded":true}
+  //
+  // Dois estados completamente diferentes, uma só resposta. Primeiro foi o
+  // URL grande demais a entregar silenciosamente nada; depois, já
+  // diagnosticado isso, uma segunda execução relatou oito submissões de
+  // dados reais a voltarem todas 0/0 — e não havia forma, só pela resposta,
+  // de saber se o servidor tinha recebido nada ou recebido nada de útil.
+  //
+  // Um protocolo em que a PERDA é indistinguível do VAZIO não se consegue
+  // depurar. Escondeu duas avarias durante mais de um mês.
+  const oneInsight = {
+    note: "teste",
+    insights: [
+      {
+        scope: "player",
+        playerName: "Maddison",
+        teamShortName: "TOT",
+        factor: 0.85,
+        reason: "dúvida",
+        source: "teste",
+      },
+    ],
+  };
+
+  // Sem contagem declarada: recusa. O silêncio tem de ser deliberado.
+  const undeclared = await processInsightSubmission(oneInsight, undefined);
+  check(
+    "sem declarar quantas notas envia, a submissão é recusada",
+    undeclared.status === 400 && /'n'/.test(String(undeclared.body.error)),
+    `${undeclared.status}: ${String(undeclared.body.error).slice(0, 60)}`
+  );
+
+  // Contagem que não bate certo: recusa, e diz os DOIS números.
+  const truncated = await processInsightSubmission({ note: "t", insights: [] }, 6);
+  check(
+    "declarar 6 e chegarem 0 é recusado como payload truncado",
+    truncated.status === 400 && truncated.body.declared === 6 && truncated.body.received === 0,
+    `${truncated.status}: ${String(truncated.body.error).slice(0, 80)}`
+  );
+  check(
+    "e NADA é registado nesse caso",
+    truncated.body.recorded === false,
+    `recorded: ${truncated.body.recorded}`
+  );
+
+  // E o caso que interessa proteger: uma semana genuinamente vazia continua
+  // a ser um resultado válido — mas agora só se for DECLARADA.
+  const honestlyEmpty = await processInsightSubmission(
+    { note: "verifiquei e não há nada", insights: [] },
+    0
+  );
+  check(
+    "uma semana genuinamente vazia, declarada com n=0, continua a ser registada",
+    honestlyEmpty.status === 200 && honestlyEmpty.body.recorded === true,
+    `${honestlyEmpty.status}`
+  );
+
+  // A distinção que é o objetivo de tudo isto.
+  check(
+    "perda e vazio deixam de ter a mesma resposta",
+    JSON.stringify(truncated.body) !== JSON.stringify(honestlyEmpty.body)
+  );
+}
+
+function testChunkedSubmissionDoesNothingUntilComplete() {
+  // Partes em falta não podem aplicar nada, e têm de dizer quais faltam. O
+  // modo de falha deste protocolo passa a ser "não aconteceu nada e foi
+  // dito", que é o oposto do que substitui.
+  check(
+    "um sid válido é aceite",
+    isValidSubmissionId("gw3-sexta_01") && isValidSubmissionId("abcd")
+  );
+  check(
+    "e um sid que tenta sair do seu espaço é recusado",
+    !isValidSubmissionId("../outra-coisa") &&
+      !isValidSubmissionId("a") &&
+      !isValidSubmissionId("x".repeat(41))
+  );
+  check(
+    "o número de partes é limitado — não é armazenamento",
+    MAX_CHUNKS <= 12 && MAX_CHUNKS >= 2,
+    `${MAX_CHUNKS}`
+  );
+}
+
+testChunkedSubmissionDoesNothingUntilComplete();
 testCompressedSubmissionsFitWhereRawOnesDoNot();
 testTheSampleIsNotChosenUsingTheOutcome();
 testPureNoiseProducesNoTransfers();
@@ -5390,7 +5488,12 @@ testRealDifferencesStillProduceTransfers();
 testTheProtectionsNoLongerSwitchThemselvesOff();
 testTheRefusedMoveIsStillShown();
 
-report("regressão");
-const { passed, failed } = counts();
-console.log(`\n${passed} verificações passaram, ${failed} falharam\n`);
-process.exit(exitCode());
+// O único teste assíncrono da suite. Envolvido em vez de usar `await` no
+// topo do módulo, porque isso torna o módulo assíncrono e o tsx deixa de o
+// conseguir carregar (ERR_REQUIRE_ASYNC_MODULE).
+void testLossCanNoLongerLookLikeEmptiness().then(() => {
+  report("regressão");
+  const { passed, failed } = counts();
+  console.log(`\n${passed} verificações passaram, ${failed} falharam\n`);
+  process.exit(exitCode());
+});
