@@ -90,6 +90,34 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.42 — arrumar o que estava à frente do que interessa
+
+Auditoria ao layout, a pedido do dono, com a página vista a sério em produção.
+São **22 secções**. A queixa dele foi que as últimas versões não mudaram nada
+do que ele vê, e o mapa da página deu-lhe razão de outra maneira:
+
+**O painel de manutenção estava em QUINTO lugar — acima do plantel dele.**
+
+`Saúde do sistema` é diagnóstico da máquina: só interessa quando alguma coisa
+pára, e nessa altura já há um alarme vermelho no topo a mandar olhar para lá.
+Estava à frente do plantel, dos planos de transferência e da revisão da
+jornada. Pôr a canalização à frente do jogo foi exatamente a crítica que ele
+fez, e passa para o fim da página e para o fim da barra de navegação.
+
+**O vice-capitão passa para o cabeçalho, ao lado do capitão.** É uma decisão
+que se toma na mesma altura e no mesmo ecrã da FPL, e estava enterrada no meio
+dos planos. Ganha o seu lugar por dois motivos: até à v1.41 era escolhido ao
+acaso, e um número que ninguém vê é um número que ninguém verifica.
+
+### O que fica por fazer no layout, e é mais do que isto
+
+Vinte e duas secções não são um painel, são um documento. A ordem ainda mistura
+decisão (o que fazer agora), referência (calendário, melhores escolhas) e
+metodologia (`Como os planos são comparados`, a meio, entre os planos e a
+revisão). A próxima passagem é separar as três coisas em vez de as intercalar.
+
+---
+
 ## Novo na v1.41 — o vice-capitão estava a ser escolhido ao acaso
 
 Auditoria ao modelo de escolha de equipa, a pedido do dono. Primeiro achado, e

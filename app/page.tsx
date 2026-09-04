@@ -84,6 +84,9 @@ const NAV: [string, string][] = [
   ["mercado", "Mercado"],
   ["aprendizagem", "Aprendizagem"],
   ["referencia", "Referência"],
+  // Diagnóstico da máquina, não uma decisão de FPL — último na barra, tal
+  // como é o último na página.
+  ["sistema", "Sistema"],
 ];
 
 function Section({
@@ -495,6 +498,15 @@ export default async function Home() {
   // read at a glance; the full reasoning lives in the panel below it.
   const decisionCaptain =
     transferAdvice.recommended?.captain ?? captain;
+  // O VICE PASSA A ESTAR NO CABEÇALHO, AO LADO DO CAPITÃO.
+  //
+  // É uma decisão que se toma na mesma altura, no mesmo ecrã da FPL, e que
+  // estava enterrada no meio dos planos. Ganha o seu lugar agora por dois
+  // motivos: até à v1.41 era escolhido ao acaso (o termo do seguro valia
+  // zero para um capitão indiscutível, e ficava o primeiro do array), e um
+  // número que ninguém vê é um número que ninguém verifica.
+  const decisionVice =
+    transferAdvice.recommended?.viceCaptain ?? viceCaptain;
   const decisionHeadline = (() => {
     const plan = transferAdvice.recommended;
     if (!plan) {
@@ -599,6 +611,7 @@ export default async function Home() {
                 value={decisionCaptain?.element.web_name ?? "—"}
                 tone="accent"
               />
+              <Fact label="Vice" value={decisionVice?.element.web_name ?? "—"} />
               {squadState.available ? (
                 <>
                   <Fact
@@ -639,11 +652,6 @@ export default async function Home() {
           </div>
 
           <ChipPlanPanel advice={chipAdvice} calendar={calendar} event={fromEvent} />
-
-          <AutomationPanel
-            jobs={jobHealth}
-            cronSecretConfigured={(process.env.CRON_SECRET ?? "").trim().length > 0}
-          />
 
           <TransferPlanPanel
             advice={transferAdvice}
@@ -1423,6 +1431,20 @@ export default async function Home() {
               </ul>
             </div>
           </div>
+        </Section>
+
+        {/* MANUTENÇÃO, NO FIM — E A RAZÃO É UMA QUEIXA DIRETA DO DONO.
+            Este painel estava em QUINTO lugar na página, acima do plantel do
+            próprio gestor. É diagnóstico da máquina, não uma decisão de FPL:
+            só interessa quando alguma coisa pára, e nessa altura há um alarme
+            vermelho lá em cima a mandar olhar para aqui. Pôr a canalização à
+            frente do jogo foi exatamente a crítica que ele fez, e tinha
+            razão. */}
+        <Section id="sistema" title="Saúde do sistema">
+          <AutomationPanel
+            jobs={jobHealth}
+            cronSecretConfigured={(process.env.CRON_SECRET ?? "").trim().length > 0}
+          />
         </Section>
       </main>
 
