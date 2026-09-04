@@ -177,6 +177,16 @@ function PlanCard({
           disappeared from gameweek four onward, exactly when the owner started
           asking why the model wanted to sell players who were doing well. The
           number that decides the answer should never be the hidden one. */}
+      {plan.gainCapped && (
+        <p className="mb-2 rounded-lg border border-warn/40 bg-warn/5 px-3 py-2 text-xs leading-relaxed text-text-muted">
+          <strong className="text-warn">Ganho limitado.</strong> O modelo queria
+          reportar um número maior do que qualquer onze consegue render numa
+          jornada. Escolher os melhores de seiscentas estimativas escolhe também
+          os erros mais otimistas, por isso trata este valor como um limite
+          superior, não como uma previsão.
+        </p>
+      )}
+
       {plan.key !== "manter" && plan.requiredEdge > 0 && (
         <p className="mb-2 font-mono text-[11px] tabular text-text-muted">
           barra para este plano:{" "}

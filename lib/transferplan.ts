@@ -413,6 +413,10 @@ export interface TransferPlan {
   netValue: number;
   /** Versus doing nothing. Negative means the plan is worse than holding. */
   netGainVsHold: number;
+  /** True quando o ganho acima foi limitado pelo teto de plausibilidade —
+   * ou seja, o modelo queria reportar um número que nenhum onze consegue
+   * produzir. Ver `decisionGain` em lib/selection.ts. */
+  gainCapped: boolean;
   bankAfterM: number;
   rationale: string;
 }
@@ -747,7 +751,8 @@ function makePlan(
       ) / 10,
     confidence: 1, // filled in below, once moves exist
     requiredEdge: 0,
-    netGainVsHold: 0, // filled in by the caller once the hold plan exists
+    netGainVsHold: 0,
+    gainCapped: false, // filled in by the caller once the hold plan exists
     bankAfterM,
     rationale: "",
   };
@@ -1088,8 +1093,31 @@ export function planTransfers(
     // que está em pontos-janela de verdade. Um ganho encolhido 2.5x medido
     // contra uma barra em escala real: o planeador era duas vezes e meia mais
     // conservador do que dizia ser, e o número no ecrã não era pontos.
-    p.netGainVsHold =
-      Math.round(objectiveToWindowPoints(p.netValue - hold.netValue) * 10) / 10;
+    const raw = objectiveToWindowPoints(p.netValue - hold.netValue);
+
+    // ═══ v1.46 — O TETO DE PLAUSIBILIDADE NÃO CHEGAVA AO NÚMERO MAIOR ═══
+    //
+    // A v1.35 construiu `decisionGain` precisamente para isto: escolher os
+    // melhores de seiscentas estimativas escolhe também os erros mais
+    // otimistas, e a diferença entre o plantel "ideal" e o teu herda essa
+    // inflação toda. O teto foi aplicado ao SINAL de wildcard e a mais nada.
+    //
+    // `netGainVsHold` é o número em letra maior do cabeçalho — "GANHO +161.6
+    // pts" — e nunca passou por lá. Enquanto vinha encolhido pelo erro de
+    // unidades da v1.45 isso não se via; corrigidas as unidades, apareceu em
+    // pontos reais e ficou evidente que seis trocas não rendem trinta e dois
+    // pontos por jornada.
+    //
+    // O mesmo padrão de sempre: a defesa existe, está escrita, e não está
+    // ligada ao sítio onde mais custa.
+    const { gain: plausible, capped } = decisionGain(
+      p.xiWindowPoints,
+      hold.xiWindowPoints,
+      WINDOW_GAMEWEEKS
+    );
+    const bounded = Math.min(raw, plausible);
+    p.netGainVsHold = Math.round(bounded * 10) / 10;
+    p.gainCapped = capped && bounded < raw - 1e-9;
   }
   for (const p of plans) {
     p.confidence = Math.round(planConfidence(p) * 1000) / 1000;

@@ -57,6 +57,7 @@ import {
   shrunkForSelection,
   selectionReliability,
   SELECTION_RELIABILITY_FLOOR,
+  PLAUSIBLE_XI_POINTS_PER_GW,
   retentionThreshold,
   rateErrorPerGw,
   selectionInflation,
@@ -5803,6 +5804,48 @@ function testReportedGainIsInRealPoints() {
     );
   }
 }
+
+
+function testHeadlineGainCannotExceedWhatAnXiCanScore() {
+  // v1.46 — a v1.35 construiu `decisionGain` para limitar a diferença entre o
+  // plantel "ideal" e o teu, porque escolher os melhores de seiscentas
+  // estimativas escolhe também os erros mais otimistas. Foi ligado ao SINAL
+  // de wildcard e a mais nada — e `netGainVsHold` é o número em letra maior
+  // do cabeçalho.
+  //
+  // Enquanto vinha encolhido pelo erro de unidades da v1.45 não se via.
+  // Corrigidas as unidades apareceu em pontos reais: "+161.6 pts" para seis
+  // trocas, ou seja 32 pontos por jornada.
+  const owned: ScoredPlayer[] = [];
+  let id = 1, club = 0;
+  for (const [type, n] of [[1, 2], [2, 5], [3, 5], [4, 3]] as [number, number][])
+    for (let i = 0; i < n; i++)
+      owned.push(mkSim(id++, { teamId: (club++ % 20) + 1, type, epNext: 2, price: 6 }));
+  // Um mercado absurdo: toda a gente a 20 pontos por jornada, ao mesmo preço.
+  const market: ScoredPlayer[] = [];
+  for (const type of [1, 2, 3, 4])
+    for (let i = 0; i < 10; i++)
+      market.push(mkSim(id++, { teamId: (club++ % 20) + 1, type, epNext: 20, price: 6 }));
+
+  const advice = planTransfers([...owned, ...market], mkState(owned, 15), { currentEvent: 20 });
+  const best = advice.plans.find((p) => p.transfers > 0);
+  check("existe um plano com trocas", !!best, `${advice.plans.map((p) => p.key).join(",")}`);
+  if (best) {
+    const ceiling = PLAUSIBLE_XI_POINTS_PER_GW * 5;
+    check(
+      "o ganho reportado nunca passa do que um onze plausível consegue render",
+      best.netGainVsHold <= ceiling,
+      `ganho ${best.netGainVsHold}, teto ${ceiling}`
+    );
+    check(
+      "e quando é limitado, isso fica registado em vez de escondido",
+      best.gainCapped === true,
+      `gainCapped: ${best.gainCapped}`
+    );
+  }
+}
+
+testHeadlineGainCannotExceedWhatAnXiCanScore();
 
 testReportedGainIsInRealPoints();
 

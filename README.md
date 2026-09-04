@@ -90,6 +90,36 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.46 — o teto de plausibilidade não chegava ao número maior da página
+
+Consequência direta da v1.45, e encontrada ao verificar o deploy dela.
+
+Com as unidades corrigidas, o "GANHO" do cabeçalho passou de **+59.4** para
+**+161.6 pts**. A correção estava certa — mas o número, agora em pontos
+reais, ficou obviamente implausível: seis transferências a render **32 pontos
+por jornada**.
+
+A v1.35 já tinha construído a defesa para isto. `decisionGain` existe
+precisamente porque escolher os melhores de seiscentas estimativas escolhe
+também os erros mais otimistas, e a diferença entre o plantel "ideal" e o teu
+herda essa inflação inteira. **Estava ligado ao sinal de wildcard e a mais
+nada.** O `netGainVsHold` — o número em letra maior da página — nunca passou
+por lá.
+
+Enquanto vinha encolhido 2.5x pelo erro de unidades, isso não se via. Corrigir
+um defeito tornou o outro visível.
+
+É o mesmo padrão que esta auditoria encontrou seis vezes: **a defesa existe,
+está escrita, está comentada — e não está ligada ao sítio onde mais custa.**
+Foi assim com o teto da postura (existia no optimizer, não no capitão), com o
+travão de ruído (desligava-se sozinho à jornada 4), e agora com este.
+
+O ganho reportado passa a ser limitado ao que um onze plausível consegue
+render, e quando é limitado **diz-se no ecrã** em vez de ficar escondido — é
+um limite superior, não uma previsão.
+
+---
+
 ## Novo na v1.45 — o "GANHO" que o cabeçalho mostrava não estava em pontos
 
 Auditoria ao planeador de transferências, o maior ficheiro do projeto e o
