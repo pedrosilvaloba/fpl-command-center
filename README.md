@@ -90,6 +90,76 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.45 — o "GANHO" que o cabeçalho mostrava não estava em pontos
+
+Auditoria ao planeador de transferências, o maior ficheiro do projeto e o
+último por abrir. **O defeito mais consequente encontrado até agora.**
+
+### O que estava errado
+
+O objetivo que o solver maximiza mistura dois horizontes por peso: valor de
+plantel a 5 jornadas com 12%, valor do onze na jornada seguinte com 88%. Um
+jogador que é T pontos-janela melhor melhora esse objetivo em cerca de
+**0.40 × T**, não em T.
+
+Os valores dos jogadores entravam com essa escala. **O custo do hit e o valor
+de guardar uma transferência eram subtraídos em bruto, em pontos.**
+
+```
+1 ponto-janela = 0.4016 unidades do objetivo
+
+ganho de um jogador melhor  → multiplicado por 0.40
+custo de um hit (4 pts)     → subtraído em BRUTO
+guardar uma transferência   → subtraído em BRUTO
+```
+
+Três consequências, todas medidas:
+
+1. **Um hit de 4 pontos era cobrado como se custasse 10 pontos-janela.** O
+   planeador recusava sistematicamente hits que valiam a pena.
+2. **Guardar uma transferência valia 3.7 pontos-janela, não 1.5.**
+3. **O número mostrado ao gestor não era pontos.** O "GANHO +59.4 pts" do
+   cabeçalho vinha encolhido 2.5 vezes — e era comparado contra
+   `requiredEdge`, que está em pontos a sério. Um ganho encolhido medido
+   contra uma barra em escala real: o planeador era duas vezes e meia mais
+   conservador do que dizia ser.
+
+Verificado ao cêntimo antes de mexer: duas trocas de +20 pontos com um hit
+davam `40 × 0.4016 − 4 − 2×1.5 = 9.1`, e o planeador reportava **9**. Depois
+da correção reporta **32.9**, contra os 33 que a conta à mão dá.
+
+### É o mesmo erro que a v1.38 já tinha corrigido
+
+No mesmo ficheiro, sete versões antes, o limiar de retenção tinha exatamente
+este problema e foi corrigido. **Corrigi-o lá e não verifiquei se a mistura
+existia mais acima.** Existia, nos dois sítios onde o solver e o ranking somam
+custos.
+
+### O que isto obrigou a refazer
+
+A constante `RATE_ERROR_BASE_PER_GW` tinha sido afinada **enquanto o erro
+existia**, e tinha-o absorvido: os 3.7 pontos artificiais de guardar uma
+transferência funcionavam como travão a trocas marginais. Corrigidas as
+unidades, a rotatividade voltou, e a constante foi re-derivada com as mesmas
+duas experiências:
+
+```
+BASE   churn (ruído 0.5)   churn (ruído 1.0)   plantel fraco
+2.0    5/15                11/15               +377 pts
+2.6    0/15                11/15               +353 pts
+3.2    0/15                 8/15               +302 pts  ← escolhido
+3.8    0/15                 5/15               +274 pts
+```
+
+Três testes tiveram de ser reescalados pela mesma razão, e um deles foi
+reescrito para medir o **critério** em vez do resultado: procurava um ganho
+que caísse entre duas barras, e essa janela fechou-se. `requiredGain` deixou
+de viver dentro de uma frase em português e passou a ser um campo — um número
+que a interface mostra e os testes verificam não pode obrigar a raspar prosa
+com expressões regulares.
+
+---
+
 ## Novo na v1.44 — o Free Hit era o único chip que não seguia a regra da casa
 
 O cabeçalho do `lib/chipplan.ts` diz, em letra grande, qual é o princípio de

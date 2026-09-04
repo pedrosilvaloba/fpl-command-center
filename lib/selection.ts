@@ -158,25 +158,35 @@ import type { ScoredPlayer } from "./recommend";
  * sample size and never reaches zero. The CONSTANT is a judgement, and it was
  * chosen by sweeping it against both experiments rather than by taste:
  *
- *     BASE   churn na verdade plana        plantel bom
- *     1.4    8/15 com ruído 1.0 pts/jorn   6 trocas
- *     1.7    0/15                          5 trocas
- *     2.0    0/15                          0 trocas  ← escolhido
- *     2.4    0/15                          0 trocas
+ * RE-DERIVADO EM v1.45, e a razão importa. O valor anterior (2.0) foi
+ * afinado enquanto o planeador tinha um ERRO DE UNIDADES: o custo de um hit e
+ * o valor de guardar uma transferência eram subtraídos em pontos brutos a um
+ * objetivo em que os pontos dos jogadores valiam 0.40 cada. Guardar uma
+ * transferência valia, na prática, 3.7 pontos-janela em vez de 1.5 — uma
+ * fricção artificial que ajudava a travar trocas marginais. A constante
+ * tinha absorvido esse erro.
  *
- * 2.0 is the knee: the first value where a good squad is left alone and a
- * flat-truth pool produces no churn at all, while a weak squad still gets a
- * wildcard worth +274 true points. 2.4 behaved identically on the upgrade
- * side and slightly better on churn, and was NOT taken: it implies a rate
- * error of 1.2 points a gameweek after three games, which overstates how
- * little is knowable, and the synthetic upgrade tests are too coarse to show
- * what a stricter threshold would block. Choosing the looser of two values
- * that both pass is the conservative direction here.
+ * Corrigidas as unidades, a fricção desapareceu e a rotatividade voltou. Novo
+ * varrimento, com as mesmas duas experiências:
+ *
+ *     BASE   churn (ruído 0.5)  churn (ruído 1.0)   plantel fraco
+ *     2.0    5/15               11/15               +377 pts
+ *     2.6    0/15               11/15               +353 pts
+ *     3.2    0/15                8/15               +302 pts  ← escolhido
+ *     3.8    0/15                5/15               +274 pts
+ *
+ * 3.2 restaura a proteção total ao nível de ruído que o prior assume e
+ * reduz-a a meio no nível acima, mantendo +302 pontos VERDADEIROS num
+ * plantel fraco. 3.8 protege mais e custa mais ganhos reais; entre dois
+ * valores que passam, fica o mais folgado.
+ *
+ * O teto `MAX_RATE_ERROR_PER_GW` foi testado a 1.2, 1.5 e 1.8 e NÃO é a
+ * restrição que manda — os três dão resultados idênticos. Fica onde estava.
  *
  * lib/calibration.ts should eventually replace this with a measurement. Until
  * it does, it is labelled a prior everywhere it surfaces.
  */
-export const RATE_ERROR_BASE_PER_GW = 2.0;
+export const RATE_ERROR_BASE_PER_GW = 3.2;
 
 /**
  * What the model knows BEFORE a ball is kicked, expressed in gameweeks of

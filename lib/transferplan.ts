@@ -210,6 +210,14 @@ const MAX_POINTS_SACRIFICE_PER_MOVE = 2;
  * The factor is therefore DERIVED from the very constants that define the
  * objective, so it cannot drift away from them when one of them is tuned.
  */
+/** O inverso de `retentionInObjectiveUnits`: leva um valor do objetivo de
+ * volta a pontos-janela, que é a única escala em que faz sentido mostrar um
+ * número ao gestor ou compará-lo com um travão de ruído. */
+export function objectiveToWindowPoints(objective: number): number {
+  const perPoint = retentionInObjectiveUnits(1);
+  return perPoint > 0 ? objective / perPoint : objective;
+}
+
 export function retentionInObjectiveUnits(windowPoints: number): number {
   const perGwShare = 1 / WINDOW_GAMEWEEKS;
   const xiShare = perGwShare + FUTURE_DISCOUNT * (1 - perGwShare);
@@ -336,7 +344,27 @@ export function planObjective(
     total += v.squad * BENCH_WEIGHT;
     if (xiIds.has(p.element.id)) total += v.xi * (1 - BENCH_WEIGHT);
   }
-  return total - hits * HIT_COST_POINTS - transfers * perTransferCost;
+  // ═══ v1.45 — OS CUSTOS TÊM DE ESTAR NAS MESMAS UNIDADES QUE O VALOR ═══
+  //
+  // `total` acima é a soma dos valores dos jogadores, que estão na escala do
+  // OBJETIVO: cerca de 0.40 unidades por ponto-janela (ver
+  // `retentionInObjectiveUnits`). O custo do hit e o valor de opção da
+  // transferência eram subtraídos em BRUTO, em pontos.
+  //
+  // Consequência medida: um hit de 4 pontos era cobrado como se custasse
+  // 4 / 0.4016 = 10 PONTOS-JANELA, e guardar uma transferência valia 3.7 e
+  // não 1.5. O planeador recusava sistematicamente hits que valem a pena e
+  // sobrevalorizava guardar transferências, por um fator de dois e meio.
+  //
+  // É exatamente o mesmo erro que a v1.38 corrigiu para o limiar de retenção,
+  // no mesmo ficheiro. Corrigi-o lá e não verifiquei se a mistura existia
+  // mais acima — existia, nos dois sítios onde o solver e o ranking somam
+  // custos.
+  return (
+    total -
+    retentionInObjectiveUnits(hits * HIT_COST_POINTS) -
+    retentionInObjectiveUnits(transfers * perTransferCost)
+  );
 }
 
 export interface TransferMove {
@@ -390,6 +418,15 @@ export interface TransferPlan {
 }
 
 export interface WildcardSignal {
+  /** Quantos pontos o wildcard teria de valer para ser aconselhado agora,
+   * já com todos os prémios somados (início de época, paragem para seleções,
+   * confiança do modelo).
+   *
+   * Existia apenas embutido numa frase em português. Um número que a
+   * interface mostra e que os testes precisam de verificar não pode viver só
+   * dentro de prosa: obriga a raspá-lo com expressões regulares, que partem
+   * quando o texto muda, e impede-o de ser mostrado noutro sítio. */
+  requiredGain: number;
   /** Set when the "ideal" eleven's forecast is not physically plausible —
    * the model saying out loud that it is over-reaching. See lib/selection.ts. */
   overreach?: string | null;
@@ -544,7 +581,11 @@ function solveSquad(opts: SolveOptions): ScoredPlayer[] | null {
   const perTransferCost = freeTransfers >= 5 ? 0 : FT_OPTION_VALUE;
   if (perTransferCost > 0) {
     constraints.transferbound = { min: SQUAD_SIZE };
-    variables.transfers = { score: -perTransferCost, transferbound: 1 };
+    // Em unidades do objetivo — ver planObjective.
+    variables.transfers = {
+      score: -retentionInObjectiveUnits(perTransferCost),
+      transferbound: 1,
+    };
     ints.transfers = 1;
     for (const p of pool) {
       if (ownedIds.has(p.element.id)) variables[`s${p.element.id}`].transferbound = 1;
@@ -556,7 +597,11 @@ function solveSquad(opts: SolveOptions): ScoredPlayer[] | null {
     // The variable carries a negative objective coefficient, so the solver
     // drives it down to exactly that bound rather than inflating it.
     constraints.hitbound = { min: SQUAD_SIZE - freeTransfers };
-    variables.hits = { score: -HIT_COST_POINTS, hitbound: 1 };
+    // Em unidades do objetivo — ver planObjective.
+    variables.hits = {
+      score: -retentionInObjectiveUnits(HIT_COST_POINTS),
+      hitbound: 1,
+    };
     ints.hits = 1;
     for (const p of pool) {
       if (ownedIds.has(p.element.id)) variables[`s${p.element.id}`].hitbound = 1;
@@ -1008,6 +1053,7 @@ export function planTransfers(
     const advise = wildcardAvailable && distance >= 5 && gain >= requiredGain;
     const overreach = implausibleXiWarning(plan.xiWindowPoints, 5);
     wildcard = {
+      requiredGain: Math.round(requiredGain * 10) / 10,
       distance,
       gain,
       available: wildcardAvailable,
@@ -1035,7 +1081,15 @@ export function planTransfers(
 
   // --- ranking ----------------------------------------------------------
   for (const p of plans) {
-    p.netGainVsHold = Math.round((p.netValue - hold.netValue) * 10) / 10;
+    // CONVERTIDO PARA PONTOS-JANELA ANTES DE SER MOSTRADO OU COMPARADO.
+    //
+    // `netValue` é o objetivo do solver, não pontos. Era mostrado ao gestor
+    // como "GANHO +59.4 pts" no cabeçalho e comparado contra `requiredEdge`,
+    // que está em pontos-janela de verdade. Um ganho encolhido 2.5x medido
+    // contra uma barra em escala real: o planeador era duas vezes e meia mais
+    // conservador do que dizia ser, e o número no ecrã não era pontos.
+    p.netGainVsHold =
+      Math.round(objectiveToWindowPoints(p.netValue - hold.netValue) * 10) / 10;
   }
   for (const p of plans) {
     p.confidence = Math.round(planConfidence(p) * 1000) / 1000;

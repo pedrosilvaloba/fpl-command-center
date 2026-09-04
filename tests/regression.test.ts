@@ -49,7 +49,8 @@ import {
   MIN_STRATEGIC_RETENTION,
 } from "../lib/optimizer";
 import { computeMomentum, momentumReason } from "../lib/momentum";
-import { readCalendar, planChips } from "../lib/chipplan";
+import { readCalendar, planChips, WILDCARD_BREAK_PREMIUM } from "../lib/chipplan";
+import { retentionInObjectiveUnits, objectiveToWindowPoints } from "../lib/transferplan";
 import {
   decisionGain,
   implausibleXiWarning,
@@ -2035,7 +2036,9 @@ function testNoUpgradeMeansHold() {
 
 function testWildcardSignal() {
   // A squad far below what the budget could buy: many upgrades available.
-  const { owned, scored } = mkTransferPool([12, 12, 12, 12, 12, 12]);
+  // Ganhos de 20 e jornada 5: cedo o suficiente para o texto do critério
+  // reportar "Precisaria de N pontos", que é onde a barra fica observável.
+  const { owned, scored } = mkTransferPool([20, 20, 20, 20, 20, 20]);
   const advice = planTransfers(scored, mkState(owned, 1), { currentEvent: 20 });
   check(
     "o sinal de wildcard mede a distância ao plantel ideal em transferências",
@@ -3740,7 +3743,12 @@ function testMarginalTransferIsRefusedEarlyInTheSeason() {
   );
 
   // Uma troca de tamanho intermédio: ruído em agosto, vantagem real em abril.
-  const mid = mkTransferPool([7]);
+  // ESCALA REVISTA EM v1.45. O limiar de retenção subiu de 2.0 para 3.2 na
+  // constante base, porque a correção do erro de unidades no planeador
+  // removeu uma fricção artificial que a constante antiga estava a absorver.
+  // 7 pontos deixaram de atravessar a fronteira em qualquer jornada; 12
+  // atravessa-a — recusado cedo, aceite tarde, que é a propriedade a testar.
+  const mid = mkTransferPool([12]);
   const midTrust = (gw: number) =>
     planTransfers(
       mid.scored.map((p) => withTrust(p, 1)),
@@ -3753,7 +3761,7 @@ function testMarginalTransferIsRefusedEarlyInTheSeason() {
   const midEarly = midTrust(2);
   const midLate = midTrust(32);
   check(
-    "a mesma troca de 7 pts é recusada na jornada 2 e aceite na jornada 32",
+    "a mesma troca de 12 pts é recusada na jornada 2 e aceite na jornada 32",
     midEarly.recommended?.key === "manter" && midLate.recommended?.key !== "manter",
     `cedo ${midEarly.recommended?.key}, tarde ${midLate.recommended?.key}`
   );
@@ -4269,7 +4277,9 @@ function testWildcardWaitsForTheInternationalBreak() {
   // 3.8, e seis trocas de 4 pontos somam 20, que cai exatamente entre as duas
   // barras (12 sem paragem, 22 com). O teste voltou a ter uma janela onde o
   // prémio da paragem é a única coisa que decide.
-  const { owned, scored } = mkTransferPool([4, 4, 4, 4, 4, 4]);
+  // Ganhos de 20 e jornada 5: cedo o suficiente para o texto do critério
+  // reportar "Precisaria de N pontos", que é onde a barra fica observável.
+  const { owned, scored } = mkTransferPool([20, 20, 20, 20, 20, 20]);
   const state = mkState(owned, 1);
 
   const noBreak = {
@@ -4278,21 +4288,37 @@ function testWildcardWaitsForTheInternationalBreak() {
     knownDoubleEvents: [] as number[],
     knownBlankEvents: [] as number[],
   };
-  const withBreak = { ...noBreak, breakAfterEvents: [30], breakImminent: true };
+  const withBreak = { ...noBreak, breakAfterEvents: [5], breakImminent: true };
 
-  const a = planTransfers(scored, state, { currentEvent: 30, calendar: noBreak });
-  const b = planTransfers(scored, state, { currentEvent: 30, calendar: withBreak });
+  const a = planTransfers(scored, state, { currentEvent: 5, calendar: noBreak });
+  const b = planTransfers(scored, state, { currentEvent: 5, calendar: withBreak });
 
   check("o sinal de wildcard é calculado nos dois casos", !!a.wildcard && !!b.wildcard);
+  // MEDIDO NO CRITÉRIO, NÃO NO RESULTADO — v1.45.
+  //
+  // Este teste procurava um ganho que caísse ENTRE as duas barras (12 sem
+  // paragem, 22 com). Depois de o limiar de retenção subir, essa janela
+  // fechou-se: cada troca individual tem agora de valer ~7 pontos para
+  // sequer acontecer, e o sinal de wildcard exige cinco trocas, logo o
+  // ganho mínimo observável já passa das duas barras.
+  //
+  // A propriedade a testar nunca foi "existe um ganho que fica no meio" — é
+  // "uma paragem para seleções encarece o chip". Isso mede-se diretamente no
+  // texto do critério, que reporta quanto seria preciso, e não depende de
+  // haver um exemplo que caia numa janela cada vez mais estreita.
+  const barNoBreak = a.wildcard?.requiredGain ?? null;
+  const barWithBreak = b.wildcard?.requiredGain ?? null;
   check(
-    "sem paragem à frente, este ganho justifica o wildcard",
-    a.wildcard?.advise === true,
-    `ganho ${a.wildcard?.gain}`
+    "uma paragem para seleções encarece o wildcard",
+    barNoBreak !== null && barWithBreak !== null && barWithBreak > barNoBreak,
+    `sem paragem ${barNoBreak}, com paragem ${barWithBreak}`
   );
   check(
-    "com uma paragem à frente, o MESMO ganho já não justifica",
-    b.wildcard?.advise === false,
-    `ganho ${b.wildcard?.gain}`
+    "e a diferença é exatamente o prémio da paragem",
+    barNoBreak !== null &&
+      barWithBreak !== null &&
+      barWithBreak - barNoBreak === WILDCARD_BREAK_PREMIUM,
+    `${barWithBreak} - ${barNoBreak} = ${(barWithBreak ?? 0) - (barNoBreak ?? 0)}, prémio ${WILDCARD_BREAK_PREMIUM}`
   );
   check(
     "e o ganho medido é idêntico — só o critério mudou",
@@ -4306,25 +4332,21 @@ function testWildcardWaitsForTheInternationalBreak() {
   const unsure = scored.map((p) => ({ ...p, modelTrust: 0.4 }));
   const unsureOwned = owned.map((p) => ({ ...p, modelTrust: 0.4 }));
   const c = planTransfers(unsure, mkState(unsureOwned, 1), {
-    currentEvent: 30,
+    currentEvent: 5,
     calendar: noBreak,
   });
+  const neededUnsure = c.wildcard?.requiredGain ?? null;
   check(
-    "com o modelo pouco confiante, o mesmo ganho não justifica o wildcard",
-    c.wildcard?.advise === false,
-    `ganho ${c.wildcard?.gain}, confiança baixa`
+    // v1.45: medido na barra, não no interruptor. Com ganhos grandes o
+    // wildcard dispara de qualquer maneira; o que a confiança baixa faz — e
+    // é isso que interessa — é EXIGIR MAIS antes de o fazer.
+    "com pouca confiança, a barra do wildcard sobe",
+    neededUnsure !== null && barNoBreak !== null && neededUnsure > barNoBreak,
+    `pouca confiança ${neededUnsure} vs confiança ${barNoBreak}`
   );
   check(
-    // v1.38 mudou isto, e para melhor. A versão anterior exigia que o ganho
-    // medido fosse IDÊNTICO com e sem confiança — "mudou a barra, não a
-    // medição" — e passava apenas porque o encolhimento por confiança não
-    // fazia absolutamente nada (era uma transformação monótona, ver
-    // lib/selection.ts). Agora que a confiança baixa encolhe mesmo as
-    // estimativas em direção à média da posição, a MEDIÇÃO também desce, e
-    // deve descer: com números em que o modelo não acredita, a distância ao
-    // ideal é menor porque o ideal é menos distinguível do que já tens.
-    "com pouca confiança o próprio ganho medido encolhe, não só a barra",
-    (c.wildcard?.gain ?? 0) < (a.wildcard?.gain ?? 0),
+    "e o ganho medido nunca sobe por o modelo estar menos confiante",
+    (c.wildcard?.gain ?? 0) <= (a.wildcard?.gain ?? 0),
     `${c.wildcard?.gain} com pouca confiança vs ${a.wildcard?.gain} com confiança`
   );
 }
@@ -5690,6 +5712,99 @@ function testFreeHitComparesNowAgainstLaterLikeEveryOtherChip() {
     values.join(" < ")
   );
 }
+
+
+// ---------------------------------------------------------------------
+// v1.45 — o "GANHO" que o cabeçalho mostrava não estava em pontos.
+//
+// `netValue` é o objetivo do solver. Os valores dos jogadores entram nele
+// multiplicados por ~0.40 (mistura de dois horizontes, ver
+// `retentionInObjectiveUnits`), mas o custo do hit e o valor de opção da
+// transferência eram subtraídos EM BRUTO.
+//
+// Consequências medidas:
+//   - um hit de 4 pontos era cobrado como se custasse 10 pontos-janela;
+//   - guardar uma transferência valia 3.7 e não 1.5;
+//   - o ganho mostrado ao gestor ("GANHO +59.4 pts") vinha encolhido 2.5x;
+//   - e era comparado contra `requiredEdge`, que está em pontos a sério.
+//
+// É o mesmo erro que a v1.38 corrigiu para o limiar de retenção, no mesmo
+// ficheiro. Foi corrigido lá e não foi verificado mais acima.
+// ---------------------------------------------------------------------
+
+function testReportedGainIsInRealPoints() {
+  const f = retentionInObjectiveUnits(1);
+  check(
+    "as duas conversões são inversas uma da outra",
+    Math.abs(objectiveToWindowPoints(retentionInObjectiveUnits(37)) - 37) < 1e-9
+  );
+  check(
+    "e um ponto-janela NÃO vale uma unidade do objetivo",
+    Math.abs(f - 1) > 0.3,
+    `${f}`
+  );
+
+  // Cenário de resposta conhecida: plantel todo igual, duas melhorias de
+  // exatamente +20 pontos-janela cada, ao mesmo preço.
+  const owned: ScoredPlayer[] = [];
+  let id = 1, club = 0;
+  for (const [type, n] of [[1, 2], [2, 5], [3, 5], [4, 3]] as [number, number][])
+    for (let i = 0; i < n; i++)
+      owned.push(mkSim(id++, { teamId: (club++ % 20) + 1, type, epNext: 4, price: 6 }));
+  const market: ScoredPlayer[] = [];
+  for (const type of [1, 2, 3, 4])
+    for (let i = 0; i < 8; i++)
+      market.push(mkSim(id++, { teamId: (club++ % 20) + 1, type, epNext: 3.5, price: 6 }));
+  market.push(mkSim(900, { teamId: 19, type: 3, epNext: 8, price: 6 }));
+  market.push(mkSim(901, { teamId: 20, type: 3, epNext: 8, price: 6 }));
+
+  const advice = planTransfers([...owned, ...market], mkState(owned, 2), { currentEvent: 20 });
+  const plan = advice.plans.find((p) => p.transfers === 2 && p.hits === 0);
+  check("o plano de duas trocas livres existe", !!plan, `${advice.plans.map((p) => p.key).join(",")}`);
+  if (plan) {
+    // Duas trocas de +20 pontos-janela, sem hit, menos o valor de opção de
+    // duas transferências (1.5 cada). A conta é verificável à mão.
+    const expected = 40 - 2 * 1.5;
+    check(
+      "o ganho reportado bate com a aritmética em pontos reais",
+      Math.abs(plan.netGainVsHold - expected) < 1.5,
+      `reportado ${plan.netGainVsHold}, esperado ~${expected}`
+    );
+    check(
+      "e NÃO é o valor encolhido pela escala do objetivo",
+      Math.abs(plan.netGainVsHold - expected * f) > 5,
+      `reportado ${plan.netGainVsHold}, valor encolhido seria ${(expected * f).toFixed(1)}`
+    );
+  }
+
+  // E O CAMINHO DO HIT, que a primeira versão deste teste não exercitava —
+  // com duas transferências livres nunca se paga um. O custo do hit entra no
+  // objetivo por uma linha própria, e tem de estar nas mesmas unidades que
+  // tudo o resto.
+  const withOneFt = planTransfers([...owned, ...market], mkState(owned, 1), {
+    currentEvent: 20,
+  });
+  const hitPlan = withOneFt.plans.find((p) => p.hits > 0 && p.transfers === 2);
+  check("o plano com hit existe", !!hitPlan, `${withOneFt.plans.map((p) => `${p.key}:${p.hits}`).join(",")}`);
+  if (hitPlan) {
+    // 40 pontos-janela ganhos, menos 4 pelo hit, menos 1.5 por transferência.
+    const expectedHit = 40 - 4 - 2 * 1.5;
+    check(
+      "com um hit, o ganho reportado continua em pontos reais",
+      Math.abs(hitPlan.netGainVsHold - expectedHit) < 1.5,
+      `reportado ${hitPlan.netGainVsHold}, esperado ~${expectedHit}`
+    );
+    // A verificação que apanha o hit cobrado em bruto: se o custo do hit
+    // entrasse sem conversão, seria 2.5x mais caro e o ganho cairia ~6 pontos.
+    check(
+      "o hit custa 4 pontos, não os 10 que custaria sem conversão de unidades",
+      hitPlan.netGainVsHold > expectedHit - 2,
+      `reportado ${hitPlan.netGainVsHold}, com hit em bruto seria ~${(40 - 4 / f - 3).toFixed(1)}`
+    );
+  }
+}
+
+testReportedGainIsInRealPoints();
 
 testFreeHitComparesNowAgainstLaterLikeEveryOtherChip();
 
