@@ -12,6 +12,12 @@
  */
 
 import { computeDynamicTeamFactors } from "../lib/teamrating";
+import {
+  regressActualOnPredicted,
+  callTheEvidence,
+  suggestedShrinkage,
+  spearmanStdError,
+} from "../lib/evidence";
 import { planChips, type ChipPlanInput } from "../lib/chipplan";
 import {
   continuationValue,
@@ -6484,6 +6490,176 @@ function testAChipCanActuallyBeRecommended() {
 }
 
 testAChipCanActuallyBeRecommended();
+
+
+
+/**
+ * DEFEITO v1.50: OS NÚMEROS DO BACKTEST NÃO TINHAM MARGEM DE ERRO, E POR
+ * ISSO NÃO SIGNIFICAVAM NADA.
+ *
+ * O backtest correu contra a GW2 e devolveu:
+ *
+ *     modelo   MAE 2,97   Spearman 0,430
+ *     base     MAE 3,28   Spearman 0,412
+ *
+ * Lido assim, o modelo bate a base. Lido a sério: n = 101, UMA jornada, e o
+ * erro padrão de um Spearman nessa amostra é 0,10. Para uma diferença entre
+ * dois Spearman medidos na mesma amostra ser distinguível do acaso, precisa
+ * de andar por 0,28. A diferença medida foi de 0,018 — quinze vezes menos.
+ *
+ * O ecrã mostrava os dois números lado a lado, sem nada que dissesse isto.
+ * A decisão que dependia deles — continuar a complicar o modelo, ou não —
+ * estava a ser tomada sobre ruído.
+ */
+function testAMeasurementWithoutErrorBarsMeansNothing() {
+  // ── 1. OS NÚMEROS REAIS DA GW2 ──────────────────────────────────────
+  const real = callTheEvidence({
+    n: 101,
+    events: 1,
+    spearman: 0.430041108831246,
+    baselineSpearman: 0.41177001402862723,
+  });
+  check(
+    "com uma jornada e 101 observações, o veredicto é 'insuficiente'",
+    real.verdict === "insuficiente",
+    `${real.verdict}`
+  );
+  check(
+    "e a diferença medida fica MUITO abaixo do que seria preciso",
+    real.spearmanGap < real.spearmanGapNeeded / 5,
+    `medido ${real.spearmanGap.toFixed(3)} vs preciso ${real.spearmanGapNeeded.toFixed(3)}`
+  );
+  check(
+    "o erro padrão de um Spearman com n=101 anda pelos 0,10",
+    Math.abs(spearmanStdError(101) - 0.1) < 0.01,
+    `${spearmanStdError(101).toFixed(3)}`
+  );
+
+  // ── 2. COM DADOS QUE CHEGUEM, UM RESULTADO REAL É RECONHECIDO ───────
+  // O erro simétrico seria um veredicto que nunca conclui nada. Isso
+  // protegeria o modelo de qualquer crítica, que é o oposto do objetivo.
+  const strong = callTheEvidence({
+    n: 3000,
+    events: 10,
+    spearman: 0.52,
+    baselineSpearman: 0.38,
+  });
+  check(
+    "com 10 jornadas e 3000 observações, uma vantagem real é reconhecida",
+    strong.verdict === "bate a base",
+    `${strong.verdict} (${strong.spearmanGap.toFixed(3)} vs ${strong.spearmanGapNeeded.toFixed(3)})`
+  );
+  // E um modelo PIOR do que a base tem de ser dito em voz alta.
+  const worse = callTheEvidence({
+    n: 3000,
+    events: 10,
+    spearman: 0.24,
+    baselineSpearman: 0.38,
+  });
+  check(
+    "e um modelo pior do que a base é denunciado, não escondido",
+    worse.verdict === "pior que a base",
+    `${worse.verdict}`
+  );
+  // Com dados suficientes mas diferença pequena: inconclusivo, não vitória.
+  const tiny = callTheEvidence({
+    n: 3000,
+    events: 10,
+    spearman: 0.395,
+    baselineSpearman: 0.38,
+  });
+  check(
+    "com muitos dados mas diferença pequena, o veredicto é inconclusivo",
+    tiny.verdict === "inconclusivo",
+    `${tiny.verdict}`
+  );
+
+  // ── 3. A INCLINAÇÃO MEDE O ESPALHAMENTO ─────────────────────────────
+  // Um modelo calibrado: o real é o previsto mais ruído simétrico.
+  const rng = (seed: number) => {
+    let x = seed;
+    return () => {
+      x = (x * 1103515245 + 12345) % 2147483648;
+      return x / 2147483648;
+    };
+  };
+  const noise = rng(7);
+  const gauss = () =>
+    (noise() + noise() + noise() + noise() + noise() + noise() - 3) * 1.4;
+
+  const calibrated = Array.from({ length: 800 }, (_, i) => {
+    const predicted = 1 + (i % 10);
+    return { predicted, actual: predicted + gauss() * 2 };
+  });
+  const regCal = regressActualOnPredicted(calibrated);
+  check(
+    "um modelo calibrado mede inclinação ~1",
+    Math.abs(regCal.slope - 1) < 0.1,
+    `inclinação ${regCal.slope.toFixed(3)} ± ${regCal.slopeStdError.toFixed(3)}`
+  );
+
+  // Um modelo que espalha as previsões o DOBRO do que devia. O real move-se
+  // metade do que a previsão diz — exatamente o padrão da tabela de
+  // calibração da GW2, onde o balde "8+" marcou 4,5.
+  const overspread = Array.from({ length: 800 }, (_, i) => {
+    const predicted = 1 + (i % 10);
+    return { predicted, actual: 5.5 + (predicted - 5.5) * 0.5 + gauss() * 2 };
+  });
+  const regOver = regressActualOnPredicted(overspread);
+  check(
+    "um modelo que espalha as previsões a dobrar mede inclinação ~0,5",
+    Math.abs(regOver.slope - 0.5) < 0.1,
+    `inclinação ${regOver.slope.toFixed(3)} ± ${regOver.slopeStdError.toFixed(3)}`
+  );
+
+  // ── 4. A CORREÇÃO NÃO SE APLICA SEM PROVA ───────────────────────────
+  // Esta é a parte que me protege de mim próprio. Uma inclinação de 0,33
+  // medida numa jornada convida a multiplicar tudo por 0,33 — trocar uma
+  // intuição por um número igualmente inventado, com ar de ciência.
+  check(
+    "com uma só jornada, nenhum encolhimento é sugerido",
+    suggestedShrinkage(regOver, 1) === null,
+    `${suggestedShrinkage(regOver, 1)}`
+  );
+  check(
+    "com poucas observações também não",
+    suggestedShrinkage({ ...regOver, n: 100 }, 10) === null,
+    `${suggestedShrinkage({ ...regOver, n: 100 }, 10)}`
+  );
+  // Mas com dados que cheguem E uma descalibração mensurável, sugere.
+  const suggested = suggestedShrinkage(regOver, 10);
+  check(
+    "com dados suficientes e descalibração real, sugere encolher",
+    suggested !== null && suggested < 0.7,
+    `${suggested === null ? "null" : suggested.toFixed(3)}`
+  );
+  // E o teste inverso, sem o qual o anterior não vale nada: um modelo já
+  // calibrado NÃO deve ser encolhido só porque há dados.
+  check(
+    "um modelo já calibrado não é encolhido só por haver dados",
+    suggestedShrinkage(regCal, 10) === null,
+    `${suggestedShrinkage(regCal, 10)}`
+  );
+
+  // ── 5. PATOLOGIAS ────────────────────────────────────────────────────
+  const flat = Array.from({ length: 500 }, () => ({ predicted: 4, actual: 3 }));
+  check(
+    "um modelo que prevê o mesmo para toda a gente não finge ter inclinação",
+    regressActualOnPredicted(flat).slope === 0 &&
+      regressActualOnPredicted(flat).n === 500,
+    `inclinação ${regressActualOnPredicted(flat).slope}`
+  );
+  check(
+    "duas observações não dão regressão nenhuma",
+    regressActualOnPredicted([
+      { predicted: 1, actual: 2 },
+      { predicted: 3, actual: 4 },
+    ]).n === 0,
+    "n=0"
+  );
+}
+
+testAMeasurementWithoutErrorBarsMeansNothing();
 
 void testLossCanNoLongerLookLikeEmptiness()
   .then(() => testOneRefusalNoLongerKillsTheWholeApp())

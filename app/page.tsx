@@ -48,6 +48,9 @@ import { readCalendar, planChips } from "@/lib/chipplan";
 import ChipPlanPanel from "@/components/ChipPlanPanel";
 import AutomationPanel from "@/components/AutomationPanel";
 import { getJobHealth, mergeResearchHealth } from "@/lib/joblog";
+import { BACKTEST_CACHE_KEY } from "@/lib/jobs";
+import { getRedis } from "@/lib/kv";
+import type { BacktestResult } from "@/lib/backtest";
 import { snapshotPredictions, reviewGameweek } from "@/lib/gwreview";
 import { PLAYBOOK, RULES_2026_27 } from "@/lib/strategy";
 import { DEFAULT_TEAM_ID, DEFAULT_LEAGUE_ID } from "@/lib/constants";
@@ -61,6 +64,7 @@ import LeagueSimPanel from "@/components/LeagueSimPanel";
 import StrategyPanel from "@/components/StrategyPanel";
 import TransferPlanPanel from "@/components/TransferPlanPanel";
 import GameweekReviewPanel from "@/components/GameweekReviewPanel";
+import BacktestPanel from "@/components/BacktestPanel";
 
 // Rendered per-request (not at build time): this sandbox's build
 // environment has no route to the FPL API to prerender against, and in
@@ -552,6 +556,13 @@ export default async function Home() {
     settleStrategies(finishedEventIds),
   ]);
   const accuracyHistory = await getAccuracyHistory();
+  // O backtest corria todas as noites e o resultado morria no Redis: nada
+  // na app o lia. A pergunta "posso confiar neste modelo?" tinha resposta
+  // guardada e invisível.
+  const backtestRedis = getRedis();
+  const backtest = backtestRedis
+    ? await backtestRedis.get<BacktestResult>(BACKTEST_CACHE_KEY)
+    : null;
 
   // ---- schedule anomalies ----------------------------------------------
   const scheduleHorizon = Math.min(fromEvent + 14, 38);
@@ -889,6 +900,21 @@ export default async function Home() {
           intro="Todo o número desta app é uma suposição até uma jornada real o confirmar. Esta secção é onde o modelo se confronta com o que aconteceu — e se corrige."
         >
           <StrategyPanel learning={learning} storageConfigured={storageConfigured} />
+
+          <div className="mt-6 border-t border-border pt-5">
+            <SubHeading>O modelo acerta? — replay contra jornadas reais</SubHeading>
+            <p className="mb-3 text-[13px] leading-relaxed text-text-muted">
+              Isto reconstrói o mundo como estava antes de cada jornada já
+              jogada, corre o modelo a sério contra essa reconstrução, e
+              compara com o que aconteceu. A comparação é contra a resposta
+              trivial — a média de pontos por jogo de cada jogador. Se o
+              modelo não bater isso, não está a merecer a sua complexidade.
+            </p>
+            <BacktestPanel
+              result={backtest}
+              configured={storageConfigured}
+            />
+          </div>
 
           <div className="mt-6 border-t border-border pt-5">
             <SubHeading>Precisão do modelo, jornada a jornada</SubHeading>

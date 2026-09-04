@@ -1,6 +1,13 @@
 import type { FplBootstrap, FplElement, FplFixture } from "./types";
 import { buildScoredPlayers } from "./recommend";
 import type { ModelParams } from "./modelparams";
+import {
+  regressActualOnPredicted,
+  callTheEvidence,
+  suggestedShrinkage,
+  type Regression,
+  type EvidenceCall,
+} from "./evidence";
 
 /**
  * BACKTESTING HARNESS — replaying the model against gameweeks that have
@@ -258,6 +265,24 @@ export interface BacktestMetrics {
    * game. If the model cannot beat this, it is not earning its complexity. */
   baselineMae: number;
   baselineSpearman: number;
+  /**
+   * A regressão do real sobre o previsto. A INCLINAÇÃO É O NÚMERO QUE
+   * FALTAVA: com 1 o modelo está calibrado, e abaixo de 1 está a espalhar
+   * as previsões mais do que a realidade justifica — a errar mais
+   * precisamente no balde de cima, que é de onde saem o capitão e as
+   * transferências.
+   */
+  regression: Regression;
+  /**
+   * O que esta amostra permite concluir, incluindo "nada ainda". Sem isto,
+   * um Spearman de 0,430 contra 0,412 lê-se como vitória quando é ruído.
+   */
+  evidence: EvidenceCall;
+  /**
+   * Fator de encolhimento que a calibração sugere, ou null enquanto a
+   * medição não for firme. É null de propósito na maior parte do tempo.
+   */
+  suggestedShrinkage: number | null;
 }
 
 function spearmanCorrelation(pairs: { a: number; b: number }[]): number {
@@ -305,6 +330,9 @@ export function scoreBacktest(rows: BacktestRow[]): BacktestMetrics {
   const empty: BacktestMetrics = {
     n: 0, events: [], mae: 0, rmse: 0, bias: 0, spearman: 0, decileLift: 0,
     captainTop10Rate: 0, calibration: [], baselineMae: 0, baselineSpearman: 0,
+    regression: { slope: 0, intercept: 0, slopeStdError: 0, r2: 0, n: 0 },
+    evidence: callTheEvidence({ n: 0, events: 0, spearman: 0, baselineSpearman: 0 }),
+    suggestedShrinkage: null,
   };
   if (n === 0) return empty;
 
@@ -373,6 +401,17 @@ export function scoreBacktest(rows: BacktestRow[]): BacktestMetrics {
     calibration,
     baselineMae: 0,
     baselineSpearman: 0,
+    // A regressão só depende das linhas, por isso calcula-se já aqui. O
+    // veredicto precisa da base, que só existe em `runBacktest` — fica
+    // como marcador até lá, e é lá que é preenchido.
+    regression: regressActualOnPredicted(rows),
+    evidence: callTheEvidence({
+      n,
+      events: byEvent.size,
+      spearman,
+      baselineSpearman: 0,
+    }),
+    suggestedShrinkage: null,
   };
 }
 
@@ -515,6 +554,20 @@ export function runBacktest(input: BacktestInput): BacktestResult {
   const baseline = scoreBaseline(baselineRows);
   metrics.baselineMae = baseline.mae;
   metrics.baselineSpearman = baseline.spearman;
+  // O veredicto tem de ser recalculado DEPOIS de a base existir: comparar
+  // o modelo com zero em vez de com a base é a diferença entre "acerta
+  // alguma coisa" e "acerta mais do que a resposta trivial", e só a
+  // segunda pergunta interessa.
+  metrics.evidence = callTheEvidence({
+    n: metrics.n,
+    events: metrics.events.length,
+    spearman: metrics.spearman,
+    baselineSpearman: metrics.baselineSpearman,
+  });
+  metrics.suggestedShrinkage = suggestedShrinkage(
+    metrics.regression,
+    metrics.events.length
+  );
 
   // `rows` and `baselineRows` are built in lockstep, so the same index
   // selects the matching pair. Filtering by index rather than by value
@@ -525,6 +578,12 @@ export function runBacktest(input: BacktestInput): BacktestResult {
   const highTrustBaseline = scoreBaseline(highTrustIdx.map((i) => baselineRows[i]));
   highTrustMetrics.baselineMae = highTrustBaseline.mae;
   highTrustMetrics.baselineSpearman = highTrustBaseline.spearman;
+  highTrustMetrics.evidence = callTheEvidence({
+    n: highTrustMetrics.n,
+    events: highTrustMetrics.events.length,
+    spearman: highTrustMetrics.spearman,
+    baselineSpearman: highTrustMetrics.baselineSpearman,
+  });
 
   return {
     ranAt: new Date().toISOString(),
