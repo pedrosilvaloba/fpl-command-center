@@ -600,3 +600,87 @@ export function runBacktest(input: BacktestInput): BacktestResult {
     ],
   };
 }
+
+/**
+ * ═══ v1.52 — UM REGISTO GUARDADO POR UMA VERSÃO ANTIGA PARTIU A APP ═══
+ *
+ * A v1.51 acrescentou três campos a `BacktestMetrics` — `regression`,
+ * `evidence` e `suggestedShrinkage` — e um painel que os lê. O painel fez
+ * `metrics.evidence.verdict` sobre um objeto vindo do Redis que tinha sido
+ * escrito pela v1.50, quando esses campos ainda não existiam.
+ *
+ *     TypeError: Cannot read properties of undefined (reading 'verdict')
+ *
+ * A app inteira foi abaixo com um 500.
+ *
+ * O TypeScript não podia apanhar isto: `redis.get<BacktestResult>(...)`
+ * AFIRMA o tipo, não o verifica. Do outro lado do Redis está um JSON
+ * escrito por outra versão do programa, possivelmente semanas antes. Um
+ * tipo declarado sobre dados que vêm de fora é uma esperança, não uma
+ * garantia — e esta é exatamente a mesma família de erro que a auditoria já
+ * tinha encontrado seis vezes: confiar numa forma em vez de a verificar.
+ *
+ * A LIÇÃO GERAL, porque não é só aqui: qualquer estrutura que sobreviva a
+ * um deploy tem de ser lida com a hipótese de ter sido escrita por uma
+ * versão anterior. Ler é onde a validação pertence.
+ */
+function normalizeMetrics(m: Partial<BacktestMetrics> | undefined): BacktestMetrics {
+  const base = scoreBacktest([]);
+  if (!m || typeof m !== "object") return base;
+  const events = Array.isArray(m.events) ? m.events : [];
+  const n = typeof m.n === "number" ? m.n : 0;
+  const spearman = typeof m.spearman === "number" ? m.spearman : 0;
+  const baselineSpearman =
+    typeof m.baselineSpearman === "number" ? m.baselineSpearman : 0;
+  const regression =
+    m.regression && typeof m.regression.slope === "number"
+      ? m.regression
+      : base.regression;
+  return {
+    ...base,
+    ...m,
+    events,
+    n,
+    spearman,
+    baselineSpearman,
+    regression,
+    // Recalculado a partir dos campos que QUALQUER versão tem. Um registo
+    // antigo passa assim a ter veredicto, em vez de rebentar — e o
+    // veredicto é o correto, porque só depende de n, jornadas e Spearman.
+    evidence:
+      m.evidence && typeof m.evidence.verdict === "string"
+        ? m.evidence
+        : callTheEvidence({
+            n,
+            events: events.length,
+            spearman,
+            baselineSpearman,
+          }),
+    suggestedShrinkage:
+      typeof m.suggestedShrinkage === "number" ? m.suggestedShrinkage : null,
+  };
+}
+
+/**
+ * Lê um resultado de backtest vindo do armazenamento e devolve-o na forma
+ * atual, ou null se não houver nada de aproveitável.
+ *
+ * TODA a leitura da cache tem de passar por aqui. Um `redis.get` cru sobre
+ * esta chave é o defeito da v1.51 à espera de acontecer outra vez.
+ */
+export function normalizeBacktestResult(
+  raw: unknown
+): BacktestResult | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<BacktestResult>;
+  return {
+    ranAt: typeof r.ranAt === "string" ? r.ranAt : new Date(0).toISOString(),
+    fromEvent: typeof r.fromEvent === "number" ? r.fromEvent : 0,
+    toEvent: typeof r.toEvent === "number" ? r.toEvent : 0,
+    playersSampled:
+      typeof r.playersSampled === "number" ? r.playersSampled : 0,
+    metrics: normalizeMetrics(r.metrics),
+    highTrustMetrics: normalizeMetrics(r.highTrustMetrics),
+    notes: Array.isArray(r.notes) ? r.notes.filter((x) => typeof x === "string") : [],
+  };
+}

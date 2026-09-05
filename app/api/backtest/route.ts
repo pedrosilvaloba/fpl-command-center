@@ -3,7 +3,7 @@ import { getRedis } from "@/lib/kv";
 import { checkApiToken, unauthorizedBody } from "@/lib/apitoken";
 import { runBacktestJob, BACKTEST_CACHE_KEY } from "@/lib/jobs";
 import { startJobRun, finishJobRun } from "@/lib/joblog";
-import type { BacktestResult } from "@/lib/backtest";
+import { normalizeBacktestResult } from "@/lib/backtest";
 
 /**
  * Manual entry point for the backtesting harness.
@@ -28,7 +28,11 @@ export async function GET(req: NextRequest) {
 
   if (params.get("cached") === "1") {
     const redis = getRedis();
-    const cached = redis ? await redis.get<BacktestResult>(BACKTEST_CACHE_KEY) : null;
+    // Normalizado como em todo o lado: o registo pode vir de uma versão
+    // anterior, e quem consome esta rota espera a forma atual.
+    const cached = normalizeBacktestResult(
+      redis ? await redis.get(BACKTEST_CACHE_KEY) : null
+    );
     if (!cached) {
       return NextResponse.json(
         { error: "ainda não há backtest guardado", configured: !!redis },

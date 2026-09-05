@@ -12,6 +12,7 @@
  */
 
 import { computeDynamicTeamFactors } from "../lib/teamrating";
+import { normalizeBacktestResult } from "../lib/backtest";
 import {
   regressActualOnPredicted,
   callTheEvidence,
@@ -6660,6 +6661,163 @@ function testAMeasurementWithoutErrorBarsMeansNothing() {
 }
 
 testAMeasurementWithoutErrorBarsMeansNothing();
+
+
+
+/**
+ * DEFEITO v1.51: UM REGISTO GUARDADO POR UMA VERSÃO ANTIGA DEITOU A APP
+ * ABAIXO COM UM 500.
+ *
+ * A v1.51 acrescentou `evidence`, `regression` e `suggestedShrinkage` às
+ * métricas do backtest, e um painel novo que os lê. Em produção, o registo
+ * que estava no Redis tinha sido escrito pela v1.50 e não tinha nenhum
+ * deles. O painel fez `metrics.evidence.verdict` e:
+ *
+ *     TypeError: Cannot read properties of undefined (reading 'verdict')
+ *
+ * O TypeScript não tinha hipótese: `redis.get<BacktestResult>(...)` AFIRMA
+ * o tipo, não o verifica. Do outro lado do Redis está JSON escrito por
+ * outra versão do programa. Um tipo declarado sobre dados externos é uma
+ * esperança.
+ *
+ * O objeto abaixo é o registo REAL que estava guardado quando isto rebentou.
+ */
+function testAnOldStoredRecordCannotCrashTheApp() {
+  const v150Record = {
+    ranAt: "2026-09-04T09:24:09.660Z",
+    fromEvent: 2,
+    toEvent: 2,
+    playersSampled: 146,
+    metrics: {
+      n: 101,
+      events: [2],
+      mae: 2.971386138613862,
+      rmse: 4.354766479285533,
+      bias: -0.7698019801980197,
+      spearman: 0.430041108831246,
+      decileLift: 3.3,
+      captainTop10Rate: 0,
+      calibration: [
+        { label: "0-2", n: 43, meanPredicted: 0.86, meanActual: 2.33 },
+        { label: "8+", n: 11, meanPredicted: 9.46, meanActual: 4.55 },
+      ],
+      baselineMae: 3.277227722772277,
+      baselineSpearman: 0.41177001402862723,
+      // sem `regression`, sem `evidence`, sem `suggestedShrinkage`
+    },
+    highTrustMetrics: {
+      n: 0, events: [], mae: 0, rmse: 0, bias: 0, spearman: 0,
+      decileLift: 0, captainTop10Rate: 0, calibration: [],
+      baselineMae: 0, baselineSpearman: 0,
+    },
+    notes: ["Sem camada de disponibilidade."],
+  };
+
+  const fixed = normalizeBacktestResult(v150Record)!;
+  check(
+    "um registo da versão anterior é lido sem rebentar",
+    fixed !== null && typeof fixed.metrics.evidence.verdict === "string",
+    `veredicto: ${fixed?.metrics.evidence.verdict}`
+  );
+  check(
+    "e o veredicto é RECALCULADO, não inventado — 1 jornada é insuficiente",
+    fixed.metrics.evidence.verdict === "insuficiente",
+    fixed.metrics.evidence.verdict
+  );
+  check(
+    "os números que o registo antigo TINHA são preservados intactos",
+    fixed.metrics.n === 101 &&
+      Math.abs(fixed.metrics.mae - 2.9713861386) < 1e-6 &&
+      fixed.metrics.calibration.length === 2,
+    `n=${fixed.metrics.n} mae=${fixed.metrics.mae.toFixed(3)}`
+  );
+  check(
+    "e os campos em falta ganham valores neutros, não indefinidos",
+    fixed.metrics.suggestedShrinkage === null &&
+      fixed.metrics.regression.n === 0,
+    `encolhimento=${fixed.metrics.suggestedShrinkage}, regressão n=${fixed.metrics.regression.n}`
+  );
+  check(
+    "o subconjunto de alta confiança vazio também não rebenta",
+    typeof fixed.highTrustMetrics.evidence.verdict === "string",
+    fixed.highTrustMetrics.evidence.verdict
+  );
+
+  // ── LIXO TOTAL TAMBÉM NÃO PODE REBENTAR ─────────────────────────────
+  // Uma chave corrompida, um registo truncado, um null. Nenhum destes
+  // pode ser a razão pela qual a app deixa de existir.
+  check("null devolve null, não rebenta", normalizeBacktestResult(null) === null);
+  check(
+    "uma string devolve null",
+    normalizeBacktestResult("lixo") === null
+  );
+  const empty = normalizeBacktestResult({})!;
+  check(
+    "um objeto vazio produz um registo válido e visivelmente vazio",
+    empty !== null &&
+      empty.metrics.n === 0 &&
+      empty.metrics.evidence.verdict === "insuficiente" &&
+      empty.notes.length === 0,
+    `n=${empty?.metrics.n}, ${empty?.metrics.evidence.verdict}`
+  );
+  const junkNested = normalizeBacktestResult({
+    ranAt: 12345,
+    metrics: "não é um objeto",
+    notes: [1, "válida", null],
+  })!;
+  check(
+    "campos com o tipo errado são substituídos, não propagados",
+    junkNested.metrics.n === 0 &&
+      typeof junkNested.ranAt === "string" &&
+      junkNested.notes.length === 1 &&
+      junkNested.notes[0] === "válida",
+    `notas: ${JSON.stringify(junkNested.notes)}`
+  );
+  // A verificação acima passava por sorte: uma string espalhada com `...`
+  // injeta as suas letras como chaves indexadas ("0", "1", ...) e os
+  // campos que eu testava continuavam certos. O que tem de ser exigido é
+  // que NADA de estranho sobreviva — senão o painel recebe um objeto com
+  // lixo lá dentro e a verificação seguinte é que rebenta.
+  const expectedKeys = new Set(Object.keys(normalizeBacktestResult({})!.metrics));
+  const strayKeys = Object.keys(junkNested.metrics).filter(
+    (k) => !expectedKeys.has(k)
+  );
+  check(
+    "e não sobra uma única chave estranha no objeto normalizado",
+    strayKeys.length === 0,
+    strayKeys.length === 0 ? "nenhuma" : `intrusas: ${strayKeys.slice(0, 8).join(",")}`
+  );
+
+  // ── UM CAMPO PRESENTE MAS MALFORMADO É O CASO MAIS TRAIÇOEIRO ───────
+  // Ausente é fácil de detetar. Presente-mas-errado passa por qualquer
+  // verificação que só pergunte "existe?" — e foi assim que a v1.51
+  // rebentou, com um `.verdict` sobre algo que não era o que aparentava.
+  const malformed = normalizeBacktestResult({
+    ranAt: "2026-09-04T09:24:09.660Z",
+    metrics: {
+      n: 101, events: [2], spearman: 0.43, baselineSpearman: 0.41,
+      mae: 2.97, rmse: 4.35, bias: -0.77, decileLift: 3.3,
+      captainTop10Rate: 0, calibration: [], baselineMae: 3.28,
+      evidence: { qualquerCoisa: true },
+      regression: { slope: "não é um número" },
+    },
+    notes: [],
+  })!;
+  check(
+    "um `evidence` presente mas sem veredicto é RECALCULADO, não aceite",
+    typeof malformed.metrics.evidence.verdict === "string" &&
+      malformed.metrics.evidence.verdict === "insuficiente",
+    `${malformed.metrics.evidence.verdict}`
+  );
+  check(
+    "uma `regression` com a inclinação do tipo errado é descartada",
+    typeof malformed.metrics.regression.slope === "number" &&
+      malformed.metrics.regression.n === 0,
+    `inclinação ${malformed.metrics.regression.slope} (tipo ${typeof malformed.metrics.regression.slope})`
+  );
+}
+
+testAnOldStoredRecordCannotCrashTheApp();
 
 void testLossCanNoLongerLookLikeEmptiness()
   .then(() => testOneRefusalNoLongerKillsTheWholeApp())

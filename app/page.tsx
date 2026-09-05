@@ -50,7 +50,7 @@ import AutomationPanel from "@/components/AutomationPanel";
 import { getJobHealth, mergeResearchHealth } from "@/lib/joblog";
 import { BACKTEST_CACHE_KEY } from "@/lib/jobs";
 import { getRedis } from "@/lib/kv";
-import type { BacktestResult } from "@/lib/backtest";
+import { normalizeBacktestResult } from "@/lib/backtest";
 import { snapshotPredictions, reviewGameweek } from "@/lib/gwreview";
 import { PLAYBOOK, RULES_2026_27 } from "@/lib/strategy";
 import { DEFAULT_TEAM_ID, DEFAULT_LEAGUE_ID } from "@/lib/constants";
@@ -560,9 +560,11 @@ export default async function Home() {
   // na app o lia. A pergunta "posso confiar neste modelo?" tinha resposta
   // guardada e invisível.
   const backtestRedis = getRedis();
-  const backtest = backtestRedis
-    ? await backtestRedis.get<BacktestResult>(BACKTEST_CACHE_KEY)
-    : null;
+  // NUNCA ler esta chave sem normalizar: o registo pode ter sido escrito
+  // por uma versão anterior do programa. Foi assim que a v1.51 devolveu 500.
+  const backtest = normalizeBacktestResult(
+    backtestRedis ? await backtestRedis.get(BACKTEST_CACHE_KEY) : null
+  );
 
   // ---- schedule anomalies ----------------------------------------------
   const scheduleHorizon = Math.min(fromEvent + 14, 38);
