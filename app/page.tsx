@@ -65,6 +65,9 @@ import StrategyPanel from "@/components/StrategyPanel";
 import TransferPlanPanel from "@/components/TransferPlanPanel";
 import GameweekReviewPanel from "@/components/GameweekReviewPanel";
 import BacktestPanel from "@/components/BacktestPanel";
+import LeagueChipsPanel from "@/components/LeagueChipsPanel";
+import { fetchLeagueChipState } from "@/lib/rivalchips";
+import { EMPTY_LEAGUE_CHIP_STATE } from "@/lib/rivalchips";
 
 // Rendered per-request (not at build time): this sandbox's build
 // environment has no route to the FPL API to prerender against, and in
@@ -458,6 +461,16 @@ export default async function Home() {
     rivals: [],
     posture: NEUTRAL_POSTURE,
   };
+  // O que a liga já fez com os chips. O Pedro reparou nisto antes do
+  // modelo: a API publica os chips de cada gestor e nada aqui os lia.
+  let leagueChipState = EMPTY_LEAGUE_CHIP_STATE;
+  if (leagueStandingsRaw) {
+    leagueChipState = await fetchLeagueChipState(
+      leagueStandingsRaw.results,
+      myTeamIdNum
+    );
+  }
+
   if (lastPublishedEvent >= 1 && leagueStandingsRaw) {
     const squads = await fetchRivalSquads(
       leagueStandingsRaw.results,
@@ -636,6 +649,7 @@ export default async function Home() {
     bench: transferAdvice.recommended?.bench ?? bench,
     captain: transferAdvice.recommended?.captain ?? captain,
     calendar,
+    leagueChips: leagueChipState.available ? leagueChipState.summaries : undefined,
   });
   const xiExpected = starters.reduce((s, p) => s + p.expectedPointsNext, 0);
 
@@ -759,6 +773,17 @@ export default async function Home() {
           </div>
 
           <ChipPlanPanel advice={chipAdvice} calendar={calendar} event={fromEvent} />
+
+          {/* Os chips da liga ficam JUNTO da decisão sobre chips, não numa
+              secção de consulta. Foi o Pedro que reparou nisto sozinho —
+              se estiver longe de onde a decisão se toma, volta a ser
+              informação que ninguém liga ao que decide. */}
+          <div className="mt-5 border-t border-border pt-4">
+            <p className="eyebrow mb-2 text-text-muted">
+              O que a liga já gastou
+            </p>
+            <LeagueChipsPanel state={leagueChipState} />
+          </div>
 
           <TransferPlanPanel
             advice={transferAdvice}

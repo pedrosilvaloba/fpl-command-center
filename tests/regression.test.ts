@@ -21,6 +21,12 @@ import {
 } from "../lib/evidence";
 import { planChips, type ChipPlanInput } from "../lib/chipplan";
 import {
+  leaguePressureDiscount,
+  pressureNote,
+  LEAGUE_PRESSURE_MAX_DISCOUNT,
+  type ChipUsageSummary,
+} from "../lib/rivalchips";
+import {
   continuationValue,
   chipDeadlineEvent,
   doubleProbability,
@@ -6818,6 +6824,172 @@ function testAnOldStoredRecordCannotCrashTheApp() {
 }
 
 testAnOldStoredRecordCannotCrashTheApp();
+
+
+
+/**
+ * v1.53: O MODELO PASSA A VER O QUE A LIGA FAZ COM OS CHIPS — SEM SE
+ * TRANSFORMAR NUM SEGUIDOR DE MULTIDÕES.
+ *
+ * O Pedro reparou que vários rivais tinham gasto chips, incluindo um Triple
+ * Captain, numa jornada em que o modelo não tinha opinião nenhuma. A API do
+ * FPL publica isso para cada gestor e nada nesta app o lia. Confirmado com
+ * dados reais da "Haal of Fame": dos seis primeiros, quatro já gastaram um
+ * chip; o 4.º classificado jogou 3xc na GW3.
+ *
+ * O RISCO DESTA FUNCIONALIDADE é maior do que o da ausência dela. "Muitos
+ * jogaram, joga também" é prova social disfarçada de análise, e numa liga
+ * privada de 48 amigos o consenso não é sabedoria de mercado. Estes testes
+ * existem sobretudo para trancar os LIMITES do ajuste, não o ajuste.
+ */
+function testTheModelSeesTheLeagueWithoutObeyingIt() {
+  const summary = (
+    chip: "bboost" | "3xc",
+    used: number,
+    of: number
+  ): ChipUsageSummary => ({
+    chip,
+    label: chip === "3xc" ? "Triple Captain" : "Bench Boost",
+    used,
+    of,
+    share: of > 0 ? used / of : 0,
+    firstEvent: used > 0 ? 1 : null,
+    who: Array.from({ length: used }, (_, i) => ({
+      name: `Rival ${i + 1}`,
+      rank: i + 1,
+      event: 1,
+    })),
+    mineUsed: false,
+  });
+
+  // ── 1. O DESCONTO É LIMITADO, E O LIMITE É O PONTO ──────────────────
+  check(
+    "ninguém ter gastado o chip não desconta nada",
+    leaguePressureDiscount(0) === 1,
+    `${leaguePressureDiscount(0)}`
+  );
+  check(
+    "a liga inteira ter gastado desconta no máximo 25%",
+    Math.abs(leaguePressureDiscount(1) - (1 - LEAGUE_PRESSURE_MAX_DISCOUNT)) < 1e-9 &&
+      leaguePressureDiscount(1) >= 0.75,
+    `${leaguePressureDiscount(1).toFixed(3)}`
+  );
+  check(
+    "e o desconto nunca sai do intervalo, mesmo com dados absurdos",
+    leaguePressureDiscount(5) === leaguePressureDiscount(1) &&
+      leaguePressureDiscount(-3) === 1,
+    `share=5 → ${leaguePressureDiscount(5).toFixed(2)}, share=-3 → ${leaguePressureDiscount(-3).toFixed(2)}`
+  );
+
+  const mkPlayer = (id: number, ep: number): ScoredPlayer =>
+    ({
+      element: { id, web_name: `J${id}` },
+      expectedPointsNext: ep,
+      expectedPoints: ep * 5,
+      ownershipPct: 10,
+      pPlay: 1,
+    }) as unknown as ScoredPlayer;
+
+  const plan = (over: Partial<ChipPlanInput>): ChipPlanInput => ({
+    currentEvent: 4,
+    chips: [
+      { name: "bboost", label: "Bench Boost", usedAtEvents: [], remaining: 2 },
+      { name: "3xc", label: "Triple Captain", usedAtEvents: [], remaining: 2 },
+      { name: "freehit", label: "Free Hit", usedAtEvents: [], remaining: 2 },
+    ],
+    xi: Array.from({ length: 11 }, (_, i) => mkPlayer(i + 1, 4.5)),
+    bench: Array.from({ length: 4 }, (_, i) => mkPlayer(100 + i, 1.8)),
+    captain: mkPlayer(1, 7.3),
+    calendar: {
+      breakAfterEvents: [],
+      breakImminent: false,
+      knownDoubleEvents: [],
+      knownBlankEvents: [],
+    },
+    ...over,
+  });
+  const tc = (input: ChipPlanInput) =>
+    planChips(input).find((c) => c.chip === "3xc")!;
+
+  // ── 2. SEM DADOS DA LIGA, NADA MUDA ─────────────────────────────────
+  // Uma camada nova que altera resultados quando FALHA é pior do que não
+  // existir. Se a API dos rivais estiver em baixo, o veredicto tem de ser
+  // exatamente o de antes.
+  const noData = tc(plan({}));
+  const emptyData = tc(plan({ leagueChips: [] }));
+  check(
+    "sem dados da liga, o limiar é exatamente o mesmo",
+    noData.bestLaterValue === emptyData.bestLaterValue,
+    `${noData.bestLaterValue} vs ${emptyData.bestLaterValue}`
+  );
+
+  // ── 3. COM A LIGA A GASTAR, GUARDAR VALE MENOS — MAS NÃO MUITO ──────
+  const halfSpent = tc(plan({ leagueChips: [summary("3xc", 10, 20)] }));
+  const allSpent = tc(plan({ leagueChips: [summary("3xc", 20, 20)] }));
+  check(
+    "com metade da liga a ter gastado, guardar vale um pouco menos",
+    halfSpent.bestLaterValue < noData.bestLaterValue &&
+      halfSpent.bestLaterValue > noData.bestLaterValue * 0.85,
+    `${noData.bestLaterValue} → ${halfSpent.bestLaterValue}`
+  );
+
+  // ── 4. O TESTE QUE IMPORTA MAIS: A MULTIDÃO NÃO MANDA ───────────────
+  // Mesmo com a liga INTEIRA a ter gastado o Triple Captain, um capitão
+  // medíocre na GW4 continua a não justificar queimar o chip. Se este
+  // teste alguma vez falhar, o modelo deixou de ser um modelo.
+  check(
+    "mesmo com a liga TODA a ter gastado, um capitão fraco não queima o chip",
+    allSpent.verdict === "esperar",
+    `${allSpent.verdict} (agora ${allSpent.valueNow} vs ${allSpent.bestLaterValue})`
+  );
+  check(
+    "e o desconto máximo aplicado nunca ultrapassa os 25% prometidos",
+    allSpent.bestLaterValue >= noData.bestLaterValue * 0.74,
+    `${noData.bestLaterValue} → ${allSpent.bestLaterValue} (${((1 - allSpent.bestLaterValue / noData.bestLaterValue) * 100).toFixed(1)}%)`
+  );
+
+  // ── 5. E CONTINUA A JOGAR-SE NA ÚLTIMA HIPÓTESE ─────────────────────
+  // A pressão da liga não pode desligar o prazo, que é o mecanismo forte.
+  const lastChance = tc(
+    plan({ currentEvent: 19, leagueChips: [summary("3xc", 0, 20)] })
+  );
+  check(
+    "com ninguém a ter gastado, o prazo continua a mandar jogar na GW19",
+    lastChance.verdict === "jogar",
+    lastChance.verdict
+  );
+
+  // ── 6. A RAZÃO TEM DE DIZER O QUE VIU, E AVISAR DO QUE NÃO É ────────
+  // Um ajuste invisível é um ajuste de que ninguém pode discordar.
+  const note = pressureNote(summary("3xc", 10, 20));
+  check(
+    "a nota diz quantos rivais gastaram e quem",
+    note.includes("10 de 20") && note.includes("Rival 1"),
+    note.slice(0, 70)
+  );
+  check(
+    "e avisa explicitamente que o consenso não é prova",
+    /não é prova/.test(note),
+    note.slice(-110)
+  );
+  check(
+    "com zero utilizações, a nota diz isso em vez de ficar vazia",
+    pressureNote(summary("3xc", 0, 20)).includes("Nenhum dos 20"),
+    pressureNote(summary("3xc", 0, 20)).slice(0, 60)
+  );
+  check(
+    "sem rivais lidos, não há nota nenhuma a inventar",
+    pressureNote(summary("3xc", 0, 0)) === "",
+    `"${pressureNote(summary("3xc", 0, 0))}"`
+  );
+  check(
+    "e a nota da liga chega mesmo à justificação que aparece no ecrã",
+    halfSpent.reason.includes("10 de 20"),
+    halfSpent.reason.slice(-90)
+  );
+}
+
+testTheModelSeesTheLeagueWithoutObeyingIt();
 
 void testLossCanNoLongerLookLikeEmptiness()
   .then(() => testOneRefusalNoLongerKillsTheWholeApp())
