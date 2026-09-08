@@ -66,6 +66,7 @@ import TransferPlanPanel from "@/components/TransferPlanPanel";
 import GameweekReviewPanel from "@/components/GameweekReviewPanel";
 import BacktestPanel from "@/components/BacktestPanel";
 import LeagueChipsPanel from "@/components/LeagueChipsPanel";
+import CaptainShortlist from "@/components/CaptainShortlist";
 import { fetchLeagueChipState } from "@/lib/rivalchips";
 import { EMPTY_LEAGUE_CHIP_STATE } from "@/lib/rivalchips";
 
@@ -770,6 +771,21 @@ export default async function Home() {
                 <Fact label="Liga" value={`${effectiveOutlook.me.rank}º`} />
               )}
             </div>
+          </div>
+
+          {/* A braçadeira aparecia como um nome sem contexto. Dobra pontos:
+              é a decisão semanal de maior alavancagem e a que mais merece
+              ser questionável. */}
+          <div className="mb-5 border-b border-border pb-4">
+            <p className="eyebrow mb-2 text-text-muted">
+              A braçadeira — candidatos e a aposta que representam
+            </p>
+            <CaptainShortlist
+              starters={transferAdvice.recommended?.xi ?? starters}
+              captainId={decisionCaptain?.element.id ?? null}
+              viceId={decisionVice?.element.id ?? null}
+              beta={outlook.posture.beta}
+            />
           </div>
 
           <ChipPlanPanel advice={chipAdvice} calendar={calendar} event={fromEvent} />

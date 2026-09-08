@@ -1,4 +1,5 @@
 import type { FplBootstrap, FplElement, FplTeam } from "./types";
+import { pointsRisk, type PointsRisk } from "./pointsrisk";
 import { averageDifficulty, buildFixtureTicker } from "./fdr";
 import {
   buildFixtureExpectations,
@@ -56,6 +57,15 @@ export interface ScoredPlayer {
    * should not get the armband.
    */
   expectedPointsNext: number;
+  /**
+   * A FORMA da jornada que vem, não só a sua média. Ver lib/pointsrisk.ts.
+   *
+   * Existe porque a capitania dobra os pontos, e dois jogadores com a mesma
+   * média podem ser apostas opostas — um avançado explosivo e um defesa
+   * regular. O `ceilingGI`/`floorGI` que já cá estavam não serviam: são em
+   * golos e sobre cinco jornadas, e a braçadeira é uma decisão de uma.
+   */
+  risk: PointsRisk;
   /**
    * Probability this player appears at all in the next gameweek.
    *
@@ -586,6 +596,22 @@ export function buildScoredPlayers(
       ownershipTrendPct: momentum.get(el.id)?.trendPct ?? 0,
       pPlay: Math.round(Math.min(1, Math.max(0, mins.pAppear * availability)) * 1000) / 1000,
       breakdown: modelWindowPoints,
+      // Construído a partir da decomposição de UMA jornada, escalada para o
+      // `expectedPointsNext` final — que passou por mistura com o `ep_next`
+      // da FPL e pelas notas táticas, e portanto já não é `perFixtureNext`.
+      risk: (() => {
+        const raw = pointsRisk(el.element_type, perFixtureNext, mins);
+        const scale =
+          raw.mean > 0 ? Math.max(0, expectedPointsNext) / raw.mean : 0;
+        return {
+          mean: Math.round(raw.mean * scale * 100) / 100,
+          meanIfPlays: Math.round(raw.meanIfPlays * scale * 100) / 100,
+          sdIfPlays: Math.round(raw.sdIfPlays * scale * 100) / 100,
+          sdTotal: Math.round(raw.sdTotal * scale * 100) / 100,
+          blankShare: Math.round(raw.blankShare * 1000) / 1000,
+          upside: Math.round(raw.upside * scale * 100) / 100,
+        };
+      })(),
       // Alias, so nothing downstream had to change when the score became a
       // real quantity. Both are expected FPL points over the window.
       score: Math.round(expectedPoints * 100) / 100,
@@ -893,14 +919,50 @@ export function pickCaptain(
   // app chegou a mandar vender o melhor médio do jogo com uma perda
   // declarada de 16.9 pontos. O mesmo teto nunca tinha sido aplicado ao
   // capitão. É o mesmo defeito, no sítio onde custa mais.
-  const captainValue = (p: ScoredPlayer) =>
-    beta
+  // ═══ v1.54 — A BRAÇADEIRA PASSA A OLHAR PARA A FORMA DA APOSTA ═══
+  //
+  // Até aqui o capitão era escolhido só pela média. Para maximizar pontos
+  // esperados isso está CERTO: dobrar é linear. Mas o objetivo aqui não é
+  // pontos, é posição — e dois jogadores com a mesma média podem ser
+  // apostas opostas. Um avançado que marca penáltis tem semanas de 2 e
+  // semanas de 20; um defesa regular tem 3 quase sempre. Quem persegue quer
+  // o primeiro; quem defende uma vantagem quer o segundo.
+  //
+  // O DESVIO USADO É `sdIfPlays`, NÃO `sdTotal`, E A DIFERENÇA É TUDO.
+  //
+  // O maior contribuinte para a variância de um jogador não é o seu talento
+  // — é a dúvida sobre se ele joga. Um lesionado em dúvida tem variância
+  // enorme (8 pontos ou 0) e é o PIOR capitão possível. Inclinar sobre a
+  // variância total premiaria exatamente esse jogador, e teria sido um
+  // defeito muito pior do que a ausência que corrige.
+  //
+  // `sdIfPlays` é a amplitude DADO QUE ele entra em campo: o quão explosiva
+  // é a sua jornada quando ela acontece. É a única variância que se procura.
+  // Há um teste dedicado a garantir que a dúvida nunca torna ninguém mais
+  // atrativo como capitão.
+  //
+  // O peso é o mesmo `beta` da postura, que já vem limitado e com rampa —
+  // perto de zero no início da época, quando ainda se recupera por
+  // competência e não por sorte. Metade do beta, porque o desconto de posse
+  // e a procura de amplitude são duas expressões da mesma inclinação e
+  // aplicá-las ambas por inteiro contá-la-ia duas vezes.
+  const spreadWeight = beta * 0.5;
+  const captainValue = (p: ScoredPlayer) => {
+    const base = beta
       ? p.expectedPointsNext *
         Math.max(
           MIN_STRATEGIC_RETENTION,
           1 - beta * Math.min(1, Math.max(0, p.ownershipPct / 100))
         )
       : p.expectedPointsNext;
+    if (!spreadWeight) return base;
+    // `risk` pode faltar em objetos construídos à mão por chamadores
+    // antigos e pelos testes. Ausente significa "sem informação sobre a
+    // forma", e sem informação a inclinação não se aplica — nunca é
+    // substituída por um palpite.
+    const sd = p.risk && Number.isFinite(p.risk.sdIfPlays) ? p.risk.sdIfPlays : 0;
+    return base + spreadWeight * sd;
+  };
 
   let best:
     | { captain: ScoredPlayer; vice: ScoredPlayer; value: number; viceEp: number }

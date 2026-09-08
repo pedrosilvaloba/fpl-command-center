@@ -129,9 +129,60 @@ export default function BacktestPanel({
       </div>
 
       <div className="rounded-md border border-border px-4 py-3">
-        <p className="eyebrow text-text-muted">
-          Calibração — inclinação {slopeReadable}
+        <p className="eyebrow mb-2 text-text-muted">
+          Calibração — a inclinação, medida de três maneiras
         </p>
+        {/* TRÊS, e não uma, porque uma sozinha não distingue erro de
+            artefacto. A amostra "só quem jogou" compara previsões
+            INCONDICIONAIS (que já contêm a hipótese de faltar) com
+            resultados CONDICIONADOS a ter jogado — o que faz o modelo
+            parecer pessimista nos duvidosos e achata a reta sem que haja
+            erro nenhum. A linha dos "certos de jogar" é a honesta: aí as
+            duas coisas coincidem, e o que sobra é modelo. */}
+        <table className="w-full text-left text-[12px]">
+          <tbody>
+            {[
+              {
+                k: "Só quem jogou",
+                r: reg,
+                note: "enviesada: compara previsão incondicional com resultado condicionado",
+              },
+              {
+                k: "Todos, com zeros",
+                r: m.unconditionalRegression,
+                note: "comparação em espécie",
+              },
+              {
+                k: "Só os certos de jogar",
+                r: m.nailedRegression,
+                note: `${m.nailedN} observações — sem artefacto, é erro de modelo`,
+              },
+            ].map((row) => {
+              const off =
+                row.r.slopeStdError > 0 &&
+                Math.abs(1 - row.r.slope) > 2 * row.r.slopeStdError;
+              return (
+                <tr key={row.k} className="border-b border-border/50">
+                  <td className="py-1 pr-3 text-text">{row.k}</td>
+                  <td className="py-1 pr-3 text-right font-mono tabular text-text">
+                    {row.r.n >= 3
+                      ? `${row.r.slope.toFixed(2)} ± ${row.r.slopeStdError.toFixed(2)}`
+                      : "—"}
+                  </td>
+                  <td
+                    className={`py-1 text-[11px] ${off ? "text-warn" : "text-text-muted"}`}
+                  >
+                    {row.r.n >= 3
+                      ? off
+                        ? `longe de 1 · ${row.note}`
+                        : `compatível com 1 · ${row.note}`
+                      : "sem dados"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
         <p className="mt-1 text-[13px] leading-relaxed text-text-muted">
           Com 1,00 uma previsão de 8 pontos corresponde mesmo a 8. Abaixo de
           1, o modelo espalha as previsões mais do que a realidade justifica —

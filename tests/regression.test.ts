@@ -12,6 +12,7 @@
  */
 
 import { computeDynamicTeamFactors } from "../lib/teamrating";
+import { pointsRisk } from "../lib/pointsrisk";
 import { normalizeBacktestResult } from "../lib/backtest";
 import {
   regressActualOnPredicted,
@@ -6990,6 +6991,251 @@ function testTheModelSeesTheLeagueWithoutObeyingIt() {
 }
 
 testTheModelSeesTheLeagueWithoutObeyingIt();
+
+
+
+/**
+ * v1.54: A BRAÇADEIRA PASSA A OLHAR PARA A FORMA DA APOSTA — E O ERRO QUE
+ * ISTO PODIA TER INTRODUZIDO ERA PIOR DO QUE A AUSÊNCIA QUE CORRIGE.
+ *
+ * O `ceilingGI` e o `floorGI` eram calculados para ~700 jogadores e lidos
+ * por nada. A capitania, que é a decisão semanal de maior alavancagem
+ * porque DOBRA os pontos, escolhia só pela média.
+ *
+ * A tentação óbvia — "escolhe o capitão de maior variância" — está errada
+ * de uma forma perigosa: o maior contribuinte para a variância de um
+ * jogador não é o talento dele, é a DÚVIDA sobre se joga. Um lesionado em
+ * dúvida tem variância enorme (8 pontos ou 0) e é o pior capitão possível.
+ *
+ * Por isso a inclinação usa `sdIfPlays` — a amplitude dado que ele entra —
+ * e nunca `sdTotal`. Os testes 4 e 5 são os que trancam essa distinção, e
+ * são a razão principal para este bloco existir.
+ */
+function testCaptaincyLooksAtTheShapeNotJustTheMean() {
+  const mins = (pAppear: number, pPlay60 = pAppear) => ({
+    pStart: pAppear,
+    avgMinutesPerStart: 85,
+    pPlay60,
+    pAppear,
+    expectedMinutes: 85 * pAppear,
+    reasons: [],
+  });
+  const bd = (o: Partial<Record<string, number>>) => ({
+    appearance: 0, goals: 0, assists: 0, cleanSheet: 0, concededPenalty: 0,
+    defensiveContribution: 0, bonus: 0, saves: 0, cards: 0, total: 0,
+    ...o,
+  }) as never;
+
+  // ── 1. O EXPLOSIVO E O REGULAR, COM A MESMA MÉDIA ───────────────────
+  // Avançado (tipo 4, golo = 4 pts): quase tudo o que marca vem de golos.
+  const striker = pointsRisk(
+    4,
+    bd({ appearance: 2, goals: 3.2, assists: 0.6, bonus: 0.5, total: 6.3 }),
+    mins(1)
+  );
+  // Defesa (tipo 2, golo = 6 pts, baliza a zero = 4): quase tudo vem de
+  // presença e de uma baliza a zero provável.
+  const defender = pointsRisk(
+    2,
+    bd({ appearance: 2, goals: 0.3, assists: 0.2, cleanSheet: 1.4,
+         concededPenalty: -0.4, defensiveContribution: 1.1, bonus: 0.3,
+         total: 4.9 }),
+    mins(1)
+  );
+  check(
+    "o avançado explosivo tem mais amplitude do que o defesa regular",
+    striker.sdIfPlays > defender.sdIfPlays * 1.3,
+    `avançado ${striker.sdIfPlays.toFixed(2)} vs defesa ${defender.sdIfPlays.toFixed(2)}`
+  );
+  check(
+    "e um jogador que joga de certeza não tem variância de falta",
+    striker.blankShare < 0.01 && defender.blankShare < 0.01,
+    `${striker.blankShare.toFixed(3)} / ${defender.blankShare.toFixed(3)}`
+  );
+
+  // ── 2. A DÚVIDA APARECE ONDE DEVE, E SÓ AÍ ──────────────────────────
+  const doubtful = pointsRisk(
+    4,
+    bd({ appearance: 1, goals: 1.6, assists: 0.3, bonus: 0.25, total: 3.15 }),
+    mins(0.5)
+  );
+  check(
+    "um jogador em dúvida tem a maior parte da variância no risco de falta",
+    doubtful.blankShare > 0.4,
+    `${(doubtful.blankShare * 100).toFixed(0)}% da variância é 'pode não jogar'`
+  );
+  check(
+    "e a sua média se jogar é o dobro da incondicional (pAppear=0,5)",
+    Math.abs(doubtful.meanIfPlays - 6.3) < 0.05,
+    `${doubtful.meanIfPlays.toFixed(2)}`
+  );
+  // A dúvida tem de ACRESCENTAR variância total. Se o risco de falta não
+  // entrasse na conta, a variância total de um jogador duvidoso seria
+  // MENOR do que a sua amplitude — o que é absurdo, e passaria despercebido
+  // a qualquer teste que só olhasse para a fração.
+  // A margem é pequena de propósito, e a razão é instrutiva: a variância
+  // total PONDERA a amplitude por q (só conta nas vezes em que ele joga) e
+  // acrescenta o termo da falta. Aqui isso dá 0,5x15,85 + 0,5x0,5x6,3² =
+  // 7,9 + 9,9. O termo da falta é MAIOR do que o da amplitude — mas como o
+  // primeiro foi reduzido a metade, o desvio-padrão final sobe apenas ~6%.
+  // Exigir 10% (a minha primeira tentativa) reprovava o código correto.
+  check(
+    "para um duvidoso, a variância total é maior do que a amplitude",
+    doubtful.sdTotal > doubtful.sdIfPlays,
+    `total ${doubtful.sdTotal.toFixed(2)} vs amplitude ${doubtful.sdIfPlays.toFixed(2)}`
+  );
+  check(
+    "e mais de metade dessa variância vem só de ele poder faltar",
+    doubtful.blankShare > 0.5,
+    `${(doubtful.blankShare * 100).toFixed(0)}%`
+  );
+  check(
+    "e a fração atribuída à falta continua a ser uma fração",
+    doubtful.blankShare >= 0 && doubtful.blankShare <= 1,
+    `${doubtful.blankShare.toFixed(3)}`
+  );
+  // Para quem joga de certeza, as duas coincidem: não há falta possível.
+  check(
+    "para quem joga de certeza, variância total e amplitude coincidem",
+    Math.abs(striker.sdTotal - striker.sdIfPlays) < 1e-9,
+    `${striker.sdTotal.toFixed(3)} vs ${striker.sdIfPlays.toFixed(3)}`
+  );
+
+  // ── 3. ESCALAS E CASOS DEGENERADOS ──────────────────────────────────
+  const ghost = pointsRisk(4, bd({ total: 0.05 }), mins(0.01));
+  check(
+    "quem quase de certeza não joga não recebe amplitude inventada",
+    ghost.sdIfPlays === 0 && ghost.upside === 0,
+    `sd=${ghost.sdIfPlays}, upside=${ghost.upside}`
+  );
+  check(
+    "a jornada boa é sempre pelo menos a média condicional",
+    striker.upside >= striker.meanIfPlays &&
+      defender.upside >= defender.meanIfPlays,
+    `${striker.upside.toFixed(2)} >= ${striker.meanIfPlays.toFixed(2)}`
+  );
+
+  // ── 4. O TESTE QUE IMPORTA MAIS: A DÚVIDA NÃO DÁ BRAÇADEIRA ─────────
+  // Dois candidatos com a MESMA média. Um é nailed e explosivo; o outro só
+  // tem média alta porque, nas semanas em que joga, marca — mas pode não
+  // jogar. Com uma postura agressiva, o modelo TEM de preferir o primeiro.
+  // Se alguma vez preferir o segundo, a inclinação está a ser feita sobre
+  // a variância total e o defeito é pior do que não ter inclinação nenhuma.
+  const mkCap = (
+    id: number,
+    epNext: number,
+    own: number,
+    risk: { sdIfPlays: number; sdTotal: number; blankShare: number },
+    pPlay = 1
+  ): ScoredPlayer =>
+    ({
+      element: { id, web_name: `C${id}` },
+      expectedPointsNext: epNext,
+      expectedPoints: epNext * 5,
+      ownershipPct: own,
+      pPlay,
+      risk: {
+        mean: epNext,
+        meanIfPlays: epNext / Math.max(0.05, pPlay),
+        upside: epNext / Math.max(0.05, pPlay) + risk.sdIfPlays,
+        ...risk,
+      },
+    }) as unknown as ScoredPlayer;
+
+  const filler = mkCap(90, 2, 5, { sdIfPlays: 1, sdTotal: 1, blankShare: 0 });
+
+  const nailedExplosive = mkCap(1, 7.0, 20, {
+    sdIfPlays: 5.5, sdTotal: 5.5, blankShare: 0,
+  });
+
+  // A PRIMEIRA VERSÃO DESTE TESTE ESTAVA ERRADA, e vale a pena registá-lo.
+  //
+  // Comparava um jogador nailed com 7,0 esperados contra um duvidoso
+  // TAMBÉM com 7,0 esperados. Mas `expectedPointsNext` é INCONDICIONAL —
+  // já contém a hipótese de faltar. Um jogador com 7,0 esperados e 55% de
+  // probabilidade de jogar tem uma média condicional de 12,7: é um monstro
+  // que pode não entrar. O modelo preferiu-o, e tinha razão — sobretudo
+  // porque o vice cobre exatamente as 45% de vezes em que ele falha.
+  //
+  // O teste dizia "com a mesma média" e as médias não eram comparáveis.
+  // Isolar a variância exige manter TUDO igual menos a variância.
+  const sameEverythingExplosive = mkCap(1, 7.0, 20, {
+    sdIfPlays: 5.5, sdTotal: 5.5, blankShare: 0,
+  });
+  const sameEverythingSteady = mkCap(2, 7.0, 20, {
+    sdIfPlays: 2.0, sdTotal: 2.0, blankShare: 0,
+  });
+  const aggressive = pickCaptain(
+    [sameEverythingExplosive, sameEverythingSteady, filler],
+    0.35
+  );
+  check(
+    "tudo igual menos a amplitude, a braçadeira vai ao explosivo",
+    aggressive.captain?.element.id === 1,
+    `capitão: C${aggressive.captain?.element.id}`
+  );
+
+  // ── 4b. O TESTE QUE TRANCA A DISTINÇÃO ENTRE AS DUAS VARIÂNCIAS ─────
+  // Tudo igual — média, posse, probabilidade de jogar. Um tem amplitude
+  // real quando joga; o outro tem variância TOTAL maior mas amplitude
+  // baixa. Se o código lesse `sdTotal` em vez de `sdIfPlays`, escolheria o
+  // segundo. É esta linha que separa "procurar explosão" de "procurar
+  // incerteza", e a segunda não é uma estratégia, é uma forma de perder.
+  const realUpside = mkCap(5, 7.0, 20, {
+    sdIfPlays: 5.5, sdTotal: 5.5, blankShare: 0,
+  });
+  const noisyButFlat = mkCap(6, 7.0, 20, {
+    sdIfPlays: 1.5, sdTotal: 11.0, blankShare: 0.9,
+  });
+  const picksUpside = pickCaptain([realUpside, noisyButFlat, filler], 0.35);
+  check(
+    "a inclinação lê a amplitude de quem joga, não a variância total",
+    picksUpside.captain?.element.id === 5,
+    `capitão: C${picksUpside.captain?.element.id} (5 = amplitude real, 6 = só ruído)`
+  );
+
+  // ── 5. E A INCLINAÇÃO NÃO PODE ANULAR O MODELO DE PONTOS ────────────
+  // Amplitude enorme não compra a braçadeira contra uma média muito maior.
+  const wildLowMean = mkCap(3, 4.5, 5, {
+    sdIfPlays: 12, sdTotal: 12, blankShare: 0,
+  });
+  const solidHighMean = mkCap(4, 8.5, 45, {
+    sdIfPlays: 3, sdTotal: 3, blankShare: 0,
+  });
+  const notFooled = pickCaptain([wildLowMean, solidHighMean, filler], 0.35);
+  check(
+    "amplitude enorme não rouba a braçadeira a uma média muito superior",
+    notFooled.captain?.element.id === 4,
+    `capitão: C${notFooled.captain?.element.id}`
+  );
+
+  // ── 6. SEM POSTURA, NADA MUDA ───────────────────────────────────────
+  // beta = 0 é o estado da app hoje, no início da época. A funcionalidade
+  // tem de ser literalmente inerte aí — senão está a mudar decisões numa
+  // altura em que a simulação diz que não há razão para arriscar.
+  const neutral = pickCaptain([nailedExplosive, solidHighMean, filler], 0);
+  check(
+    "com postura neutra, a amplitude não altera a escolha",
+    neutral.captain?.element.id === 4,
+    `capitão: C${neutral.captain?.element.id} (o de maior média)`
+  );
+  // E um jogador sem `risk` nenhum (chamador antigo) não pode rebentar.
+  const legacy = {
+    element: { id: 7, web_name: "Antigo" },
+    expectedPointsNext: 9,
+    expectedPoints: 45,
+    ownershipPct: 10,
+    pPlay: 1,
+  } as unknown as ScoredPlayer;
+  const withLegacy = pickCaptain([legacy, filler], 0.35);
+  check(
+    "um jogador sem perfil de risco não rebenta nem é penalizado",
+    withLegacy.captain?.element.id === 7,
+    `capitão: ${withLegacy.captain?.element.web_name}`
+  );
+}
+
+testCaptaincyLooksAtTheShapeNotJustTheMean();
 
 void testLossCanNoLongerLookLikeEmptiness()
   .then(() => testOneRefusalNoLongerKillsTheWholeApp())

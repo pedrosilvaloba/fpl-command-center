@@ -231,6 +231,10 @@ export interface BacktestRow {
   /** How much of the prediction came from the model rather than from the
    * points-per-game stand-in for FPL's `ep_next`. */
   trust: number;
+  /** P(este jogador aparece) no momento da previsão. Guardado porque é a
+   * chave para separar erro de modelo de artefacto de medição — ver
+   * `nailedRegression`. */
+  pPlay: number;
 }
 
 export interface BacktestBucket {
@@ -283,6 +287,21 @@ export interface BacktestMetrics {
    * medição não for firme. É null de propósito na maior parte do tempo.
    */
   suggestedShrinkage: number | null;
+  /**
+   * A MESMA REGRESSÃO, MEDIDA DE DUAS OUTRAS MANEIRAS, porque a primeira
+   * sozinha não distingue erro de artefacto.
+   *
+   * `unconditionalRegression` inclui quem não jogou, com zero. É a
+   * comparação correta em espécie: o modelo prevê pontos incondicionais.
+   *
+   * `nailedRegression` usa só jogadores praticamente certos de jogar. Aí a
+   * distinção condicional/incondicional desaparece, e o que sobra é erro
+   * de modelo puro. É este o número honesto sobre o topo da tabela — de
+   * onde saem o capitão e as transferências.
+   */
+  unconditionalRegression: Regression;
+  nailedRegression: Regression;
+  nailedN: number;
 }
 
 function spearmanCorrelation(pairs: { a: number; b: number }[]): number {
@@ -325,12 +344,19 @@ function spearmanCorrelation(pairs: { a: number; b: number }[]): number {
 
 const CALIBRATION_EDGES = [0, 2, 3, 4, 5, 6, 8, Infinity];
 
+/** Acima disto, "condicionado a ter jogado" e "incondicional" são
+ * praticamente a mesma coisa, e o artefacto de amostragem desaparece. */
+const NAILED_P_PLAY = 0.9;
+
 export function scoreBacktest(rows: BacktestRow[]): BacktestMetrics {
   const n = rows.length;
   const empty: BacktestMetrics = {
     n: 0, events: [], mae: 0, rmse: 0, bias: 0, spearman: 0, decileLift: 0,
     captainTop10Rate: 0, calibration: [], baselineMae: 0, baselineSpearman: 0,
     regression: { slope: 0, intercept: 0, slopeStdError: 0, r2: 0, n: 0 },
+    unconditionalRegression: { slope: 0, intercept: 0, slopeStdError: 0, r2: 0, n: 0 },
+    nailedRegression: { slope: 0, intercept: 0, slopeStdError: 0, r2: 0, n: 0 },
+    nailedN: 0,
     evidence: callTheEvidence({ n: 0, events: 0, spearman: 0, baselineSpearman: 0 }),
     suggestedShrinkage: null,
   };
@@ -405,6 +431,12 @@ export function scoreBacktest(rows: BacktestRow[]): BacktestMetrics {
     // veredicto precisa da base, que só existe em `runBacktest` — fica
     // como marcador até lá, e é lá que é preenchido.
     regression: regressActualOnPredicted(rows),
+    // Preenchidas em `runBacktest`, que é quem tem as linhas completas.
+    unconditionalRegression: { slope: 0, intercept: 0, slopeStdError: 0, r2: 0, n: 0 },
+    nailedRegression: regressActualOnPredicted(
+      rows.filter((r) => r.pPlay >= NAILED_P_PLAY)
+    ),
+    nailedN: rows.filter((r) => r.pPlay >= NAILED_P_PLAY).length,
     evidence: callTheEvidence({
       n,
       events: byEvent.size,
@@ -486,12 +518,15 @@ const HIGH_TRUST_MINUTES = 360;
 export function collectBacktestRows(input: BacktestInput): {
   rows: BacktestRow[];
   baseline: { predicted: number; actual: number }[];
+  /** Todas as linhas, incluindo zeros de quem não entrou. */
+  allRows: { predicted: number; actual: number }[];
 } {
   const { bootstrap, fixtures, historyByElement, fromEvent, toEvent } = input;
   const minMinutes = input.minMinutes ?? 1;
   const elementIds = [...historyByElement.keys()];
 
   const rows: BacktestRow[] = [];
+  const allRows: { predicted: number; actual: number }[] = [];
   const baselineRows: { predicted: number; actual: number }[] = [];
 
   for (let event = fromEvent; event <= toEvent; event++) {
@@ -519,10 +554,31 @@ export function collectBacktestRows(input: BacktestInput): {
     for (const p of scored) {
       const history = historyByElement.get(p.element.id) ?? [];
       const played = history.filter((h) => num(h.round) === event);
-      if (played.length === 0) continue;
       const minutes = played.reduce((s, h) => s + num(h.minutes), 0);
-      if (minutes < minMinutes) continue;
       const actual = played.reduce((s, h) => s + num(h.total_points), 0);
+
+      // ═══ v1.55 — A AMOSTRA ESTAVA CONDICIONADA E A INCLINAÇÃO NÃO ═══
+      //
+      // As linhas acima excluíam quem não jogou, com um argumento
+      // razoável: prever o zero de quem não entrou é uma questão de
+      // minutos, não de pontuação, e incluir milhares de 0-0 garantidos
+      // faria o erro médio parecer muito melhor do que é.
+      //
+      // Mas isso torna a INCLINAÇÃO DA CALIBRAÇÃO ininterpretável, e a
+      // inclinação é o número que agora interessa mais. O modelo prevê
+      // pontos INCONDICIONAIS — já com a hipótese de faltar lá dentro. A
+      // amostra media o real CONDICIONADO a ter jogado. Comparar os dois
+      // faz o modelo parecer sistematicamente pessimista nos jogadores
+      // duvidosos, achata a reta, e uma parte da inclinação medida de 0,29
+      // pode ser este artefacto e não erro nenhum.
+      //
+      // A correção não é trocar uma amostra pela outra — é medir AS DUAS,
+      // porque respondem a perguntas diferentes. Estas linhas são todas,
+      // com zero para quem não entrou.
+      allRows.push({ predicted: p.expectedPointsNext, actual });
+
+      if (played.length === 0) continue;
+      if (minutes < minMinutes) continue;
       const minutesBefore = history
         .filter((h) => num(h.round) < event)
         .reduce((s, h) => s + num(h.minutes), 0);
@@ -537,18 +593,19 @@ export function collectBacktestRows(input: BacktestInput): {
         minutes,
         priceM: p.priceM,
         trust: Math.min(1, minutesBefore / HIGH_TRUST_MINUTES),
+        pPlay: typeof p.pPlay === "number" ? p.pPlay : 1,
       });
       baselineRows.push({ predicted: parseFloat(p.element.points_per_game) || 0, actual });
     }
   }
 
-  return { rows, baseline: baselineRows };
+  return { rows, baseline: baselineRows, allRows };
 }
 
 export function runBacktest(input: BacktestInput): BacktestResult {
   const { fromEvent, toEvent } = input;
   const elementIds = [...input.historyByElement.keys()];
-  const { rows, baseline: baselineRows } = collectBacktestRows(input);
+  const { rows, baseline: baselineRows, allRows } = collectBacktestRows(input);
 
   const metrics = scoreBacktest(rows);
   const baseline = scoreBaseline(baselineRows);
@@ -564,6 +621,7 @@ export function runBacktest(input: BacktestInput): BacktestResult {
     spearman: metrics.spearman,
     baselineSpearman: metrics.baselineSpearman,
   });
+  metrics.unconditionalRegression = regressActualOnPredicted(allRows);
   metrics.suggestedShrinkage = suggestedShrinkage(
     metrics.regression,
     metrics.events.length
@@ -632,10 +690,9 @@ function normalizeMetrics(m: Partial<BacktestMetrics> | undefined): BacktestMetr
   const spearman = typeof m.spearman === "number" ? m.spearman : 0;
   const baselineSpearman =
     typeof m.baselineSpearman === "number" ? m.baselineSpearman : 0;
-  const regression =
-    m.regression && typeof m.regression.slope === "number"
-      ? m.regression
-      : base.regression;
+  const reg = (r: unknown, fallback: Regression): Regression =>
+    r && typeof (r as Regression).slope === "number" ? (r as Regression) : fallback;
+  const regression = reg(m.regression, base.regression);
   return {
     ...base,
     ...m,
@@ -644,6 +701,9 @@ function normalizeMetrics(m: Partial<BacktestMetrics> | undefined): BacktestMetr
     spearman,
     baselineSpearman,
     regression,
+    unconditionalRegression: reg(m.unconditionalRegression, base.regression),
+    nailedRegression: reg(m.nailedRegression, base.regression),
+    nailedN: typeof m.nailedN === "number" ? m.nailedN : 0,
     // Recalculado a partir dos campos que QUALQUER versão tem. Um registo
     // antigo passa assim a ter veredicto, em vez de rebentar — e o
     // veredicto é o correto, porque só depende de n, jornadas e Spearman.
