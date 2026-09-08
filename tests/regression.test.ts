@@ -12,6 +12,11 @@
  */
 
 import { computeDynamicTeamFactors } from "../lib/teamrating";
+import {
+  planDeferral,
+  shouldWaitForMore,
+  DEFERRED_INFORMATION_VALUE,
+} from "../lib/deferplan";
 import { pointsRisk } from "../lib/pointsrisk";
 import { normalizeBacktestResult } from "../lib/backtest";
 import {
@@ -7236,6 +7241,190 @@ function testCaptaincyLooksAtTheShapeNotJustTheMean() {
 }
 
 testCaptaincyLooksAtTheShapeNotJustTheMean();
+
+
+
+/**
+ * v1.56: O MODELO PASSA A PENSAR A DUAS SEMANAS.
+ *
+ * Pedido pelo Pedro nestes termos: "não vais gastar esta transferência
+ * nesta semana para na próxima teres duas e conseguires introduzir estes
+ * dois jogadores".
+ *
+ * O planeador respondia sempre à mesma pergunta — a melhor jogada AGORA —
+ * e toda a representação da ideia de guardar era uma constante,
+ * `FT_OPTION_VALUE = 1.5`. Um prior sobre o valor abstrato de ter opções:
+ * não nomeia ninguém, e não distingue uma semana em que guardar não serve
+ * de nada de uma em que guardar desbloqueia a dupla que o modelo quer.
+ *
+ * O RISCO DESTA FUNCIONALIDADE é adiar sempre. Adiar tem um custo real —
+ * perde-se uma jornada inteira do benefício — e um modelo que o ignorasse
+ * recomendaria esperar eternamente, o que é a forma mais silenciosa de
+ * nunca melhorar uma equipa. Os testes 2 e 3 são disso.
+ */
+function testTheModelCanPlanTwoWeeksAhead() {
+  const { owned, scored } = mkTransferPool([10, 2]);
+
+  // ── 1. COM CINCO LIVRES, A PERGUNTA NÃO EXISTE ──────────────────────
+  // A FPL acumula até cinco. Guardar a sexta não dá nada, e uma análise
+  // que fingisse dar seria ruído com ar de conselho.
+  //
+  // O PLANTEL USADO AQUI TEM DE TER MELHORIAS DISPONÍVEIS. A primeira
+  // versão deste teste usava um plantel sem melhoria nenhuma, e por isso
+  // passava mesmo com a guarda dos cinco removida — a saída de "ninguém
+  // mexe" devolvia null na mesma. Um teste que passa pela razão errada é
+  // pior do que nenhum: dá a sensação de estar coberto.
+  const richMaxed = mkTransferPool([20, 20]);
+  const maxed = mkState(richMaxed.owned, 5);
+  check(
+    "com cinco transferências livres, não há adiamento a analisar",
+    planDeferral(
+      richMaxed.scored,
+      maxed,
+      planTransfers(richMaxed.scored, maxed, { currentEvent: 20 }),
+      { currentEvent: 20 }
+    ) === null,
+    "null"
+  );
+
+  // ── 2. O CUSTO DE ADIAR ESTÁ MESMO LÁ ───────────────────────────────
+  // Adiar uma semana deixa 4 jornadas de 5. Se esse desconto não
+  // existisse, adiar ganharia sempre — o mesmo plano, uma semana mais
+  // tarde, com mais uma transferência, é sempre pelo menos tão bom.
+  // Um plantel sem melhoria nenhuma disponível: guardar não desbloqueia
+  // nada, e a análise tem de dizer que não há pergunta em vez de anunciar
+  // o valor da informação futura como se fosse um plano.
+  const flat = mkTransferPool([0, 0]);
+  const flatState = mkState(flat.owned, 1);
+  check(
+    "sem melhoria nenhuma disponível, não há adiamento a analisar",
+    planDeferral(flat.scored, flatState, planTransfers(flat.scored, flatState)) ===
+      null,
+    "null"
+  );
+
+  // Agora um plantel onde DUAS melhorias grandes existem. Com 1 livre,
+  // fazer as duas hoje custa um hit; com 2 na próxima, sai de graça. É
+  // exatamente o cenário que o Pedro descreveu.
+  const twoBig = mkTransferPool([20, 20]);
+  const st1 = mkState(twoBig.owned, 1);
+  const today = planTransfers(twoBig.scored, st1, { currentEvent: 20 });
+  const d = planDeferral(twoBig.scored, st1, today, { currentEvent: 20 });
+  check(
+    "há uma análise de adiamento quando há transferências por acumular",
+    d !== null,
+    d === null ? "null" : d.headline.slice(0, 60)
+  );
+  if (d) {
+    check(
+      "e ela nomeia jogadores concretos, não fala em abstrato",
+      d.deferredMoves.length > 0 &&
+        d.deferredMoves.every((m) => m.includes("→")),
+      d.deferredMoves.join(" · ").slice(0, 70)
+    );
+    check(
+      "as transferências livres da próxima semana são as de hoje mais uma",
+      d.freeNextWeek === 2,
+      `${d.freeNextWeek}`
+    );
+    check(
+      "e o plano adiado não paga hit, ao contrário do de hoje",
+      d.deferredHits === 0 && d.nowHits > 0,
+      `hoje ${d.nowHits} hits, adiado ${d.deferredHits}`
+    );
+    // O valor da informação futura é declarado e limitado. Se fosse grande,
+    // dominaria a comparação e o modelo adiaria tudo para sempre.
+    check(
+      "o valor da informação futura é pequeno e explícito",
+      DEFERRED_INFORMATION_VALUE > 0 && DEFERRED_INFORMATION_VALUE <= 3,
+      `${DEFERRED_INFORMATION_VALUE}`
+    );
+  }
+
+  // ── 3. O CUSTO DE ADIAR TEM DE ESTAR NA CONTA ───────────────────────
+  // Adiar uma semana deixa 4 jornadas de 5 do benefício. Se esse desconto
+  // desaparecesse, adiar ganharia quase sempre — o mesmo plano, uma semana
+  // mais tarde, com mais uma transferência, é sempre pelo menos tão bom.
+  // Esta verificação amarra a aritmética exata em vez de confiar que está
+  // lá: com o desconto a 1 em vez de 0,8, o número muda e o teste cai.
+  if (d) {
+    // O ganho BRUTO vem do planeador; o apresentado tem de ser esse bruto
+    // vezes 4/5 mais o valor da informação. Comparar contra o bruto, e não
+    // recalcular o desconto a partir do resultado — essa foi a primeira
+    // versão deste teste, e era uma tautologia: passava na mesma com o
+    // desconto desligado.
+    const expected = d.deferredGainRaw * 0.8 + DEFERRED_INFORMATION_VALUE;
+    check(
+      "o ganho adiado é descontado em exatamente um quinto",
+      d.deferredGainRaw > 0 && Math.abs(d.deferredGain - expected) < 0.06,
+      `bruto ${d.deferredGainRaw.toFixed(1)} → esperado ${expected.toFixed(1)}, apresentado ${d.deferredGain.toFixed(1)}`
+    );
+    check(
+      "e adiar vale menos do que valeria se não se perdesse a jornada",
+      d.deferredGain <
+        d.deferredGainRaw + DEFERRED_INFORMATION_VALUE - 0.05,
+      `${d.deferredGain.toFixed(1)} < ${(d.deferredGainRaw + DEFERRED_INFORMATION_VALUE).toFixed(1)}`
+    );
+  }
+
+  // ── 3b. ADIAR PARA FAZER O MESMO NÃO É UM PLANO ─────────────────────
+  // Com 2 livres hoje, o melhor plano de hoje já faz as duas trocas sem
+  // hit. Adiar daria 3 livres e o MESMO par — esperar seria só perder uma
+  // jornada. Este é o cenário que apanha um modelo que adia sempre, e a
+  // primeira versão do teste não o cobria: só verificava a condição quando
+  // ela já era verdadeira por outro motivo.
+  const st2 = mkState(twoBig.owned, 2);
+  const today2 = planTransfers(twoBig.scored, st2, { currentEvent: 20 });
+  const d2 = planDeferral(twoBig.scored, st2, today2, { currentEvent: 20 });
+  check(
+    "com as duas trocas já possíveis hoje sem hit, adiar não é recomendado",
+    d2 === null || d2.worthWaiting === false,
+    d2 === null
+      ? "sem análise"
+      : `agora ${d2.nowMoves.length} vs adiado ${d2.deferredMoves.length}, esperar=${d2.worthWaiting}`
+  );
+  check(
+    "e nesse cenário existe mesmo uma análise para julgar (não é null por acaso)",
+    d2 !== null,
+    d2 === null ? "NULL — o teste acima passou por omissão" : "existe"
+  );
+
+  // ── 3c. A REGRA DE DECISÃO, TESTADA DIRETAMENTE ─────────────────────
+  //
+  // Os cenários acima não chegavam: com os limiares de retenção, uma troca
+  // ou não acontece ou vale muito, e o caso "ganho pequeno mas positivo" —
+  // o único em que a segunda condição decide — não é fabricável nesta
+  // grelha. Uma mutação que punha `worthWaiting` sempre a verdadeiro
+  // passava por tudo. A regra foi extraída para poder ser testada sozinha.
+  check(
+    "adiar ganha só quando vale mais E desbloqueia mais mudanças",
+    shouldWaitForMore({ nowGain: 4, deferredGain: 6, nowMoves: 1, deferredMoves: 2 }) === true,
+    "vale mais + mais mudanças → esperar"
+  );
+  check(
+    "valer mais mas fazer as MESMAS mudanças não justifica esperar",
+    shouldWaitForMore({ nowGain: 4, deferredGain: 6, nowMoves: 1, deferredMoves: 1 }) === false,
+    "perder uma jornada para fazer o mesmo não é estratégia"
+  );
+  check(
+    "desbloquear mais mudanças mas valer menos também não justifica",
+    shouldWaitForMore({ nowGain: 9, deferredGain: 7, nowMoves: 1, deferredMoves: 2 }) === false,
+    "mais mudanças a valer menos"
+  );
+  check(
+    "e um empate no valor não é razão para esperar",
+    shouldWaitForMore({ nowGain: 5, deferredGain: 5, nowMoves: 1, deferredMoves: 2 }) === false,
+    "empate → mover já"
+  );
+  check(
+    "não mexer hoje contra uma dupla na próxima é o caso do Pedro, e passa",
+    shouldWaitForMore({ nowGain: 0, deferredGain: 8, nowMoves: 0, deferredMoves: 2 }) === true,
+    "0 movimentos hoje, 2 na próxima → esperar"
+  );
+
+}
+
+testTheModelCanPlanTwoWeeksAhead();
 
 void testLossCanNoLongerLookLikeEmptiness()
   .then(() => testOneRefusalNoLongerKillsTheWholeApp())

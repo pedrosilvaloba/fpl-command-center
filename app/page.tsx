@@ -44,6 +44,7 @@ import {
 } from "@/lib/strategylearning";
 import { loadSquadState, EMPTY_SQUAD_STATE } from "@/lib/squadstate";
 import { planTransfers } from "@/lib/transferplan";
+import { planDeferral } from "@/lib/deferplan";
 import { readCalendar, planChips } from "@/lib/chipplan";
 import ChipPlanPanel from "@/components/ChipPlanPanel";
 import AutomationPanel from "@/components/AutomationPanel";
@@ -67,6 +68,7 @@ import GameweekReviewPanel from "@/components/GameweekReviewPanel";
 import BacktestPanel from "@/components/BacktestPanel";
 import LeagueChipsPanel from "@/components/LeagueChipsPanel";
 import CaptainShortlist from "@/components/CaptainShortlist";
+import DeferralPanel from "@/components/DeferralPanel";
 import { fetchLeagueChipState } from "@/lib/rivalchips";
 import { EMPTY_LEAGUE_CHIP_STATE } from "@/lib/rivalchips";
 
@@ -521,13 +523,26 @@ export default async function Home() {
   const calendar = readCalendar(bootstrap.events, bootstrap.teams, fixtures, fromEvent);
 
   // ---- what to actually do before the deadline -------------------------
-  const transferAdvice = planTransfers(scored, squadState, {
+  const transferPlanOpts = {
     beta: posture.beta,
     currentEvent: fromEvent,
     likelyRisers: risers.map((r) => r.element.id),
     likelyFallers: fallers.map((r) => r.element.id),
     calendar,
-  });
+  };
+  const transferAdvice = planTransfers(scored, squadState, transferPlanOpts);
+
+  // "E se não gastar nada esta semana, para na próxima ter duas e meter os
+  // dois jogadores que quero?" — a pergunta que qualquer gestor faz e que o
+  // planeador nunca tinha respondido. Corre o MESMO planeador com mais uma
+  // transferência livre; reimplementá-lo aqui compararia duas coisas
+  // diferentes.
+  const deferral = planDeferral(
+    scored,
+    squadState,
+    transferAdvice,
+    transferPlanOpts
+  );
 
   // ---- how the last/current gameweek actually went ---------------------
   const reviewEvent = lastPublishedEvent;
@@ -772,6 +787,33 @@ export default async function Home() {
               )}
             </div>
           </div>
+
+          {/* ═══ O ONZE. ═══
+              A app dizia quem comprar e quem capitanear, e nunca dizia
+              QUEM ALINHA. O plantel são quinze e jogam onze: escolher os
+              onze é uma decisão semanal, é obrigatória, e estava a ser
+              deixada inteiramente ao utilizador — apesar de o modelo já a
+              calcular internamente para avaliar as transferências. Mais um
+              caso de peça construída e não ligada ao ecrã. */}
+          <div className="mb-5 border-b border-border pb-4">
+            <p className="eyebrow mb-2 text-text-muted">
+              O teu onze — quem alinha e quem fica no banco
+            </p>
+            <PitchView
+              starters={transferAdvice.recommended?.xi ?? starters}
+              bench={transferAdvice.recommended?.bench ?? bench}
+              captainId={decisionCaptain?.element.id}
+              viceCaptainId={decisionVice?.element.id}
+            />
+            <p className="mt-2 text-[11px] leading-relaxed text-text-muted">
+              Este é o onze do plantel que terás DEPOIS das transferências
+              recomendadas acima. A ordem do banco é a ordem em que as
+              substituições automáticas entram se alguém não jogar — não é
+              decorativa.
+            </p>
+          </div>
+
+          <DeferralPanel plan={deferral} />
 
           {/* A braçadeira aparecia como um nome sem contexto. Dobra pontos:
               é a decisão semanal de maior alavancagem e a que mais merece
