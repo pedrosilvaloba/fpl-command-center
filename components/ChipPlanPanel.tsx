@@ -1,3 +1,4 @@
+import type { EventProjection } from "@/lib/chipschedule";
 import type { ChipAdvice, CalendarContext } from "@/lib/chipplan";
 
 /**
@@ -22,10 +23,13 @@ export default function ChipPlanPanel({
   advice,
   calendar,
   event,
+  projections = [],
 }: {
   advice: ChipAdvice[];
   calendar: CalendarContext;
   event: number;
+  /** Valor projetado de cada chip por jornada. Ver lib/chipschedule.ts. */
+  projections?: EventProjection[];
 }) {
   const nextBreak = calendar.breakAfterEvents.find((e) => e >= event) ?? null;
 
@@ -74,6 +78,82 @@ export default function ChipPlanPanel({
           </div>
         ))}
       </div>
+
+      {projections.length > 1 && (
+        <div className="mt-4 border-t border-border pt-3">
+          {/* "GUARDA" SEM UM ALVO É INDISTINGUÍVEL DE "NÃO SEI".
+              O planeador já decidia bem QUANDO gastar, mas o "depois" era
+              um número sem semana. Aqui está a semana. */}
+          <p className="eyebrow mb-2 text-text-muted">
+            O que cada chip renderia, jornada a jornada
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left font-mono text-[12px] tabular">
+              <thead>
+                <tr className="border-b border-border text-text-muted">
+                  <th className="py-1 pr-3 font-normal">GW</th>
+                  <th className="py-1 pr-3 text-right font-normal">Bench Boost</th>
+                  <th className="py-1 pr-3 text-right font-normal">Triple Cap.</th>
+                  <th className="py-1 font-normal">notas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {projections.map((pr, i) => {
+                  const bestBb = Math.max(
+                    ...projections.slice(1).map((x) => x.benchBoost)
+                  );
+                  const bestTc = Math.max(
+                    ...projections.slice(1).map((x) => x.tripleCaptain)
+                  );
+                  return (
+                    <tr
+                      key={pr.event}
+                      className={`border-b border-border/50 ${i === 0 ? "text-text" : "text-text-muted"}`}
+                    >
+                      <td className="py-1 pr-3">
+                        {pr.event}
+                        {i === 0 && (
+                          <span className="ml-1 text-[10px] text-accent">agora</span>
+                        )}
+                      </td>
+                      <td
+                        className={`py-1 pr-3 text-right ${i > 0 && pr.benchBoost === bestBb ? "font-semibold text-accent" : ""}`}
+                      >
+                        {pr.benchBoost.toFixed(1)}
+                      </td>
+                      <td
+                        className={`py-1 pr-3 text-right ${i > 0 && pr.tripleCaptain === bestTc ? "font-semibold text-accent" : ""}`}
+                      >
+                        {pr.tripleCaptain.toFixed(1)}
+                        {pr.captainName && (
+                          <span className="ml-1 text-[10px] opacity-70">
+                            {pr.captainName}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-1 text-[11px]">
+                        {pr.maxFixtures >= 2 && (
+                          <span className="text-accent">jornada dupla · </span>
+                        )}
+                        {pr.blanking > 0 && `${pr.blanking} sem jogo`}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-text-muted">
+            Cada jogador é reescalado pela qualidade do calendário dessa
+            semana, a partir dos seus pontos da próxima jornada. Assume que a
+            forma não muda, só o adversário — o que é falso a cinco semanas,
+            mas capta exatamente o que decide um chip: jornadas em branco
+            (zero jogos) e duplas (dois). <strong className="text-text">Não
+            ver nada de especial aqui não quer dizer que não venha</strong>:
+            as duplas só entram no calendário poucas semanas antes.
+          </p>
+        </div>
+      )}
 
       <div className="mt-3 flex flex-col gap-1 border-t border-border pt-3 text-xs text-text-muted">
         {nextBreak !== null && (

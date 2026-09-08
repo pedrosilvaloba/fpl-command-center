@@ -46,6 +46,7 @@ import { loadSquadState, EMPTY_SQUAD_STATE } from "@/lib/squadstate";
 import { planTransfers } from "@/lib/transferplan";
 import { planDeferral } from "@/lib/deferplan";
 import { readCalendar, planChips } from "@/lib/chipplan";
+import { projectChipsByEvent } from "@/lib/chipschedule";
 import ChipPlanPanel from "@/components/ChipPlanPanel";
 import AutomationPanel from "@/components/AutomationPanel";
 import { getJobHealth, mergeResearchHealth } from "@/lib/joblog";
@@ -658,6 +659,18 @@ export default async function Home() {
   // Uses the RECOMMENDED squad when there is one — a Bench Boost is worth
   // what the bench you will actually field scores, not what today's bench
   // would have scored before the transfer.
+  // O valor de cada chip em cada jornada do horizonte visível. Reescala
+  // cada jogador pela qualidade do calendário dessa semana — o que capta
+  // exatamente as duas coisas que decidem um chip: brancas (zero jogos) e
+  // duplas (dois).
+  const chipProjections = projectChipsByEvent(
+    transferAdvice.recommended?.xi ?? starters,
+    transferAdvice.recommended?.bench ?? bench,
+    expectationsByTeamForDisplay,
+    fromEvent,
+    5
+  );
+
   const chipAdvice = planChips({
     currentEvent: fromEvent,
     chips: squadState.chips,
@@ -666,6 +679,7 @@ export default async function Home() {
     captain: transferAdvice.recommended?.captain ?? captain,
     calendar,
     leagueChips: leagueChipState.available ? leagueChipState.summaries : undefined,
+    projections: chipProjections,
   });
   const xiExpected = starters.reduce((s, p) => s + p.expectedPointsNext, 0);
 
@@ -830,7 +844,12 @@ export default async function Home() {
             />
           </div>
 
-          <ChipPlanPanel advice={chipAdvice} calendar={calendar} event={fromEvent} />
+          <ChipPlanPanel
+            advice={chipAdvice}
+            calendar={calendar}
+            event={fromEvent}
+            projections={chipProjections}
+          />
 
           {/* Os chips da liga ficam JUNTO da decisão sobre chips, não numa
               secção de consulta. Foi o Pedro que reparou nisto sozinho —

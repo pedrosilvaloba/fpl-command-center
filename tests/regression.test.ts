@@ -13,6 +13,10 @@
 
 import { computeDynamicTeamFactors } from "../lib/teamrating";
 import {
+  projectChipsByEvent,
+  bestFutureEvent,
+} from "../lib/chipschedule";
+import {
   planDeferral,
   shouldWaitForMore,
   DEFERRED_INFORMATION_VALUE,
@@ -7425,6 +7429,173 @@ function testTheModelCanPlanTwoWeeksAhead() {
 }
 
 testTheModelCanPlanTwoWeeksAhead();
+
+
+
+/**
+ * v1.57: "GUARDA O CHIP" PASSA A DIZER PARA QUANDO.
+ *
+ * Desde a v1.50 o planeador decide bem QUANDO gastar — compara o valor de
+ * hoje com o de continuar a guardar, e o prazo da GW19 entra na conta. Mas
+ * o "depois" era um número sem semana: "esperar vale 9,2" e nada mais.
+ * "Guarda" sem alvo é indistinguível de "não sei", e é a diferença entre um
+ * plano e um adiamento.
+ *
+ * A projeção reescala cada jogador pela qualidade do calendário de cada
+ * semana futura. É uma aproximação — assume que a forma não muda, só o
+ * adversário — mas capta exatamente as duas coisas que decidem um chip, e
+ * são essas que estes testes trancam.
+ */
+function testChipsKnowWhichWeekIsBest() {
+  const mkFx = (
+    event: number,
+    xgf: number,
+    cs: number
+  ) => ({
+    fixtureId: event * 100,
+    event,
+    opponentTeamId: 99,
+    isHome: true,
+    expectedGoalsFor: xgf,
+    expectedGoalsAgainst: 1.2,
+    cleanSheetProbability: cs,
+    marketAdjusted: false,
+    source: "modelo" as never,
+  });
+
+  const mkP = (id: number, type: number, ep: number, teamId: number): ScoredPlayer =>
+    ({
+      element: { id, web_name: `P${id}`, element_type: type },
+      team: { id: teamId },
+      expectedPointsNext: ep,
+      expectedPoints: ep * 5,
+      ownershipPct: 10,
+      pPlay: 1,
+    }) as unknown as ScoredPlayer;
+
+  // Equipa 1: jornada média na 4, DUPLA na 6, BRANCA na 7.
+  const exps = new Map<number, ReturnType<typeof mkFx>[]>([
+    [
+      1,
+      [
+        mkFx(4, 1.5, 0.28),
+        mkFx(5, 1.5, 0.28),
+        mkFx(6, 1.5, 0.28),
+        mkFx(6, 1.5, 0.28), // segundo jogo na mesma jornada
+        // sem jogo nenhum na 7
+        mkFx(8, 1.5, 0.28),
+      ],
+    ],
+  ]);
+
+  const xi = Array.from({ length: 11 }, (_, i) => mkP(i + 1, 3, 4, 1));
+  const bench = Array.from({ length: 4 }, (_, i) => mkP(100 + i, 3, 2, 1));
+  const proj = projectChipsByEvent(
+    xi,
+    bench,
+    exps as never,
+    4,
+    5
+  );
+
+  check(
+    "a projeção cobre as cinco jornadas do horizonte",
+    proj.length === 5 && proj[0].event === 4 && proj[4].event === 8,
+    proj.map((p) => p.event).join(",")
+  );
+
+  // ── 1. UMA JORNADA DUPLA VALE ~O DOBRO ──────────────────────────────
+  const gw4 = proj.find((p) => p.event === 4)!;
+  const gw6 = proj.find((p) => p.event === 6)!;
+  check(
+    "numa jornada dupla o Bench Boost vale aproximadamente o dobro",
+    Math.abs(gw6.benchBoost - gw4.benchBoost * 2) < 0.2,
+    `GW4 ${gw4.benchBoost} → GW6 ${gw6.benchBoost}`
+  );
+  check(
+    "e a jornada dupla é assinalada como tal",
+    gw6.maxFixtures === 2 && gw4.maxFixtures === 1,
+    `GW4 ${gw4.maxFixtures} jogos, GW6 ${gw6.maxFixtures}`
+  );
+
+  // ── 2. UMA JORNADA EM BRANCO VALE ZERO ──────────────────────────────
+  // Este é o teste que mais importa: se uma branca não fosse detetada, o
+  // modelo recomendaria um Bench Boost numa semana em que metade do
+  // plantel não joga. É o pior erro possível com um chip.
+  const gw7 = proj.find((p) => p.event === 7)!;
+  check(
+    "numa jornada em branco o chip vale exatamente zero",
+    gw7.benchBoost === 0 && gw7.tripleCaptain === 0,
+    `BB ${gw7.benchBoost}, TC ${gw7.tripleCaptain}`
+  );
+  check(
+    "e o onze inteiro é contado como sem jogo",
+    gw7.blanking === 11,
+    `${gw7.blanking} sem jogo`
+  );
+
+  // ── 3. A MELHOR SEMANA FUTURA É NOMEADA, E NÃO É A ATUAL ────────────
+  const best = bestFutureEvent(proj, (p) => p.benchBoost);
+  check(
+    "a melhor jornada futura para o Bench Boost é a dupla",
+    best !== null && best.event === 6,
+    `GW${best?.event}`
+  );
+  check(
+    "e a jornada atual nunca é oferecida como 'melhor futura'",
+    best !== null && best.event !== 4,
+    `GW${best?.event}`
+  );
+  // O teste acima passava por sorte: a melhor semana do calendário já era
+  // futura. O caso que realmente exercita a exclusão é aquele em que a
+  // MELHOR semana é a de HOJE — aí, "a melhor semana futura" tem de
+  // devolver outra, pior. Sem isso, o modelo diria "espera pela GW4"
+  // estando na GW4, que é conselho circular.
+  const peakNow = new Map<number, ReturnType<typeof mkFx>[]>([
+    [
+      1,
+      [
+        mkFx(4, 1.5, 0.28),
+        mkFx(4, 1.5, 0.28), // a dupla é AGORA
+        mkFx(5, 1.5, 0.28),
+        mkFx(6, 1.5, 0.28),
+      ],
+    ],
+  ]);
+  const peakProj = projectChipsByEvent(xi, bench, peakNow as never, 4, 3);
+  const bestAfterPeak = bestFutureEvent(peakProj, (p) => p.benchBoost);
+  check(
+    "com o pico na jornada atual, a melhor futura é outra e pior",
+    bestAfterPeak !== null &&
+      bestAfterPeak.event !== 4 &&
+      bestAfterPeak.benchBoost < peakProj[0].benchBoost,
+    `agora GW4=${peakProj[0].benchBoost}, melhor futura GW${bestAfterPeak?.event}=${bestAfterPeak?.benchBoost}`
+  );
+
+  // ── 4. UM CALENDÁRIO MELHOR VALE MAIS, MAS DENTRO DO PLAUSÍVEL ──────
+  // Sem teto, um jogo com xGF muito alto multiplicaria o jogador sem
+  // limite e a projeção passaria a inventar semanas fantásticas.
+  const wild = new Map<number, ReturnType<typeof mkFx>[]>([
+    [1, [mkFx(4, 1.5, 0.28), mkFx(5, 9.0, 0.9)]],
+  ]);
+  const wildProj = projectChipsByEvent(xi, bench, wild as never, 4, 2);
+  const ratio = wildProj[1].tripleCaptain / wildProj[0].tripleCaptain;
+  check(
+    "um calendário absurdamente bom não multiplica um jogador sem limite",
+    ratio <= 1.81,
+    `razão ${ratio.toFixed(2)} (teto 1,8 por jogo)`
+  );
+
+  // ── 5. SEM DADOS DE CALENDÁRIO, NÃO SE INVENTA NADA ─────────────────
+  const empty = projectChipsByEvent(xi, bench, new Map(), 4, 3);
+  check(
+    "sem calendário nenhum, a projeção é zero em vez de um palpite",
+    empty.every((p) => p.benchBoost === 0 && p.tripleCaptain === 0),
+    empty.map((p) => p.benchBoost).join(",")
+  );
+}
+
+testChipsKnowWhichWeekIsBest();
 
 void testLossCanNoLongerLookLikeEmptiness()
   .then(() => testOneRefusalNoLongerKillsTheWholeApp())

@@ -3,6 +3,8 @@ import type { ScoredPlayer } from "./recommend";
 import type { ChipStatus } from "./squadstate";
 import { findScheduleAnomalies } from "./schedule";
 import { WINDOW_GAMEWEEKS } from "./transferplan";
+import type { EventProjection } from "./chipschedule";
+import { bestFutureEvent } from "./chipschedule";
 import {
   leaguePressureDiscount,
   pressureNote,
@@ -247,6 +249,11 @@ function unknownDoubleCredit(currentEvent: number): number {
 
 export interface ChipPlanInput {
   /**
+   * O valor projetado de cada chip em cada jornada do horizonte visível.
+   * OPCIONAL: ausente, o planeador comporta-se exatamente como antes.
+   */
+  projections?: EventProjection[];
+  /**
    * O que a liga já fez com cada chip. OPCIONAL, e ausente não altera
    * nada: sem estes dados o planeador comporta-se exatamente como antes.
    * Isso é deliberado — uma camada nova que muda resultados quando falha
@@ -269,6 +276,7 @@ function remaining(chips: ChipStatus[], name: string): number {
 export function planChips(input: ChipPlanInput): ChipAdvice[] {
   const { currentEvent, chips, xi, bench, captain, calendar } = input;
   const leagueChips = input.leagueChips ?? [];
+  const projections = input.projections ?? [];
   const out: ChipAdvice[] = [];
   const credit = unknownDoubleCredit(currentEvent);
   const nextKnownDouble = calendar.knownDoubleEvents.find((e) => e > currentEvent) ?? null;
@@ -295,6 +303,24 @@ export function planChips(input: ChipPlanInput): ChipAdvice[] {
     const s = leagueChips.find((x) => x.chip === chip);
     if (!s || s.of === 0) return { discount: 1, note: "" };
     return { discount: leaguePressureDiscount(s.share), note: pressureNote(s) };
+  };
+
+  /**
+   * A MELHOR SEMANA QUE SE VÊ, quando se vê alguma.
+   *
+   * O `futureMean` era um prior sobre "uma semana típica". Se a projeção
+   * do calendário mostra uma semana concreta melhor do que isso — uma
+   * jornada dupla, ou simplesmente um calendário favorável — então esperar
+   * vale pelo menos essa semana, e usar o prior em vez dela seria ignorar
+   * informação que a app já tem.
+   *
+   * É um PISO, nunca um substituto: se a projeção não vê nada de especial,
+   * o prior manda, porque não ver duplas no horizonte não é o mesmo que
+   * não haver duplas a caminho.
+   */
+  const projectedFloor = (pick: (p: EventProjection) => number) => {
+    const best = bestFutureEvent(projections, pick);
+    return best ? { value: pick(best), event: best.event } : null;
   };
 
   const optionFor = (valueNow: number, doubleValue: number, futureMean: number) =>
@@ -334,7 +360,15 @@ export function planChips(input: ChipPlanInput): ChipAdvice[] {
   {
     const valueNow =
       Math.round(bench.reduce((s, p) => s + p.expectedPointsNext, 0) * 10) / 10;
-    const opt = optionFor(valueNow, DGW_PRIOR.bboost, typicalWeek(bench, TYPICAL_BENCH_WEEK, MAX_PLAUSIBLE_BENCH_WEEK));
+    const bbFloor = projectedFloor((x) => x.benchBoost);
+    const opt = optionFor(
+      valueNow,
+      DGW_PRIOR.bboost,
+      Math.max(
+        typicalWeek(bench, TYPICAL_BENCH_WEEK, MAX_PLAUSIBLE_BENCH_WEEK),
+        bbFloor?.value ?? 0
+      )
+    );
     const pressure = pressureFor("bboost");
     const later = Math.round(opt.holdValue * pressure.discount * 10) / 10;
     const laterEvent = nextKnownDouble;
@@ -356,7 +390,7 @@ export function planChips(input: ChipPlanInput): ChipAdvice[] {
         ? "Já não tens Bench Boost disponível."
         : verdict === "jogar"
           ? `O teu banco vale ${valueNow.toFixed(1)} pts nesta jornada, contra ${later.toFixed(1)} de continuar à espera. ${clockNote()} Joga-o.`
-          : `O teu banco vale ${valueNow.toFixed(1)} pts nesta jornada, e esperar vale ${later.toFixed(1)} — numa jornada dupla o mesmo chip rende tipicamente ~${DGW_PRIOR.bboost} pts. Jogá-lo agora troca ${later.toFixed(1)} por ${valueNow.toFixed(1)}. ${clockNote()}${pressure.note ? ` ${pressure.note}` : ""}`,
+          : `O teu banco vale ${valueNow.toFixed(1)} pts nesta jornada, e esperar vale ${later.toFixed(1)} — numa jornada dupla o mesmo chip rende tipicamente ~${DGW_PRIOR.bboost} pts. Jogá-lo agora troca ${later.toFixed(1)} por ${valueNow.toFixed(1)}. ${clockNote()}${bbFloor && bbFloor.value > valueNow ? ` A melhor semana à vista é a GW${bbFloor.event}, onde o teu banco renderia ~${bbFloor.value.toFixed(1)} pts.` : ""}${pressure.note ? ` ${pressure.note}` : ""}`,
     });
   }
 
@@ -364,7 +398,15 @@ export function planChips(input: ChipPlanInput): ChipAdvice[] {
   // Worth one extra copy of the captain's score.
   {
     const valueNow = Math.round((captain?.expectedPointsNext ?? 0) * 10) / 10;
-    const opt = optionFor(valueNow, DGW_PRIOR["3xc"], typicalWeek(captain ? [captain] : [], TYPICAL_CAPTAIN_WEEK, MAX_PLAUSIBLE_CAPTAIN_WEEK));
+    const tcFloor = projectedFloor((x) => x.tripleCaptain);
+    const opt = optionFor(
+      valueNow,
+      DGW_PRIOR["3xc"],
+      Math.max(
+        typicalWeek(captain ? [captain] : [], TYPICAL_CAPTAIN_WEEK, MAX_PLAUSIBLE_CAPTAIN_WEEK),
+        tcFloor?.value ?? 0
+      )
+    );
     const pressure = pressureFor("3xc");
     const later = Math.round(opt.holdValue * pressure.discount * 10) / 10;
     const available = remaining(chips, "3xc") > 0;
@@ -385,7 +427,7 @@ export function planChips(input: ChipPlanInput): ChipAdvice[] {
         ? "Já não tens Triple Captain disponível."
         : verdict === "jogar"
           ? `${captain?.element.web_name ?? "O teu capitão"} vale ${valueNow.toFixed(1)} pts esperados nesta jornada, contra ${later.toFixed(1)} de continuar à espera. ${clockNote()} Joga-o.`
-          : `${captain?.element.web_name ?? "O teu capitão"} vale ${valueNow.toFixed(1)} pts esperados, e esperar por uma semana melhor vale ${later.toFixed(1)}. ${clockNote()}${pressure.note ? ` ${pressure.note}` : ""}`,
+          : `${captain?.element.web_name ?? "O teu capitão"} vale ${valueNow.toFixed(1)} pts esperados, e esperar por uma semana melhor vale ${later.toFixed(1)}.${tcFloor && tcFloor.value > valueNow ? ` A melhor semana à vista é a GW${tcFloor.event}, onde o melhor capitão renderia ~${tcFloor.value.toFixed(1)} pts.` : ""} ${clockNote()}${pressure.note ? ` ${pressure.note}` : ""}`,
     });
   }
 
