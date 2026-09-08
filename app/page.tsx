@@ -316,8 +316,33 @@ export default async function Home() {
     // eslint-disable-next-line react-hooks/purity
     ? Math.floor((Date.now() - new Date(lastResearchRun.at).getTime()) / 86_400_000)
     : null;
+  // ═══ v1.59 — O ALARME MEDIA A COISA ERRADA ═══
+  //
+  // Media há quantos dias a tarefa CORREU. A tarefa de sexta correu a 4 de
+  // setembro, foi marcada como bem-sucedida, e entregou ZERO notas. O
+  // alarme leu "correu há 4 dias" e calou-se, enquanto as notas mais
+  // recentes eram de 21 de agosto — três jornadas antes.
+  //
+  // Uma tarefa que corre todas as semanas e não entrega nada parece
+  // saudável para sempre. É a mesma falha que esta app já corrigiu duas
+  // vezes noutros sítios: perda indistinguível de vazio, desta vez um nível
+  // acima — não na submissão, mas na saúde da submissão.
+  //
+  // A medida certa é EM JORNADAS, e é sobre a ENTREGA: para que jornada foi
+  // escrita a nota mais recente? Se a resposta for três jornadas atrás, a
+  // camada está parada, tenha a tarefa corrido ontem ou não.
+  const newestNoteEvent = allInsights.reduce<number | null>((best, n) => {
+    const e = n.writtenForEvent;
+    return typeof e === "number" && (best === null || e > best) ? e : best;
+  }, null);
+  const researchGapEvents =
+    newestNoteEvent === null ? null : fromEvent - newestNoteEvent;
   const researchStale =
-    storageConfigured && (researchAgeDays === null || researchAgeDays > 9);
+    storageConfigured &&
+    (researchAgeDays === null ||
+      researchAgeDays > 9 ||
+      researchGapEvents === null ||
+      researchGapEvents >= 2);
 
   // Health of every unattended job, not just the research one. The backtest
   // and the calibration sweep now run on Vercel's own scheduler inside this
@@ -919,9 +944,13 @@ export default async function Home() {
               <AlertStrip
                 tone="danger"
                 title={
-                  lastResearchRun
-                    ? `Investigação tática parada há ${researchAgeDays} dias.`
-                    : "Investigação tática nunca correu."
+                  !lastResearchRun
+                    ? "Investigação tática nunca correu."
+                    : researchGapEvents === null
+                      ? `A investigação correu há ${researchAgeDays} dias mas NÃO HÁ nenhuma nota entregue.`
+                      : researchGapEvents >= 2
+                        ? `A investigação corre, mas não entrega: a nota mais recente foi escrita para a GW${newestNoteEvent} e estamos na GW${fromEvent}.`
+                        : `Investigação tática parada há ${researchAgeDays} dias.`
                 }
               >
                 {activeInsights.length > 0

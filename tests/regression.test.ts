@@ -407,11 +407,44 @@ function testSquadValidity() {
 // C-02 — efeito combinado das notas táticas travado em ±20%
 // ---------------------------------------------------------------------
 function testInsightClamp() {
-  const { bootstrap, fixtures } = makeBootstrap({ currentEvent: 6, gameweeks: 12 });
-  const target = bootstrap.elements.find((e) => e.element_type === 3)!;
+  // ═══ ESTE TESTE PASSOU ANOS SOBRE ZEROS ═══
+  //
+  // Usava `makeBootstrap()` com os jogadores de série, que têm zero minutos
+  // e zero estatísticas — e o modelo, corretamente, dá-lhes zero pontos
+  // esperados. As asserções são da forma `obtido >= base * 0,8 - 0,05`;
+  // com base zero são verdadeiras aconteça o que acontecer, incluindo com o
+  // limite de ±20% completamente removido.
+  //
+  // Foi descoberto por acidente, ao escrever o teste da cadeia das notas na
+  // v1.59: ao imprimir os valores para perceber outra falha, todos os
+  // jogadores da grelha vinham a 0,00. Um teste que abençoa em vez de
+  // verificar é pior do que nenhum, porque ocupa o lugar do que faltava.
+  const withStats = Array.from({ length: 6 }, (_, i) =>
+    makeElement({
+      id: 200 + i,
+      web_name: `B${i}`,
+      team: (i % 2) + 1,
+      element_type: i === 0 ? 1 : i < 3 ? 2 : i < 5 ? 3 : 4,
+      now_cost: 55 + i * 5,
+      minutes: 450, starts: 5, goals_scored: 3, assists: 2,
+      bonus: 6, bps: 150, total_points: 35,
+      points_per_game: "7.0", form: "6.0", ep_next: "6.5",
+      expected_goals: "2.8", expected_assists: "1.9",
+      selected_by_percent: "12.0",
+    })
+  );
+  const { bootstrap, fixtures } = makeBootstrap({
+    currentEvent: 6, gameweeks: 12, elements: withStats,
+  });
+  const target = withStats[3];
 
   const baseline = buildScoredPlayers(bootstrap, fixtures, 6, 5, null, []);
   const baseScore = baseline.find((p) => p.element.id === target.id)!.expectedPoints;
+  check(
+    "C-02 a grelha tem sinal — sem isto o limite não está a ser verificado",
+    baseScore > 1,
+    `base ${baseScore.toFixed(2)}`
+  );
 
   const three = [
     { scope: "player" as const, id: target.id, label: "x", factor: 0.8, reason: "a", addedDate: "2026-08-21", source: "t" },
@@ -7819,6 +7852,158 @@ function testNoNoteSurvivesByOmission() {
 }
 
 testNoNoteSurvivesByOmission();
+
+
+
+/**
+ * v1.59: A GARANTIA DE PONTA A PONTA — UMA NOTA VÁLIDA MEXE NO MODELO, UMA
+ * INVÁLIDA NÃO MEXE.
+ *
+ * Pedido do Pedro nestes termos: "garante que está a ter impacto no
+ * modelo". A verificação manual feita a 8 de setembro provou-o uma vez —
+ * uma nota real sobre o Rashford foi submetida, aceite, e apareceu no ecrã
+ * com "aplica-se à GW4". Mas uma observação única não é uma garantia: prova
+ * que funcionava naquele minuto.
+ *
+ * Este teste é a garantia. Percorre a cadeia inteira — triagem →
+ * `buildScoredPlayers` → `expectedPointsNext` — e exige as DUAS direções:
+ *
+ *   · uma nota válida TEM de mudar o número;
+ *   · uma nota expirada TEM de o deixar exatamente igual.
+ *
+ * Só a segunda metade impede o regresso do defeito original. Um teste que
+ * verificasse apenas "as notas funcionam" passaria na mesma no mundo em que
+ * TODAS as notas funcionam para sempre, que era precisamente o mundo
+ * anterior.
+ */
+function testInsightsReachTheModelOnlyWhenValid() {
+  // ═══ UMA GRELHA COM SINAL, PORQUE A DE SÉRIE NÃO TEM ═══
+  //
+  // `makeBootstrap()` sem argumentos produz jogadores com zero minutos e
+  // zero estatísticas, e o modelo — corretamente — dá-lhes zero pontos
+  // esperados. Um teste que multiplique zero por 0,9 mede exatamente nada.
+  //
+  // Isto não é uma dificuldade minha: DESCOBRI ASSIM QUE O TESTE C-02, que
+  // existe há muito para garantir que o efeito combinado das notas está
+  // travado em ±20%, sempre correu sobre zeros. As suas asserções são da
+  // forma `obtido >= base * 0,8 - 0,05`, e com base zero são verdadeiras
+  // aconteça o que acontecer. Estava a abençoar o limite, não a verificá-lo.
+  const EV = 6;
+  const withStats = Array.from({ length: 6 }, (_, i) =>
+    makeElement({
+      id: 100 + i,
+      web_name: `A${i}`,
+      team: (i % 2) + 1,
+      element_type: i === 0 ? 1 : i < 3 ? 2 : i < 5 ? 3 : 4,
+      now_cost: 55 + i * 5,
+      minutes: 450,
+      starts: 5,
+      goals_scored: 3,
+      assists: 2,
+      bonus: 6,
+      bps: 150,
+      total_points: 35,
+      points_per_game: "7.0",
+      form: "6.0",
+      ep_next: "6.5",
+      expected_goals: "2.8",
+      expected_assists: "1.9",
+      selected_by_percent: "12.0",
+    })
+  );
+  const { bootstrap, fixtures } = makeBootstrap({
+    currentEvent: EV,
+    gameweeks: 12,
+    elements: withStats,
+  });
+  const target = withStats[3];
+
+  const epOf = (notes: TimedInsight[]) => {
+    // A triagem é o portão: só o que passa vai ao modelo. É exatamente o
+    // que app/page.tsx faz, e reproduzi-lo aqui garante que o teste mede a
+    // cadeia real e não uma versão simplificada dela.
+    const { active } = triageInsights(notes, EV);
+    const scored = buildScoredPlayers(bootstrap, fixtures, EV, 5, null, active);
+    return scored.find((p) => p.element.id === target.id)!.expectedPoints;
+  };
+
+  const base = epOf([]);
+  check(
+    "a grelha deste teste tem mesmo sinal para medir",
+    base > 1,
+    `pontos esperados de base: ${base.toFixed(2)}`
+  );
+
+  const mk = (over: Partial<TimedInsight>): TimedInsight => ({
+    scope: "player",
+    id: target.id,
+    label: "Alvo",
+    factor: 0.9,
+    reason: "razão de teste",
+    addedDate: "2026-09-08",
+    source: "teste",
+    ...over,
+  });
+
+  // ── 1. UMA NOTA VÁLIDA MEXE MESMO NO NÚMERO ─────────────────────────
+  const valid = epOf([mk({ writtenForEvent: EV, kind: "noticia" })]);
+  check(
+    "uma nota escrita para esta jornada mexe mesmo nos pontos esperados",
+    valid < base - 0.01,
+    `${base.toFixed(2)} → ${valid.toFixed(2)}`
+  );
+
+  // ── 2. A DE PRÉ-ÉPOCA NÃO MEXE EM NADA ──────────────────────────────
+  // O caso real: escrita para a GW1, a ser lida na GW4.
+  const stale = epOf([mk({ writtenForEvent: 1, kind: "noticia" })]);
+  check(
+    "uma nota de pré-época deixa os pontos esperados INTACTOS",
+    Math.abs(stale - base) < 1e-9,
+    `${base.toFixed(4)} vs ${stale.toFixed(4)}`
+  );
+
+  // ── 3. E A QUE NÃO DECLARA NADA TAMBÉM NÃO ──────────────────────────
+  const undeclared = epOf([mk({})]);
+  check(
+    "uma nota sem prazo declarado deixa os pontos esperados INTACTOS",
+    Math.abs(undeclared - base) < 1e-9,
+    `${base.toFixed(4)} vs ${undeclared.toFixed(4)}`
+  );
+
+  // ── 4. A CONFIANÇA ESCALA O EFEITO ──────────────────────────────────
+  // Uma nota a 0,9 com metade da confiança tem de mexer menos do que a
+  // mesma nota com confiança total — senão o campo é decorativo.
+  const sure = epOf([
+    mk({ writtenForEvent: EV, kind: "noticia", confidence: 1 }),
+  ]);
+  const unsure = epOf([
+    mk({ writtenForEvent: EV, kind: "noticia", confidence: 0.5 }),
+  ]);
+  check(
+    "menos confiança mexe menos no modelo",
+    unsure > sure + 0.005 && unsure < base,
+    `certa ${sure.toFixed(2)} < incerta ${unsure.toFixed(2)} < base ${base.toFixed(2)}`
+  );
+
+  // ── 5. UM PAPEL SOBREVIVE ALGUMAS JORNADAS, UMA NOTÍCIA NÃO ─────────
+  // Sem esta distinção, a investigação de quinta — que encontra padrões e
+  // funções — passaria a produzir notas que morrem em sete dias, e a
+  // correção da v1.58 teria partido a camada de outra maneira.
+  const roleNote = mk({ writtenForEvent: EV - 2, kind: "papel" });
+  const newsNote = mk({ writtenForEvent: EV - 2, kind: "noticia" });
+  check(
+    "um padrão escrito duas jornadas antes continua a mexer no modelo",
+    epOf([roleNote]) < base - 0.01,
+    `${base.toFixed(2)} → ${epOf([roleNote]).toFixed(2)}`
+  );
+  check(
+    "mas uma notícia escrita duas jornadas antes já não mexe em nada",
+    Math.abs(epOf([newsNote]) - base) < 1e-9,
+    `${base.toFixed(4)} vs ${epOf([newsNote]).toFixed(4)}`
+  );
+}
+
+testInsightsReachTheModelOnlyWhenValid();
 
 void testLossCanNoLongerLookLikeEmptiness()
   .then(() => testOneRefusalNoLongerKillsTheWholeApp())
