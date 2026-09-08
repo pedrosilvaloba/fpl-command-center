@@ -294,10 +294,30 @@ export async function processInsightSubmission(
       source: r?.source as string,
       ...(Array.isArray(r?.events) ? { events: r.events as number[] } : {}),
       ...(typeof r?.confidence === "number" ? { confidence: r.confidence } : {}),
+      // Sem `kind` declarado, a nota é tratada como notícia de equipa — o
+      // tempo de vida mais curto. Em caso de dúvida, uma nota deve morrer
+      // cedo de mais e não tarde de mais.
+      ...(r?.kind === "papel" || r?.kind === "duradoura"
+        ? { kind: r.kind as "papel" | "duradoura" }
+        : {}),
     });
   }
 
-  const result = await saveDynamicInsights(resolved, () => true);
+  // A JORNADA PARA A QUAL ESTAS NOTAS FORAM ESCRITAS.
+  //
+  // Vem do próprio bootstrap, no momento da submissão — não de um
+  // parâmetro que quem submete pudesse esquecer ou enganar-se. A
+  // investigação semanal corre à quinta/sexta e é sobre a jornada que vem
+  // a seguir, que é o que `is_next` diz.
+  //
+  // Sem isto, cada nota nascia sem prazo e vivia para sempre. Foi assim que
+  // notas de pré-época continuavam a mexer no modelo três semanas depois.
+  const targetEvent =
+    bootstrap.events.find((e) => e.is_next)?.id ??
+    bootstrap.events.find((e) => e.is_current)?.id ??
+    1;
+
+  const result = await saveDynamicInsights(resolved, () => true, targetEvent);
   if (!result.ok) {
     return {
       status: 502,

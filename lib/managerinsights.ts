@@ -1,5 +1,6 @@
 import { getRedis } from "./kv";
 import type { FplBootstrap } from "./types";
+import type { InsightKind, TimedInsight } from "./insightlife";
 
 /**
  * QUALITATIVE, tactical/managerial adjustments — the kind of insight that
@@ -125,6 +126,16 @@ export interface StaticInsightSeed {
   reason: string;
   addedDate: string;
   source: string;
+  /**
+   * OBRIGATÓRIOS DESDE v1.58. A jornada para que a nota foi escrita e o
+   * tipo de afirmação que faz. Sem eles, `insightStatus` trata a nota como
+   * "sem prazo" e o modelo não a aplica — o que é o comportamento certo,
+   * mas seria uma armadilha silenciosa se o tipo os deixasse omitir. São
+   * obrigatórios para que o erro apareça na compilação, não em produção.
+   */
+  writtenForEvent: number;
+  kind: InsightKind;
+  lifespanEvents?: number;
 }
 
 /**
@@ -161,97 +172,53 @@ export interface StaticInsightSeed {
  * Every entry below is dated and sourced. Prune anything stale — a
  * substitution habit or a set-piece hierarchy is not a permanent fact.
  */
-export const MANAGER_INSIGHT_SEEDS: StaticInsightSeed[] = [
-  // --- 1. Formation and role: wing-backs in a back three -----------------
-  {
-    scope: "player", playerName: "Neco Williams", teamShortName: "NFO",
-    label: "Neco Williams (NFO)", factor: 1.12,
-    reason: "ala no 3-4-3 que Glasner instalou na pré-época — pontua como defesa mas produz como médio",
-    addedDate: "2026-08-21",
-    source: "Premier League — lições de pré-época de cada clube (2026-08)",
-  },
-  {
-    scope: "player", playerName: "Aina", teamShortName: "NFO",
-    label: "Ola Aina (NFO)", factor: 1.10,
-    reason: "ala direito no 3-4-3 de Glasner, com liberdade ofensiva que a posição de defesa na FPL não reflete",
-    addedDate: "2026-08-21",
-    source: "Premier League — lições de pré-época de cada clube (2026-08)",
-  },
-  {
-    scope: "player", playerName: "Muñoz", teamShortName: "CRY",
-    label: "Daniel Muñoz (CRY)", factor: 1.10,
-    reason: "Sage adotou linha de três na pré-época; ala com participação ofensiva regular",
-    addedDate: "2026-08-21",
-    source: "Premier League — lições de pré-época de cada clube (2026-08)",
-  },
-  {
-    scope: "player", playerName: "Mitchell", teamShortName: "CRY",
-    label: "Tyrick Mitchell (CRY)", factor: 1.08,
-    reason: "ala esquerdo na linha de três do Palace, mesma lógica de produção acima do esperado para um defesa",
-    addedDate: "2026-08-21",
-    source: "Premier League — lições de pré-época de cada clube (2026-08)",
-  },
-
-  // --- 2. Minutes risk the data cannot yet show --------------------------
-  {
-    scope: "player", playerName: "Solanke", teamShortName: "TOT",
-    label: "Solanke (TOT)", factor: 0.88,
-    reason: "apenas 45min desde 1 de agosto após regresso tardio do Mundial — risco de minutos que os dados a zero da pré-época não conseguem mostrar",
-    addedDate: "2026-08-21",
-    source: "Fantasy Football Scout — team news GW1 (2026-08-17)",
-  },
-  {
-    scope: "player", playerName: "Watkins", teamShortName: "AVL",
-    label: "Watkins (AVL)", factor: 0.92,
-    reason: "zero minutos de pré-época após o Mundial e despromovido a segunda opção de penáltis",
-    addedDate: "2026-08-21",
-    source: "Premier League — lições de pré-época; Squawka — executores de bolas paradas (2026-08)",
-  },
-
-  // --- 3. Set-piece duty FPL may not have published yet ------------------
-  // Smaller than the research proposed, because `penalties_order` partially
-  // covers this already — see the note above.
-  {
-    scope: "player", playerName: "Buendia", teamShortName: "AVL",
-    label: "Buendía (AVL)", factor: 1.10,
-    reason: "assume os penáltis do Villa com a saída de Tielemans; melhor jogador da equipa na pré-época",
-    addedDate: "2026-08-21",
-    source: "Squawka e Premier League — executores de bolas paradas 2026/27",
-  },
-  {
-    scope: "player", playerName: "Gross", teamShortName: "BHA",
-    label: "Pascal Gross (BHA)", factor: 1.08,
-    reason: "recuperou os penáltis do Brighton e converteu na pré-época",
-    addedDate: "2026-08-21",
-    source: "Premier League — Scout Selection 2026/27",
-  },
-  {
-    scope: "player", playerName: "Ndiaye", teamShortName: "EVE",
-    label: "Ndiaye (EVE)", factor: 1.08,
-    reason: "confirmado como executor único de penáltis do Everton; converteu dois na pré-época",
-    addedDate: "2026-08-21",
-    source: "Premier League — lições de pré-época; Squawka (2026-08)",
-  },
-  {
-    scope: "player", playerName: "Tavernier", teamShortName: "BOU",
-    label: "Tavernier (BOU)", factor: 1.08,
-    reason: "assume penáltis, livres e cantos com Kroupi operado ao pé",
-    addedDate: "2026-08-21",
-    source: "Premier League — lições de pré-época de cada clube (2026-08)",
-  },
-  {
-    scope: "player", playerName: "Gibbs-White", teamShortName: "NFO",
-    label: "Gibbs-White (NFO)", factor: 1.08,
-    reason: "passa a primeiro executor de penáltis do Forest, à frente de Chris Wood",
-    addedDate: "2026-08-21",
-    source: "Squawka e allaboutfpl — executores de bolas paradas 2026/27",
-  },
-];
+/**
+ * ═══ v1.58 — ESTA LISTA FOI ESVAZIADA, E A RAZÃO IMPORTA ═══
+ *
+ * Tinha 22 entradas, todas datadas de 2026-08-21 — investigação de
+ * pré-época. Nove resolviam-se para jogadores reais e continuavam a
+ * multiplicar os pontos esperados na GW4, dezoito dias depois, porque a
+ * camada estática foi desenhada para nunca expirar.
+ *
+ * Duas delas eram literalmente sobre a AUSÊNCIA de dados:
+ *
+ *     Solanke  0,88  "risco de minutos que os dados a zero da pré-época
+ *                     não conseguem mostrar"
+ *     Watkins  0,92  "zero minutos de pré-época após o Mundial"
+ *
+ * A 21 de agosto isso era informação real e valiosa: o modelo não tinha
+ * nada e a nota tinha. A 8 de setembro há três jornadas de minutos reais, o
+ * modelo mede-os diretamente, e a nota passou a descontar uma segunda vez um
+ * risco já contado — a partir de uma falta de dados que deixou de existir.
+ * Uma nota destas não envelhece mal por acaso: ela existe PORQUE os dados
+ * ainda não existiam, e morre no dia em que eles chegam.
+ *
+ * As restantes (papéis, bolas paradas) podiam ter sobrevivido. Não
+ * sobrevivem porque nenhuma foi reconfirmada desde então, e manter uma
+ * afirmação sobre o mundo sem a reconfirmar é exatamente o hábito que
+ * produziu este problema.
+ *
+ * O QUE SUBSTITUI ISTO: nada, de propósito. A camada dinâmica — a
+ * investigação semanal, com prazo — é onde este tipo de conhecimento
+ * pertence. Uma nota escrita à mão no código-fonte não tem quem a apague.
+ *
+ * Se voltarem a entrar sementes aqui, TÊM de trazer `writtenForEvent` e
+ * `kind`. Sem esses campos, `lib/insightlife.ts` recusa-as — não por
+ * política, por construção.
+ */
+export const MANAGER_INSIGHT_SEEDS: StaticInsightSeed[] = [];
 
 /** Resolved at read time against the live bootstrap — see StaticInsightSeed. */
-export function resolveStaticInsights(bootstrap: FplBootstrap): ManagerInsight[] {
-  const out: ManagerInsight[] = [];
-  for (const seed of MANAGER_INSIGHT_SEEDS) {
+export function resolveStaticInsights(
+  bootstrap: FplBootstrap,
+  /** As sementes a resolver. Parametrizado para que os testes exercitem o
+   * MECANISMO sem depender do conteúdo enviado — um teste que dependia da
+   * lista real quebrou no dia em que ela foi esvaziada, e, pior, enquanto
+   * passava estava a abençoar o que lá estivesse. */
+  seeds: StaticInsightSeed[] = MANAGER_INSIGHT_SEEDS
+): TimedInsight[] {
+  const out: TimedInsight[] = [];
+  for (const seed of seeds) {
     const resolution = resolveInsightTarget(bootstrap, seed.scope, {
       playerName: seed.playerName,
       teamShortName: seed.teamShortName,
@@ -269,6 +236,13 @@ export function resolveStaticInsights(bootstrap: FplBootstrap): ManagerInsight[]
       reason: seed.reason,
       addedDate: seed.addedDate,
       source: seed.source,
+      // O tempo de vida viaja COM a nota. Sem isto, uma semente resolvida
+      // chegaria ao modelo sem prazo — e "sem prazo" passa a significar
+      // "não se aplica", o que seria certo mas confuso: o autor da semente
+      // declarou-o, e a declaração tem de sobreviver à resolução.
+      writtenForEvent: seed.writtenForEvent,
+      kind: seed.kind,
+      lifespanEvents: seed.lifespanEvents,
     });
   }
   return out;
@@ -323,7 +297,7 @@ const RESEARCH_RUN_KEY = "fpl-command-center:insights:lastrun";
 const DYNAMIC_INDEX_KEY = "fpl-command-center:insights:dynamic:index";
 const DYNAMIC_ENTRY_KEY = (key: string) => `fpl-command-center:insights:dynamic:entry:${key}`;
 
-export interface DynamicInsight extends ManagerInsight {
+export interface DynamicInsight extends TimedInsight {
   key: string; // unique storage key, needed to delete/prune a specific entry
 }
 
@@ -341,11 +315,17 @@ export async function loadDynamicInsights(): Promise<DynamicInsight[]> {
     if (keys.length === 0) return [];
     const nowMs = Date.now();
     const entries = await Promise.all(keys.map((k) => redis.get<DynamicInsight>(DYNAMIC_ENTRY_KEY(k))));
-    return entries.filter((e): e is DynamicInsight => {
-      if (!e) return false;
-      if (!e.expiresAt) return true;
-      return new Date(e.expiresAt).getTime() > nowMs;
-    });
+    // NÃO se filtra aqui por prazo. Toda a decisão sobre validade passou
+    // para `lib/insightlife.ts`, e passou por uma razão: enquanto houve
+    // duas respostas à mesma pergunta — o prazo em dias aqui, o "nunca
+    // expira" na camada estática — foi sempre a outra que ficou por
+    // corrigir. Esta função devolve o que existe; quem decide o que se
+    // aplica é `triageInsights`, e é só ele.
+    //
+    // O `nowMs` deixa de ser usado aqui de propósito: se voltar a aparecer
+    // uma segunda regra de validade neste ficheiro, o problema volta.
+    void nowMs;
+    return entries.filter((e): e is DynamicInsight => Boolean(e));
   } catch {
     return [];
   }
@@ -354,7 +334,7 @@ export async function loadDynamicInsights(): Promise<DynamicInsight[]> {
 /** Static + dynamic, merged — this is what lib/recommend.ts should be given. */
 export async function loadActiveInsights(
   bootstrap?: FplBootstrap
-): Promise<ManagerInsight[]> {
+): Promise<TimedInsight[]> {
   const dynamic = await loadDynamicInsights();
   const staticResolved = bootstrap ? resolveStaticInsights(bootstrap) : MANAGER_INSIGHTS;
   return [...staticResolved, ...dynamic];
@@ -383,6 +363,15 @@ export interface NewInsightInput {
   events?: number[];
   /** 0.4 to 1. Omit to mean "fully confident". */
   confidence?: number;
+  /**
+   * Que tipo de afirmação é: notícia de equipa (vale uma jornada), papel
+   * (vale algumas), ou traço duradouro. Omitido significa NOTÍCIA — o
+   * valor mais curto, porque em caso de dúvida uma nota deve morrer cedo
+   * de mais e não tarde de mais.
+   */
+  kind?: InsightKind;
+  /** Sobrepõe o tempo de vida por omissão, em jornadas. */
+  lifespanEvents?: number;
 }
 
 export interface RejectedInsight {
@@ -620,7 +609,15 @@ export function validateInsightInput(
  */
 export async function saveDynamicInsights(
   inputs: NewInsightInput[],
-  isValidId: (scope: "player" | "team", id: number) => boolean
+  isValidId: (scope: "player" | "team", id: number) => boolean,
+  /**
+   * A jornada para a qual estas notas foram escritas. OBRIGATÓRIA desde a
+   * v1.58: sem ela a nota nasce sem prazo, e `insightStatus` recusa-a. É um
+   * argumento e não um valor por omissão precisamente para que quem chama
+   * tenha de o saber — um valor por omissão aqui seria a porta por onde o
+   * problema voltava.
+   */
+  writtenForEvent: number
 ): Promise<{
   ok: boolean;
   accepted: DynamicInsight[];
@@ -664,6 +661,14 @@ export async function saveDynamicInsights(
         addedDate: now.toISOString().slice(0, 10),
         source: input.source,
         expiresAt,
+        // O tempo de vida em jornadas, gravado no momento da escrita. O
+        // prazo em dias continua lá como corte adicional, mas quem decide
+        // é a jornada — ver lib/insightlife.ts.
+        writtenForEvent,
+        kind: input.kind ?? "noticia",
+        ...(typeof input.lifespanEvents === "number"
+          ? { lifespanEvents: input.lifespanEvents }
+          : {}),
         ...(input.events && input.events.length > 0 ? { events: input.events } : {}),
         ...(typeof input.confidence === "number" ? { confidence: input.confidence } : {}),
       };

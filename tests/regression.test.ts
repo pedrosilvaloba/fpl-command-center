@@ -13,6 +13,13 @@
 
 import { computeDynamicTeamFactors } from "../lib/teamrating";
 import {
+  insightStatus,
+  triageInsights,
+  DEFAULT_NEWS_LIFESPAN_EVENTS,
+  DEFAULT_ROLE_LIFESPAN_EVENTS,
+  type TimedInsight,
+} from "../lib/insightlife";
+import {
   projectChipsByEvent,
   bestFutureEvent,
 } from "../lib/chipschedule";
@@ -936,39 +943,78 @@ function testPreseasonSetPieces() {
 // Notas curadas à mão — identificadas por nome, resolvidas contra a FPL
 // ---------------------------------------------------------------------
 function testStaticInsightSeeds() {
-  check("existem notas curadas", MANAGER_INSIGHT_SEEDS.length > 0);
+  // ═══ v1.58 — ESTA LISTA TEM DE ESTAR VAZIA ═══
+  //
+  // Tinha 22 entradas de pré-época que continuavam a mexer no modelo
+  // dezoito dias depois, porque a camada estática foi desenhada para nunca
+  // expirar. O Pedro pediu a correção várias vezes e ela nunca chegou aqui:
+  // os arranjos foram sempre na camada dinâmica, que já funcionava.
+  //
+  // Conhecimento sobre o mundo pertence à camada com prazo. Uma nota
+  // escrita à mão no código-fonte não tem quem a apague.
+  check(
+    "não há notas de pré-época hard-coded a mexer no modelo",
+    MANAGER_INSIGHT_SEEDS.length === 0,
+    `${MANAGER_INSIGHT_SEEDS.length} sementes`
+  );
 
+  // Se alguma vez voltarem a existir, TÊM de declarar o tempo de vida. O
+  // tipo já o exige em compilação; isto apanha-o também em execução, porque
+  // um `as` mal colocado contorna o tipo e não contorna isto.
   for (const seed of MANAGER_INSIGHT_SEEDS) {
+    check(
+      `"${seed.label}" declara para que jornada foi escrita`,
+      typeof seed.writtenForEvent === "number" && seed.writtenForEvent >= 1,
+      `${seed.writtenForEvent}`
+    );
+    check(
+      `"${seed.label}" declara o tipo de afirmação`,
+      seed.kind === "noticia" || seed.kind === "papel" || seed.kind === "duradoura",
+      `${seed.kind}`
+    );
     check(
       `fator de "${seed.label}" está dentro de ±20%`,
       seed.factor >= 0.8 && seed.factor <= 1.2,
       `fator ${seed.factor}`
     );
-    check(`"${seed.label}" tem fonte`, seed.source.length > 10);
-    check(`"${seed.label}" tem data`, /^\d{4}-\d{2}-\d{2}$/.test(seed.addedDate));
-    check(
-      `"${seed.label}" identifica o alvo por nome, não por id`,
-      Boolean(seed.playerName || seed.teamShortName || seed.teamName)
-    );
   }
 
-  // Uma nota cujo jogador não existe nos dados da FPL tem de ser DESCARTADA,
-  // nunca aplicada a outro jogador.
+  // O MECANISMO continua a ser testado, com sementes locais em vez da lista
+  // enviada. Um teste que depende do conteúdo enviado quebra quando ele
+  // muda — e enquanto passa, está a abençoá-lo em vez de o verificar.
+  const fixture: typeof MANAGER_INSIGHT_SEEDS = [
+    {
+      scope: "player", playerName: "Neco Williams", teamShortName: "NFO",
+      label: "Neco Williams (NFO)", factor: 1.12,
+      reason: "teste", addedDate: "2026-09-08", source: "fixture de teste",
+      writtenForEvent: 4, kind: "papel",
+    },
+    {
+      scope: "player", playerName: "Jogador Que Não Existe", teamShortName: "NFO",
+      label: "Fantasma (NFO)", factor: 1.1,
+      reason: "teste", addedDate: "2026-09-08", source: "fixture de teste",
+      writtenForEvent: 4, kind: "papel",
+    },
+  ];
   const { bootstrap } = makeBootstrap({ teamCount: 2 });
   bootstrap.teams = [makeTeam(1, "NFO"), makeTeam(2, "CRY")];
   bootstrap.elements = [
     makeElement({ id: 500, web_name: "Neco Williams", first_name: "Neco", second_name: "Williams", team: 1 }),
   ];
-  const resolved = resolveStaticInsights(bootstrap);
+  const resolved = resolveStaticInsights(bootstrap, fixture);
   check(
     "só resolve as notas cujo jogador existe mesmo",
     resolved.length === 1 && resolved[0].id === 500,
-    `resolvidas ${resolved.length}`
+    `resolvidas ${resolved.length} de ${fixture.length}`
   );
   check("a nota resolvida mantém o fator da seed", resolved[0].factor > 1);
+  check(
+    "e o tempo de vida viaja com ela na resolução",
+    resolved[0].writtenForEvent === 4 && resolved[0].kind === "papel",
+    `GW${resolved[0].writtenForEvent}, ${resolved[0].kind}`
+  );
 
-  // Sem qualquer jogador correspondente, nada é aplicado.
-  const empty = resolveStaticInsights({ ...bootstrap, elements: [] });
+  const empty = resolveStaticInsights({ ...bootstrap, elements: [] }, fixture);
   check("sem correspondências, nenhuma nota é aplicada", empty.length === 0);
 }
 
@@ -7596,6 +7642,183 @@ function testChipsKnowWhichWeekIsBest() {
 }
 
 testChipsKnowWhichWeekIsBest();
+
+
+
+/**
+ * DEFEITO v1.57: NOTAS DE ANTES DA GW1 CONTINUAVAM A MEXER NO MODELO NA GW4.
+ *
+ * O Pedro pediu a correção várias vezes. Nunca chegou, e a razão é
+ * estrutural: as notas que ele via não estavam no armazenamento, estavam
+ * ESCRITAS NO CÓDIGO (`MANAGER_INSIGHT_SEEDS`, 22 entradas, todas de
+ * 2026-08-21). A camada estática foi desenhada para nunca expirar:
+ *
+ *     "static, hand-curated entries have no expiry
+ *      (a human already committed to them)"
+ *
+ * Cada correção anterior mexeu na camada dinâmica — que tem prazo de 14
+ * dias e sempre funcionou. As culpadas nunca estiveram lá.
+ *
+ * Duas das notas ativas eram literalmente sobre a AUSÊNCIA de dados:
+ * "risco de minutos que os dados a zero da pré-época não conseguem
+ * mostrar" (Solanke, 0,88) e "zero minutos de pré-época" (Watkins, 0,92).
+ * Existiam PORQUE não havia dados. Com três jornadas jogadas, o modelo mede
+ * os minutos diretamente e a nota passou a descontar o mesmo risco duas
+ * vezes.
+ *
+ * ═══ A REGRA QUE SUBSTITUI TUDO ═══
+ *
+ * NENHUMA NOTA SOBREVIVE POR OMISSÃO. Um campo em falta significava "para
+ * sempre"; passa a significar "não se aplica". Os testes 1 e 2 são essa
+ * inversão, e são a razão de este bloco existir.
+ */
+function testNoNoteSurvivesByOmission() {
+  const base = {
+    scope: "player" as const,
+    id: 1,
+    label: "Teste",
+    factor: 1.1,
+    reason: "r",
+    addedDate: "2026-08-21",
+    source: "s",
+  };
+
+  // ── 1. A INVERSÃO ───────────────────────────────────────────────────
+  // Uma nota sem jornada declarada NÃO se aplica. Este é o teste que, se
+  // tivesse existido, teria apanhado o problema no dia em que apareceu.
+  const noDeadline: TimedInsight = { ...base };
+  const st = insightStatus(noDeadline, 4);
+  check(
+    "uma nota sem prazo declarado NÃO se aplica",
+    st.applies === false && st.state === "sem-prazo",
+    `${st.state}: ${st.detail.slice(0, 50)}`
+  );
+  check(
+    "e o motivo é dito, não escondido",
+    st.detail.length > 20,
+    st.detail.slice(0, 60)
+  );
+
+  // ── 2. O CASO REAL, RECONSTRUÍDO ────────────────────────────────────
+  // A nota do Solanke, tal como estava: escrita para a GW1, notícia de
+  // equipa. Na GW4 não pode aplicar-se.
+  const solanke: TimedInsight = {
+    ...base,
+    label: "Solanke (TOT)",
+    factor: 0.88,
+    writtenForEvent: 1,
+    kind: "noticia",
+  };
+  const solankeNow = insightStatus(solanke, 4);
+  check(
+    "a nota de pré-época do Solanke não se aplica na GW4",
+    solankeNow.applies === false && solankeNow.state === "expirada",
+    `${solankeNow.state}: ${solankeNow.detail}`
+  );
+  check(
+    "e na jornada para que foi escrita, aplicava-se",
+    insightStatus(solanke, 1).applies === true,
+    "GW1 ativa"
+  );
+
+  // ── 3. UMA NOTÍCIA VALE UMA JORNADA; UM PAPEL VALE MAIS ─────────────
+  // Um papel muda mais devagar do que uma lesão, mas MUDA. Nenhum dos dois
+  // é eterno, e é a distinção entre eles que evita ter de escolher entre
+  // "apaga tudo todas as semanas" e "nunca apaga nada".
+  const news: TimedInsight = { ...base, writtenForEvent: 4, kind: "noticia" };
+  const role: TimedInsight = { ...base, writtenForEvent: 4, kind: "papel" };
+  check(
+    "uma notícia de equipa vale só a jornada dela",
+    insightStatus(news, 4).applies === true &&
+      insightStatus(news, 4 + DEFAULT_NEWS_LIFESPAN_EVENTS).applies === false,
+    `vive ${DEFAULT_NEWS_LIFESPAN_EVENTS} jornada(s)`
+  );
+  check(
+    "um papel dura mais, mas também acaba",
+    insightStatus(role, 4 + DEFAULT_ROLE_LIFESPAN_EVENTS - 1).applies === true &&
+      insightStatus(role, 4 + DEFAULT_ROLE_LIFESPAN_EVENTS).applies === false,
+    `vive ${DEFAULT_ROLE_LIFESPAN_EVENTS} jornadas`
+  );
+
+  // ── 4. "DURADOURA" TEM DE SER DECLARADA, NUNCA ASSUMIDA ─────────────
+  const durable: TimedInsight = {
+    ...base,
+    writtenForEvent: 1,
+    kind: "duradoura",
+  };
+  check(
+    "um traço declarado como duradouro sobrevive",
+    insightStatus(durable, 30).applies === true,
+    "GW30 ainda ativa"
+  );
+  check(
+    "mas a mesma nota sem essa declaração NÃO sobrevive",
+    insightStatus({ ...durable, kind: undefined }, 30).applies === false,
+    "sem kind → não se aplica"
+  );
+
+  // ── 5. UMA NOTA PARA O FUTURO AINDA NÃO SE APLICA ───────────────────
+  // "Suspenso na GW22" é informação real e aplicá-la já seria tão errado
+  // como aplicá-la tarde.
+  const future: TimedInsight = { ...base, writtenForEvent: 10, kind: "noticia" };
+  check(
+    "uma nota escrita para uma jornada futura ainda não se aplica",
+    insightStatus(future, 4).applies === false &&
+      insightStatus(future, 4).state === "fora-de-jornada",
+    insightStatus(future, 4).detail
+  );
+
+  // ── 6. AS JORNADAS NOMEADAS MANDAM SOBRE QUALQUER PRAZO ─────────────
+  const named: TimedInsight = {
+    ...base,
+    writtenForEvent: 4,
+    kind: "papel",
+    events: [7, 8],
+  };
+  check(
+    "quando a nota nomeia jornadas, só se aplica nessas",
+    insightStatus(named, 4).applies === false &&
+      insightStatus(named, 7).applies === true &&
+      insightStatus(named, 9).applies === false,
+    "GW4 não, GW7 sim, GW9 não"
+  );
+
+  // ── 7. O PRAZO EM DIAS CONTINUA A CORTAR ────────────────────────────
+  const stale: TimedInsight = {
+    ...base,
+    writtenForEvent: 4,
+    kind: "duradoura",
+    expiresAt: "2026-01-01T00:00:00.000Z",
+  };
+  check(
+    "uma nota fora de prazo não se aplica, mesmo declarada duradoura",
+    insightStatus(stale, 4, new Date("2026-09-08")).applies === false,
+    insightStatus(stale, 4, new Date("2026-09-08")).state
+  );
+
+  // ── 8. A TRIAGEM SEPARA, NÃO APAGA ──────────────────────────────────
+  // Uma nota que desaparece em silêncio é indistinguível de uma nota que
+  // nunca existiu — foi assim que este problema durou três semanas sem
+  // ninguém lhe conseguir apontar o dedo.
+  const t = triageInsights([news, solanke, noDeadline, durable], 4);
+  check(
+    "a triagem separa as ativas das inativas sem perder nenhuma",
+    t.active.length + t.inactive.length === 4,
+    `${t.active.length} ativas, ${t.inactive.length} inativas`
+  );
+  check(
+    "só as válidas ficam ativas",
+    t.active.length === 2 && t.active.every((n) => n.factor !== 0.88),
+    `${t.active.map((n) => n.label).join(", ")}`
+  );
+  check(
+    "e cada inativa traz o motivo por escrito",
+    t.inactive.every((x) => x.status.detail.length > 15),
+    t.inactive.map((x) => x.status.state).join(", ")
+  );
+}
+
+testNoNoteSurvivesByOmission();
 
 void testLossCanNoLongerLookLikeEmptiness()
   .then(() => testOneRefusalNoLongerKillsTheWholeApp())

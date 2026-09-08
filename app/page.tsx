@@ -26,6 +26,7 @@ import {
   getAccuracyHistory,
 } from "@/lib/accuracy";
 import { loadActiveInsights, getLastResearchRun } from "@/lib/managerinsights";
+import { triageInsights, insightStatus } from "@/lib/insightlife";
 import { isStorageConfigured } from "@/lib/kv";
 import { computeSquadRisk } from "@/lib/correlation";
 import { computeSquadRankProfile } from "@/lib/rankvalue";
@@ -298,7 +299,7 @@ export default async function Home() {
     getOddsStatus(),
   ]);
 
-  const activeInsights = await loadActiveInsights(bootstrap);
+  const allInsights = await loadActiveInsights(bootstrap);
 
   const nextEvent =
     bootstrap.events.find((e) => e.is_next) ??
@@ -388,6 +389,21 @@ export default async function Home() {
   // calibration were measured against already-calibrated predictions it
   // would be measuring its own correction, converge on "no bias", and
   // quietly undo itself. `scored` is what the recommendations act on.
+  // ═══ TRIAGEM ANTES DO MODELO, NÃO DEPOIS ═══
+  //
+  // `fromEvent` só existe acima, e é por isso que a triagem acontece aqui e
+  // não dentro de `loadActiveInsights`: decidir se uma nota ainda vale exige
+  // saber que jornada se está a planear, e a função que lê o armazenamento
+  // não sabe isso.
+  //
+  // O que passa para `buildScoredPlayers` é SÓ `triaged.active`. As
+  // inativas continuam a ser carregadas e mostradas — com o motivo — porque
+  // uma nota que desaparece em silêncio é indistinguível de uma nota que
+  // nunca existiu, e foi assim que este problema durou três semanas sem
+  // ninguém conseguir apontar-lhe o dedo.
+  const triaged = triageInsights(allInsights, fromEvent);
+  const activeInsights = triaged.active;
+
   const rawScored = buildScoredPlayers(
     bootstrap,
     fixtures,
@@ -1067,6 +1083,55 @@ export default async function Home() {
                     ))}
                   </tbody>
                 </table>
+                {triaged.inactive.length > 0 && (
+                  <div className="mt-5 border-t border-border pt-4">
+                    {/* ═══ AS INATIVAS APARECEM. ═══
+                        Uma nota que desaparece em silêncio é
+                        indistinguível de uma nota que nunca existiu — e foi
+                        exatamente por isso que este problema durou três
+                        semanas sem ninguém lhe conseguir apontar o dedo.
+                        Ver o que foi descartado, e porquê, é a única forma
+                        de saber que o mecanismo está a funcionar. */}
+                    <p className="eyebrow mb-2 text-text-muted">
+                      Descartadas nesta jornada — {triaged.inactive.length}
+                    </p>
+                    <div className="scroll-x">
+                      <table className="w-full border-collapse text-[12px]">
+                        <tbody>
+                          {triaged.inactive.map((x, i) => (
+                            <tr
+                              key={`off-${x.note.scope}-${x.note.id}-${i}`}
+                              className="border-t border-border/50 text-text-muted opacity-70"
+                            >
+                              <td className="py-1.5 pr-3">{x.note.label}</td>
+                              <td className="py-1.5 pr-3 text-right font-mono tabular">
+                                {x.note.factor >= 1 ? "+" : ""}
+                                {Math.round((x.note.factor - 1) * 100)}%
+                              </td>
+                              <td className="py-1.5 pr-3">
+                                <span className="rounded border border-current px-1.5 py-0.5 text-[10px] uppercase">
+                                  {x.status.state}
+                                </span>
+                              </td>
+                              <td className="py-1.5 text-[11px]">
+                                {x.status.detail}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-text-muted">
+                      Estas notas existem no armazenamento mas{" "}
+                      <strong className="text-text">
+                        não estão a mexer no modelo
+                      </strong>{" "}
+                      nesta jornada. Desde a v1.58 nenhuma nota sobrevive por
+                      omissão: uma nota que não diga para que jornada foi
+                      escrita é tratada como expirada, não como permanente.
+                    </p>
+                  </div>
+                )}
                 <p className="mt-3 text-xs leading-relaxed text-text-muted">
                   Comparação feita <strong>dentro de cada posição</strong>: os
                   jogadores que o motor classificou melhor contra os que
@@ -1158,10 +1223,15 @@ export default async function Home() {
                         <td className="py-2 pr-3 text-xs text-text-muted">
                           {insight.source}
                         </td>
+                        {/* Esta célula dizia "permanente" para qualquer nota
+                            sem data — que era exatamente a mentira que
+                            deixava notas de pré-época com ar de válidas. Um
+                            ecrã que chama "permanente" a uma nota que
+                            ninguém decidiu tornar permanente ensina o
+                            utilizador a confiar no que não deve. Agora diz
+                            até que JORNADA vale, que é a unidade certa. */}
                         <td className="py-2 text-xs text-text-muted">
-                          {insight.expiresAt
-                            ? `até ${new Date(insight.expiresAt).toLocaleDateString("pt-PT", { timeZone: "Europe/Lisbon" })}`
-                            : "permanente"}
+                          {insightStatus(insight, fromEvent).detail}
                         </td>
                       </tr>
                     ))}
