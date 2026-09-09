@@ -1,4 +1,5 @@
 import type { FplElement } from "./types";
+import { NO_RATE_PRIORS, type RatePriors } from "./rateprior";
 
 /**
  * Expected-points model — converts a player plus a fixture context into an
@@ -302,7 +303,13 @@ const FREEKICK_XG90: Record<number, number> = { 1: 0.05, 2: 0.01 };
  */
 export function computePlayerRates(
   el: FplElement,
-  paramsOver?: Partial<ModelParams>
+  paramsOver?: Partial<ModelParams>,
+  /**
+   * O alvo do encolhimento. Ausente = zero, que era o comportamento até à
+   * v1.61 e continua a ser o de qualquer chamador que não o passe.
+   * Ver lib/rateprior.ts para porque é que zero estava errado.
+   */
+  priors: RatePriors = NO_RATE_PRIORS
 ): PlayerRates {
   const params = withParams(paramsOver);
   const reasons: string[] = [];
@@ -417,12 +424,34 @@ export function computePlayerRates(
   const shrink = (rate: number, k: number, prior = 0) =>
     matches > 0 ? (rate * matches + prior * k) / (matches + k) : prior;
 
+  // ═══ v1.61 — O ALVO DO ENCOLHIMENTO DEIXA DE SER ZERO ═══
+  //
+  // Até aqui, `prior = 0` para golos, assistências, bónus, defesas e
+  // contribuição defensiva. Ou seja: na ausência de prova, o modelo assumia
+  // que o jogador não tem ameaça nenhuma. Com três jornadas e k=3, isso
+  // substitui METADE do sinal de cada jogador por um zero.
+  //
+  // Medido nos dados reais da GW3, com 185 jogadores de 180+ minutos: a
+  // ordenação por PREÇO prevê os pontos da jornada com Spearman 0,092; a
+  // ordenação pelo xGI/90 desta época prevê com 0,032 — e essa medição
+  // tinha a própria GW3 lá dentro. Nos médios: 0,169 contra 0,008.
+  //
+  // O prior passa a ser a produção típica de um jogador da mesma posição e
+  // do mesmo escalão de preço, estimada do próprio bootstrap. O peso é
+  // calibrável e `pricePriorWeight = 0` reproduz exatamente o
+  // comportamento anterior.
+  const w = Math.min(1, Math.max(0, params.pricePriorWeight));
+  const prior = priors.available
+    ? priors.forPlayer(el.element_type, toNum(el.now_cost))
+    : null;
+  const P = (v: number) => (prior ? v * w : 0);
+
   return {
-    xg90: shrink(xg90, params.shrinkXg),
-    xa90: shrink(xa90, params.shrinkXa),
-    bonus90: shrink(bonus90, params.shrinkBonus),
-    saves90: shrink(saves90, params.shrinkSaves),
-    dc90: shrink(dc90, params.shrinkDc),
+    xg90: shrink(xg90, params.shrinkXg, P(prior?.xg90 ?? 0)),
+    xa90: shrink(xa90, params.shrinkXa, P(prior?.xa90 ?? 0)),
+    bonus90: shrink(bonus90, params.shrinkBonus, P(prior?.bonus90 ?? 0)),
+    saves90: shrink(saves90, params.shrinkSaves, P(prior?.saves90 ?? 0)),
+    dc90: shrink(dc90, params.shrinkDc, P(prior?.dc90 ?? 0)),
     yellow90: shrink(yellow90, params.shrinkYellow, params.priorYellow90),
     red90: shrink(red90, params.shrinkRed, params.priorRed90),
     setPieceXg90,

@@ -16,7 +16,7 @@ function mk(id: number, type: number, teamId: number, ep: number, price: number,
     expectedPoints: ep * 5, expectedPointsNext: ep, pPlay: 1,
     breakdown: { appearance: 10, goals: 5, assists: 3, cleanSheet: 2, concededPenalty: -1, defensiveContribution: 0, bonus: 2, saves: 0, cards: 0, total: ep * 5 },
     score: ep * 5, isDifferential: own < 10, isPreseason: false, reasons: [],
-  } as ScoredPlayer;
+  } as unknown as ScoredPlayer;
 }
 
 // A realistic pool: ~600 players across 20 clubs and 4 positions.

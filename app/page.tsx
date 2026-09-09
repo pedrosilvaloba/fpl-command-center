@@ -56,6 +56,10 @@ import { getJobHealth, mergeResearchHealth } from "@/lib/joblog";
 import { BACKTEST_CACHE_KEY } from "@/lib/jobs";
 import { getRedis } from "@/lib/kv";
 import { normalizeBacktestResult } from "@/lib/backtest";
+import {
+  computeDispersionCorrection,
+  applyDispersionCorrection,
+} from "@/lib/dispersion";
 import { snapshotPredictions, reviewGameweek } from "@/lib/gwreview";
 import { PLAYBOOK, RULES_2026_27 } from "@/lib/strategy";
 import { DEFAULT_TEAM_ID, DEFAULT_LEAGUE_ID } from "@/lib/constants";
@@ -70,6 +74,7 @@ import StrategyPanel from "@/components/StrategyPanel";
 import TransferPlanPanel from "@/components/TransferPlanPanel";
 import GameweekReviewPanel from "@/components/GameweekReviewPanel";
 import BacktestPanel from "@/components/BacktestPanel";
+import DispersionPanel from "@/components/DispersionPanel";
 import LeagueChipsPanel from "@/components/LeagueChipsPanel";
 import CaptainShortlist from "@/components/CaptainShortlist";
 import DeferralPanel from "@/components/DeferralPanel";
@@ -455,7 +460,36 @@ export default async function Home() {
     activeInsights
   );
   const learning = await getLearningState();
-  const scored = applyCalibration(rawScored, learning.calibration);
+  const levelled = applyCalibration(rawScored, learning.calibration);
+
+  // ═══ A LARGURA, QUE É UM DEFEITO DIFERENTE DO NÍVEL ═══
+  //
+  // `applyCalibration` acima corrige o NÍVEL de cada posição com um
+  // multiplicador. O backtest desta app mede um segundo desvio, maior e de
+  // outra natureza: o modelo separa os jogadores num intervalo de oito
+  // pontos onde a realidade os separa em dois (inclinação incondicional
+  // 0,45 ± 0,06; entre titulares indiscutíveis, r² 0,002).
+  //
+  // Isto não muda a ordem de ninguém. Muda quanto vale a pena PAGAR por uma
+  // diferença — e o hit de -4 é um número exato a ser comparado com um
+  // ganho que vinha ao dobro da largura. Ver lib/dispersion.ts.
+  const backtestRedis = getRedis();
+  // NUNCA ler esta chave sem normalizar: o registo pode ter sido escrito
+  // por uma versão anterior do programa. Foi assim que a v1.51 devolveu 500.
+  const backtest = normalizeBacktestResult(
+    backtestRedis ? await backtestRedis.get(BACKTEST_CACHE_KEY) : null
+  );
+  const dispersionCorrection = computeDispersionCorrection(
+    backtest
+      ? {
+          regression: backtest.metrics.unconditionalRegression,
+          perEventSlopes: backtest.metrics.perEventSlopes,
+        }
+      : null,
+    backtest ? backtest.metrics.events.length : 0
+  );
+  const dispersion = applyDispersionCorrection(levelled, dispersionCorrection);
+  const scored = dispersion.applied;
 
   // As opiniões externas entram AQUI, sobre um modelo já formado. O
   // resultado do cruzamento é guardado para o ecrã: a contagem de
@@ -645,7 +679,11 @@ export default async function Home() {
     // Per-player predictions for the gameweek review. Written BEFORE the
     // deadline because reconstructing them afterwards is not a test the
     // model could ever fail.
-    upcomingEvent ? snapshotPredictions(rawScored, upcomingEvent.id) : Promise.resolve(),
+    // `scored` e não `rawScored`: o registo tem de guardar os números que o
+    // Pedro viu e sobre os quais decidiu. Guardar os números crus enquanto
+    // o ecrã mostra os corrigidos faria a camada de aprendizagem medir uma
+    // previsão que ninguém usou — e corrigir duas vezes o mesmo desvio.
+    upcomingEvent ? snapshotPredictions(scored, upcomingEvent.id) : Promise.resolve(),
     recordOutcomesForFinishedEvents(finishedEventIds),
     settleStrategies(finishedEventIds),
   ]);
@@ -653,12 +691,8 @@ export default async function Home() {
   // O backtest corria todas as noites e o resultado morria no Redis: nada
   // na app o lia. A pergunta "posso confiar neste modelo?" tinha resposta
   // guardada e invisível.
-  const backtestRedis = getRedis();
-  // NUNCA ler esta chave sem normalizar: o registo pode ter sido escrito
-  // por uma versão anterior do programa. Foi assim que a v1.51 devolveu 500.
-  const backtest = normalizeBacktestResult(
-    backtestRedis ? await backtestRedis.get(BACKTEST_CACHE_KEY) : null
-  );
+  // (`backtest` é lido antes da pontuação: a correção de largura precisa
+  // dele para existir.)
 
   // ---- schedule anomalies ----------------------------------------------
   const scheduleHorizon = Math.min(fromEvent + 14, 38);
@@ -1086,6 +1120,21 @@ export default async function Home() {
               result={backtest}
               configured={storageConfigured}
             />
+          </div>
+
+          <div className="mt-6 border-t border-border pt-5">
+            <SubHeading>
+              A largura das previsões — o que o backtest obrigou a corrigir
+            </SubHeading>
+            <p className="mb-3 text-[13px] leading-relaxed text-text-muted">
+              O backtest acima não mede só se o modelo acerta na ordem. Mede
+              também se a DISTÂNCIA entre as previsões corresponde à distância
+              real — e essa é a medição que mais mexeu nesta versão. Um modelo
+              que separa os jogadores num intervalo de oito pontos onde a
+              realidade os separa em dois não engana na escolha; engana na
+              conta de quanto vale a pena pagar por ela.
+            </p>
+            <DispersionPanel application={dispersion} />
           </div>
 
           <div className="mt-6 border-t border-border pt-5">

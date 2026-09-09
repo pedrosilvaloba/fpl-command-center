@@ -98,6 +98,12 @@ export interface ElementHistoryRow {
   value?: number;
 }
 
+/** Linhas mínimas para uma jornada dar uma inclinação que valha a pena
+ * incluir na dispersão. Uma reta ajustada a meia dúzia de pontos é ruído
+ * a fazer-se passar por uma medição, e entraria na conta da incerteza
+ * exatamente ao contrário do que devia. */
+export const MIN_ROWS_PER_EVENT_SLOPE = 30;
+
 const num = (v: unknown): number => {
   const n = typeof v === "number" ? v : parseFloat(String(v ?? 0));
   return Number.isFinite(n) ? n : 0;
@@ -302,6 +308,20 @@ export interface BacktestMetrics {
   unconditionalRegression: Regression;
   nailedRegression: Regression;
   nailedN: number;
+  /**
+   * A MESMA INCLINAÇÃO INCONDICIONAL, MEDIDA JORNADA A JORNADA.
+   *
+   * O erro padrão de `unconditionalRegression` trata 440 observações como
+   * 440 provas independentes, e não são: dentro de uma jornada todos os
+   * jogadores partilham o mesmo calendário e o mesmo fim de semana. Sem
+   * saber quanto a inclinação varia ENTRE jornadas, não há forma de saber
+   * se aquele erro padrão se pode ler — e uma correção construída sobre um
+   * erro padrão que subestima é uma correção grande demais.
+   *
+   * Estas são as inclinações por jornada. A dispersão delas é a medição
+   * honesta da incerteza. Ver lib/dispersion.ts.
+   */
+  perEventSlopes: number[];
 }
 
 function spearmanCorrelation(pairs: { a: number; b: number }[]): number {
@@ -359,6 +379,7 @@ export function scoreBacktest(rows: BacktestRow[]): BacktestMetrics {
     nailedN: 0,
     evidence: callTheEvidence({ n: 0, events: 0, spearman: 0, baselineSpearman: 0 }),
     suggestedShrinkage: null,
+    perEventSlopes: [],
   };
   if (n === 0) return empty;
 
@@ -444,6 +465,7 @@ export function scoreBacktest(rows: BacktestRow[]): BacktestMetrics {
       baselineSpearman: 0,
     }),
     suggestedShrinkage: null,
+    perEventSlopes: [],
   };
 }
 
@@ -519,14 +541,18 @@ export function collectBacktestRows(input: BacktestInput): {
   rows: BacktestRow[];
   baseline: { predicted: number; actual: number }[];
   /** Todas as linhas, incluindo zeros de quem não entrou. */
-  allRows: { predicted: number; actual: number }[];
+  /** Uma linha por jogador POR JORNADA, incluindo quem não jogou (com
+   * zero). O `event` está aqui porque a inclinação medida jornada a
+   * jornada é o que diz se o erro padrão ao nível da linha se pode ler —
+   * ver lib/dispersion.ts. */
+  allRows: { event: number; predicted: number; actual: number }[];
 } {
   const { bootstrap, fixtures, historyByElement, fromEvent, toEvent } = input;
   const minMinutes = input.minMinutes ?? 1;
   const elementIds = [...historyByElement.keys()];
 
   const rows: BacktestRow[] = [];
-  const allRows: { predicted: number; actual: number }[] = [];
+  const allRows: { event: number; predicted: number; actual: number }[] = [];
   const baselineRows: { predicted: number; actual: number }[] = [];
 
   for (let event = fromEvent; event <= toEvent; event++) {
@@ -575,7 +601,7 @@ export function collectBacktestRows(input: BacktestInput): {
       // A correção não é trocar uma amostra pela outra — é medir AS DUAS,
       // porque respondem a perguntas diferentes. Estas linhas são todas,
       // com zero para quem não entrou.
-      allRows.push({ predicted: p.expectedPointsNext, actual });
+      allRows.push({ event, predicted: p.expectedPointsNext, actual });
 
       if (played.length === 0) continue;
       if (minutes < minMinutes) continue;
@@ -622,6 +648,15 @@ export function runBacktest(input: BacktestInput): BacktestResult {
     baselineSpearman: metrics.baselineSpearman,
   });
   metrics.unconditionalRegression = regressActualOnPredicted(allRows);
+  // Uma inclinação por jornada, sobre a MESMA amostra incondicional. Só
+  // entram jornadas com linhas que cheguem para a regressão significar
+  // alguma coisa — uma inclinação estimada sobre cinco pontos poluiria a
+  // dispersão que estas servem para medir.
+  metrics.perEventSlopes = [...new Set(allRows.map((r) => r.event))]
+    .sort((a, b) => a - b)
+    .map((ev) => regressActualOnPredicted(allRows.filter((r) => r.event === ev)))
+    .filter((r) => r.n >= MIN_ROWS_PER_EVENT_SLOPE && r.slopeStdError > 0)
+    .map((r) => r.slope);
   metrics.suggestedShrinkage = suggestedShrinkage(
     metrics.regression,
     metrics.events.length
@@ -704,6 +739,9 @@ function normalizeMetrics(m: Partial<BacktestMetrics> | undefined): BacktestMetr
     unconditionalRegression: reg(m.unconditionalRegression, base.regression),
     nailedRegression: reg(m.nailedRegression, base.regression),
     nailedN: typeof m.nailedN === "number" ? m.nailedN : 0,
+    perEventSlopes: Array.isArray(m.perEventSlopes)
+      ? m.perEventSlopes.filter((x) => typeof x === "number" && Number.isFinite(x))
+      : [],
     // Recalculado a partir dos campos que QUALQUER versão tem. Um registo
     // antigo passa assim a ter veredicto, em vez de rebentar — e o
     // veredicto é o correto, porque só depende de n, jornadas e Spearman.

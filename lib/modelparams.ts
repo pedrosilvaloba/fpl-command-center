@@ -93,6 +93,38 @@ export interface ModelParams {
    * fica-se a saber que não ajudava.
    */
   startPriorFixtures: number;
+
+  /**
+   * Quanto do prior baseado em preço-e-posição é usado como alvo do
+   * encolhimento das taxas. 0 reproduz exatamente o comportamento até à
+   * v1.60 — encolher para zero. 1 usa o prior por inteiro.
+   *
+   * ═══ ESTÁ A ZERO, E A RAZÃO É UMA MEDIÇÃO QUE ME DEU CONTRA ═══
+   *
+   * A hipótese com que este prior foi construído era boa: encolher para
+   * zero afirma que um jogador sem prova recente não tem ameaça nenhuma, o
+   * que é falso, e o preço parecia prever a jornada seguinte três vezes
+   * melhor do que o xGI (Spearman 0,092 contra 0,032).
+   *
+   * Duas coisas correram mal com essa justificação.
+   *
+   * Primeira: aquela medição estava CONTAMINADA. Foi feita sobre um
+   * bootstrap descarregado DEPOIS de a jornada alvo ter acontecido, e
+   * portanto os preditores continham o resultado que estavam a prever.
+   * Continha-o com força desigual — os pontos por jogo continham-no de
+   * forma quase mecânica, o xGI só indiretamente — o que basta para o
+   * ranking entre preditores não significar nada.
+   *
+   * Segunda: mesmo a tomar aquele número por bom, medi o efeito de ligar o
+   * prior e o Spearman DESCEU, de 0,096 para 0,076. A minha própria
+   * hipótese foi contrariada pela minha própria medição.
+   *
+   * Fica construído, testado e a zero — como o `startPriorFixtures` — para
+   * a varredura de calibração poder ligá-lo quando houver jornadas que
+   * cheguem para o julgar com dados sem contaminação. Ligá-lo por soar bem
+   * seria o erro que este ficheiro existe para não repetir.
+   */
+  pricePriorWeight: number;
 }
 
 export const DEFAULT_MODEL_PARAMS: ModelParams = {
@@ -116,6 +148,9 @@ export const DEFAULT_MODEL_PARAMS: ModelParams = {
   modelTrustMinutes: 360,
   // Ver a nota acima: construído, medido, e deliberadamente a zero.
   startPriorFixtures: 0,
+  // Ver a nota acima: construído, medido, e deliberadamente a zero porque a
+  // medição não o suportou.
+  pricePriorWeight: 0,
 };
 
 /** Merge an override onto the defaults. Anything absent keeps its shipped
@@ -146,6 +181,8 @@ export const PARAM_GRIDS: Partial<Record<keyof ModelParams, number[]>> = {
   minutes60Floor: [20, 28, 35, 42, 50],
   minutes60Span: [30, 38, 45, 55, 65],
   modelTrustMinutes: [180, 270, 360, 540, 720],
+  // Inclui 0 para o varrimento poder concluir que o prior faz mal.
+  pricePriorWeight: [0, 0.5, 0.75, 1],
   // Inclui o 0 de propósito: o varrimento tem de poder concluir que a
   // melhor opção é continuar desligado.
   startPriorFixtures: [0, 0.75, 1.5, 3],

@@ -103,7 +103,7 @@ import {
   MIN_STRATEGIC_RETENTION,
 } from "../lib/optimizer";
 import { computeMomentum, momentumReason } from "../lib/momentum";
-import { readCalendar, planChips, WILDCARD_BREAK_PREMIUM } from "../lib/chipplan";
+import { readCalendar, WILDCARD_BREAK_PREMIUM } from "../lib/chipplan";
 import { retentionInObjectiveUnits, objectiveToWindowPoints } from "../lib/transferplan";
 import {
   decisionGain,
@@ -168,6 +168,13 @@ import { computeJobHealth, mergeResearchHealth, type JobRun } from "../lib/joblo
 import { planFromRequest } from "../app/api/cron/refresh/route";
 import { paramsFromCursor, allTunableParams, MAX_PARAMS_PER_RUN, chooseSample } from "../lib/jobs";
 import type { FplElement } from "../lib/types";
+import {
+  computeDispersionCorrection,
+  applyDispersionCorrection,
+  clusterStdError,
+  MIN_DISPERSION_FACTOR,
+  FULL_EVIDENCE_EVENTS,
+} from "../lib/dispersion";
 import { NAV_ORDER } from "../app/page";
 import { deflateSync, inflateSync, gzipSync, gunzipSync } from "node:zlib";
 import {
@@ -340,7 +347,7 @@ function testCaptainUsesNextGameweek() {
       },
       score: 0, isDifferential: false, isPreseason: false, reasons: [],
       ...over,
-    }) as ScoredPlayer;
+    }) as unknown as ScoredPlayer;
 
   // A: great over 5 GWs, poor next week.  B: the reverse.
   const a = base({ expectedPoints: 40, expectedPointsNext: 3, pPlay: 1, score: 40 });
@@ -370,7 +377,7 @@ function testSquadValidity() {
         concededPenalty: 0, defensiveContribution: 0, bonus: 0, saves: 0, cards: 0, total: score,
       },
       score, isDifferential: false, isPreseason: false, reasons: [],
-    }) as ScoredPlayer;
+    }) as unknown as ScoredPlayer;
 
   // Deterministic, adversarial price distribution: lots of expensive
   // high scorers up front, which is what used to starve the forwards.
@@ -536,7 +543,7 @@ function testBestXI() {
         concededPenalty: 0, defensiveContribution: 0, bonus: 0, saves: 0, cards: 0, total: 0,
       },
       score: pts * 5, isDifferential: false, isPreseason: false, reasons: [],
-    }) as ScoredPlayer;
+    }) as unknown as ScoredPlayer;
 
   const legal = [
     ...Array.from({ length: 2 }, (_, i) => mk(i + 1, 1, 3)),
@@ -1080,7 +1087,7 @@ function testOptimizerBenchSpend() {
           expectedPoints: Math.round(pts * 10) / 10, expectedPointsNext: pts / 5, pPlay: 1,
           breakdown: { appearance: 0, goals: 0, assists: 0, cleanSheet: 0, concededPenalty: 0, defensiveContribution: 0, bonus: 0, saves: 0, cards: 0, total: pts },
           score: Math.round(pts * 10) / 10, isDifferential: false, isPreseason: false, reasons: [],
-        } as ScoredPlayer);
+        } as unknown as ScoredPlayer);
         id++;
       }
     }
@@ -1140,7 +1147,7 @@ function testCorrelationRisk() {
       ceilingGI: 0, floorGI: 0, expectedPoints: pts * 5, expectedPointsNext: pts, pPlay: 1,
       breakdown: { appearance: 0, goals: 0, assists: 0, cleanSheet: 0, concededPenalty: 0, defensiveContribution: 0, bonus: 0, saves: 0, cards: 0, total: 0 },
       score: pts * 5, isDifferential: false, isPreseason: false, reasons: [],
-    }) as ScoredPlayer;
+    }) as unknown as ScoredPlayer;
 
   // Onze A: 1 GK + 4 DEF TODOS do mesmo clube (concentração máxima).
   const stacked = [
@@ -1220,7 +1227,7 @@ function testRankValue() {
       expectedPoints: pts * 5, expectedPointsNext: pts, pPlay: 1,
       breakdown: { appearance: 0, goals: 0, assists: 0, cleanSheet: 0, concededPenalty: 0, defensiveContribution: 0, bonus: 0, saves: 0, cards: 0, total: 0 },
       score: pts * 5, isDifferential: own < 10, isPreseason: false, reasons: [],
-    }) as ScoredPlayer;
+    }) as unknown as ScoredPlayer;
 
   // Dois jogadores com pontos esperados IDÊNTICOS mas posses opostas.
   const template = computeRankValue(mk(1, 65, 6));
@@ -1402,7 +1409,7 @@ function mkSim(
     isDifferential: own < 10,
     isPreseason: false,
     reasons: [],
-  } as ScoredPlayer;
+  } as unknown as ScoredPlayer;
 }
 
 function mkSquad(
@@ -2278,7 +2285,7 @@ function testPlannerSurvivesAnIllegalSquad() {
   // silent — the plans simply vanished with no explanation.)
   const { owned, scored } = mkTransferPool([10]);
   const stacked = owned.map((p, i) =>
-    i < 4 ? ({ ...p, team: makeTeam(99) } as ScoredPlayer) : p
+    i < 4 ? ({ ...p, team: makeTeam(99) } as unknown as ScoredPlayer) : p
   );
   const pool = [...stacked, ...scored.filter((p) => !owned.some((o) => o.element.id === p.element.id))];
   const advice = planTransfers(pool, mkState(stacked, 1));
@@ -2956,6 +2963,7 @@ function testBacktestMetrics() {
     minutes: 90,
     priceM: 5,
     trust: 1,
+    pPlay: 1,
   }));
   const good = scoreBacktest(perfect);
   check("uma previsão perfeita dá erro zero", good.mae === 0 && good.rmse === 0);
@@ -2990,7 +2998,7 @@ function testBacktestMetrics() {
   // Empates: os pontos da FPL são quase todos 1, 2 e 0.
   const ties = Array.from({ length: 30 }, (_, i) => ({
     event: 5, elementId: i + 1, webName: `P${i}`, elementType: 3,
-    predicted: 2, actual: i < 15 ? 2 : 6, minutes: 90, priceM: 5, trust: 1,
+    predicted: 2, actual: i < 15 ? 2 : 6, minutes: 90, priceM: 5, trust: 1, pPlay: 1,
   }));
   const tied = scoreBacktest(ties);
   check(
@@ -4697,8 +4705,8 @@ function testSelectionShrinkageIsHonestlyLimited() {
   const mean = 20;
   const flashy = mkSim(1, { epNext: 8 });
   const proven = mkSim(2, { epNext: 8 });
-  const flashyLow = { ...flashy, modelTrust: 0, expectedPoints: 40 } as ScoredPlayer;
-  const provenHigh = { ...proven, modelTrust: 1, expectedPoints: 40 } as ScoredPlayer;
+  const flashyLow = { ...flashy, modelTrust: 0, expectedPoints: 40 } as unknown as ScoredPlayer;
+  const provenHigh = { ...proven, modelTrust: 1, expectedPoints: 40 } as unknown as ScoredPlayer;
 
   check(
     "sem evidência, um número espetacular é puxado para a média",
@@ -4723,7 +4731,7 @@ function testSelectionShrinkageIsHonestlyLimited() {
   // confiança em toda a gente é uma transformação monótona: não reordena
   // ninguém. Foi por isso que sozinho não resolveu o problema.
   const same = [30, 40, 50].map(
-    (v, i) => ({ ...mkSim(100 + i, {}), modelTrust: 0.25, expectedPoints: v }) as ScoredPlayer
+    (v, i) => ({ ...mkSim(100 + i, {}), modelTrust: 0.25, expectedPoints: v }) as unknown as ScoredPlayer
   );
   const before = [...same].sort((a, b) => b.expectedPoints - a.expectedPoints).map((p) => p.element.id);
   const after = [...same]
@@ -5658,7 +5666,7 @@ function testChunkedSubmissionDoesNothingUntilComplete() {
 
 function testViceCaptainIsChosenOnMeritNotOnArrayOrder() {
   const mk = (id: number, ep: number): ScoredPlayer =>
-    mkSim(id, { teamId: 1, type: 3, epNext: ep, price: 8, own: 20 }) as ScoredPlayer;
+    mkSim(id, { teamId: 1, type: 3, epNext: ep, price: 8, own: 20 }) as unknown as ScoredPlayer;
   const withPlay = (p: ScoredPlayer, pPlay: number): ScoredPlayer => ({ ...p, pPlay });
 
   const star = withPlay(mk(1, 9.0), 1);
@@ -5785,7 +5793,7 @@ function testMinutesModelDoesNotZeroOutPlayersWhoActuallyPlay() {
 
 function testFreeHitComparesNowAgainstLaterLikeEveryOtherChip() {
   const p = (id: number, ep: number): ScoredPlayer =>
-    ({ ...mkSim(id, { teamId: 1, type: 3, epNext: ep, price: 6, own: 10 }), pPlay: 1 }) as ScoredPlayer;
+    ({ ...mkSim(id, { teamId: 1, type: 3, epNext: ep, price: 6, own: 10 }), pPlay: 1 }) as unknown as ScoredPlayer;
   const chips = [{ name: "freehit", remaining: 1 }] as unknown as Parameters<typeof planChips>[0]["chips"];
   const bench = [p(20, 1), p(21, 1), p(22, 1), p(23, 1)];
   const cal = (blanks: number[]) => ({
@@ -6031,7 +6039,7 @@ function testFreeHitAccountsForAutomaticSubstitutions() {
   // normal cobre até três ausências sozinho. O que se perde numa ausência
   // COBERTA é a diferença entre o titular e o suplente, não o titular todo.
   const p = (id: number, ep: number): ScoredPlayer =>
-    ({ ...mkSim(id, { teamId: 1, type: 3, epNext: ep, price: 6, own: 10 }), pPlay: 1 }) as ScoredPlayer;
+    ({ ...mkSim(id, { teamId: 1, type: 3, epNext: ep, price: 6, own: 10 }), pPlay: 1 }) as unknown as ScoredPlayer;
   const chips = [{ name: "freehit", remaining: 1 }] as unknown as Parameters<typeof planChips>[0]["chips"];
   const cal = { breakAfterEvents: [], breakImminent: false, knownDoubleEvents: [], knownBlankEvents: [] };
   const squad = (missing: number) => [
@@ -6133,7 +6141,7 @@ function testPostureCannotStealTheArmband() {
   // braçadeira DOBRA. O optimizer já tinha o teto para isto desde a v1.29; o
   // capitão nunca o teve.
   const mk = (id: number, ep: number, own: number): ScoredPlayer =>
-    ({ ...mkSim(id, { teamId: 1, type: 3, epNext: ep, price: 8, own }), pPlay: 1 }) as ScoredPlayer;
+    ({ ...mkSim(id, { teamId: 1, type: 3, epNext: ep, price: 8, own }), pPlay: 1 }) as unknown as ScoredPlayer;
   const premium = mk(1, 9.0, 70);
   const differential = mk(2, 7.2, 5);
   const filler = mk(3, 3.0, 10);
@@ -8092,7 +8100,7 @@ function testExpertViewsAddOnlyWhatIsNew() {
   // de encontrar vantagem numa liga.
   const before = pool.map((p) => p.expectedPointsNext);
   const agreeApp = applyExpertViews(
-    pool.map((p) => ({ ...p, reasons: [] })) as ScoredPlayer[],
+    pool.map((p) => ({ ...p, reasons: [] })) as unknown as ScoredPlayer[],
     [view(1, "sobe")]
   );
   check(
@@ -8109,7 +8117,7 @@ function testExpertViewsAddOnlyWhatIsNew() {
   // ── 3. MAS UMA DISCORDÂNCIA MEXE MESMO ──────────────────────────────
   // O erro simétrico seria um sistema que nunca ouve ninguém. Isso não é
   // rigor, é surdez — e tornaria a recolha inútil.
-  const clone = pool.map((p) => ({ ...p, reasons: [] as string[] })) as ScoredPlayer[];
+  const clone = pool.map((p) => ({ ...p, reasons: [] as string[] })) as unknown as ScoredPlayer[];
   const disagreeApp = applyExpertViews(clone, [view(19, "sobe")]);
   const moved = clone.find((p) => p.element.id === 19)!;
   check(
@@ -8127,7 +8135,7 @@ function testExpertViewsAddOnlyWhatIsNew() {
   // Uma opinião não pode ter mais poder sobre o modelo do que uma notícia
   // confirmada. Cinco analistas entusiasmados com o mesmo jogador não
   // valem 80% de acréscimo.
-  const many = pool.map((p) => ({ ...p, reasons: [] as string[] })) as ScoredPlayer[];
+  const many = pool.map((p) => ({ ...p, reasons: [] as string[] })) as unknown as ScoredPlayer[];
   applyExpertViews(many, [
     view(19, "sobe"), view(19, "sobe"), view(19, "sobe"),
     view(19, "sobe"), view(19, "sobe"),
@@ -8200,6 +8208,279 @@ function testExpertViewsAddOnlyWhatIsNew() {
 }
 
 testExpertViewsAddOnlyWhatIsNew();
+
+// ═══════════════════════════════════════════════════════════════════════
+// v1.61 — A LARGURA DAS PREVISÕES (lib/dispersion.ts)
+//
+// O backtest desta app, sem fuga de informação, mede a inclinação do real
+// sobre o previsto em 0,45 ± 0,06 — dez erros padrão abaixo de 1. O modelo
+// separa os jogadores num intervalo de oito pontos onde a realidade os
+// separa em dois, e todas as decisões que comparam um ganho previsto com
+// um custo exato (o hit de -4, os limiares dos chips) liam essa diferença
+// ao dobro.
+//
+// Estes testes existem para que a correção não possa (a) mudar a ordem de
+// ninguém, (b) mexer quando a prova é fraca, nem (c) puxar para cima quem
+// não joga — que é o eixo onde a mesma medição diz que o modelo funciona.
+// ═══════════════════════════════════════════════════════════════════════
+function testDispersionCompressesWidthWithoutTouchingOrder() {
+  const reg = (slope: number, se: number, n = 400) => ({
+    slope, intercept: 0, slopeStdError: se, r2: 0.1, n,
+  });
+  const sp = (
+    id: number, pos: string, ep: number, mins: number
+  ): ScoredPlayer =>
+    ({
+      element: { id, element_type: pos === "MID" ? 3 : 4 },
+      positionShort: pos,
+      expectedPointsNext: ep,
+      expectedPoints: ep * 5,
+      score: ep * 5,
+      expectedMinutesNext: mins,
+      pPlay: mins / 90,
+      reasons: [],
+    }) as unknown as ScoredPlayer;
+
+  // ---- 1. sem prova, não mexe -----------------------------------------
+  const noEvidence = computeDispersionCorrection(
+    { regression: reg(0.45, 0.9), perEventSlopes: [] },
+    1
+  );
+  check(
+    "uma inclinação com erro padrão enorme quase não mexe na largura",
+    noEvidence.factor > 0.97,
+    `fator ${noEvidence.factor}`
+  );
+  check(
+    "e sem backtest nenhum o fator é exatamente 1",
+    computeDispersionCorrection(null, 0).factor === 1,
+    "sem medição, nada muda"
+  );
+
+  // ---- 2. com prova firme, mexe, e mexe no sentido certo ---------------
+  const firm = computeDispersionCorrection(
+    { regression: reg(0.45, 0.05), perEventSlopes: [0.44, 0.46, 0.45, 0.45, 0.46, 0.44] },
+    8
+  );
+  check(
+    "uma inclinação firme de 0,45 comprime mesmo a largura",
+    firm.factor < 0.7,
+    `fator ${firm.factor}`
+  );
+  check(
+    "e nunca comprime para além de metade",
+    computeDispersionCorrection(
+      { regression: reg(0.05, 0.01), perEventSlopes: [0.05, 0.05, 0.05, 0.05, 0.05, 0.05] },
+      20
+    ).factor >= MIN_DISPERSION_FACTOR,
+    "há um chão, e é 0,5"
+  );
+  check(
+    "e NUNCA alarga, mesmo com uma inclinação medida acima de 1",
+    computeDispersionCorrection(
+      { regression: reg(1.6, 0.02), perEventSlopes: [1.6, 1.6, 1.6, 1.59, 1.61, 1.6] },
+      20
+    ).factor === 1,
+    "amplificar o erro do modelo nunca é a correção"
+  );
+
+  // A rampa das jornadas: a MESMA medição, com menos jornadas por trás,
+  // tem de mexer menos. O erro padrão por linha não sabe quantas jornadas
+  // houve, e com duas jornadas subestima sempre.
+  const early = computeDispersionCorrection(
+    { regression: reg(0.45, 0.05), perEventSlopes: [] },
+    2
+  );
+  const late = computeDispersionCorrection(
+    { regression: reg(0.45, 0.05), perEventSlopes: [] },
+    FULL_EVIDENCE_EVENTS
+  );
+  check(
+    "a mesma medição mexe menos com 2 jornadas do que com 6",
+    early.factor > late.factor + 0.2,
+    `2 jornadas → ${early.factor}, ${FULL_EVIDENCE_EVENTS} jornadas → ${late.factor}`
+  );
+  check(
+    "mas com 2 jornadas já mexe alguma coisa — não corrigir não é neutro, é afirmar inclinação 1",
+    early.factor < 0.95,
+    `fator ${early.factor}`
+  );
+
+  // ---- 3. a discordância ENTRE jornadas manda sobre a das linhas -------
+  const tight = computeDispersionCorrection(
+    { regression: reg(0.45, 0.02), perEventSlopes: [0.44, 0.45, 0.46, 0.45, 0.44, 0.46] },
+    8
+  );
+  const scattered = computeDispersionCorrection(
+    { regression: reg(0.45, 0.02), perEventSlopes: [0.1, 0.9, 0.2, 0.8, 0.15, 0.85] },
+    8
+  );
+  check(
+    "jornadas que discordam entre si travam a correção, mesmo com o mesmo erro padrão por linha",
+    scattered.factor > tight.factor + 0.05,
+    `${tight.factor} (concordam) contra ${scattered.factor} (discordam)`
+  );
+  check(
+    "e o erro padrão usado é o MAIOR dos dois, não o das linhas",
+    (scattered.stdError ?? 0) > 0.02,
+    `usou ${scattered.stdError}, o das linhas era 0,02`
+  );
+  check(
+    "com menos de três jornadas não há erro padrão entre jornadas para estimar",
+    clusterStdError([0.4, 0.5]) === null && clusterStdError([0.4, 0.5, 0.6]) !== null,
+    "duas jornadas dão um grau de liberdade, e isso não é uma medição"
+  );
+
+  // ---- 4. a ORDEM não muda --------------------------------------------
+  const pool = [
+    sp(1, "MID", 9.0, 90),
+    sp(2, "MID", 6.0, 90),
+    sp(3, "MID", 4.0, 90),
+    sp(4, "MID", 2.0, 45),
+    sp(5, "MID", 0.2, 5),
+    sp(6, "FWD", 8.0, 90),
+    sp(7, "FWD", 3.0, 80),
+  ];
+  const applied = applyDispersionCorrection(pool, firm);
+  const orderOf = (xs: ScoredPlayer[]) =>
+    [...xs].sort((a, b) => b.expectedPointsNext - a.expectedPointsNext)
+      .map((x) => x.element.id).join(",");
+  check(
+    "comprimir a largura não troca a ordem de ninguém",
+    orderOf(applied.applied) === orderOf(pool),
+    orderOf(applied.applied)
+  );
+
+  // ---- 5. aperta o topo e NÃO puxa quem não joga -----------------------
+  const byId = new Map(applied.applied.map((p) => [p.element.id, p]));
+  const top = byId.get(1)!;
+  const bench = byId.get(5)!;
+  check(
+    "o topo desce",
+    top.expectedPointsNext < 9.0 - 0.5,
+    `9,00 → ${top.expectedPointsNext}`
+  );
+  check(
+    "e quem quase não joga NÃO é puxado para cima",
+    bench.expectedPointsNext <= 0.5,
+    `0,20 → ${bench.expectedPointsNext} (o alvo do encolhimento é escalado pelos minutos)`
+  );
+  // Entre dois jogadores com os MESMOS minutos, a diferença tem de encolher
+  // exatamente pelo fator: é aí que a compressão é pura, sem o eixo dos
+  // minutos pelo meio. É esta a quantidade que o planeador compara com o -4.
+  const mid3 = byId.get(3)!;
+  const gapBefore = 9.0 - 4.0;
+  const gapAfter = top.expectedPointsNext - mid3.expectedPointsNext;
+  check(
+    "entre dois jogadores com os mesmos minutos, a diferença encolhe exatamente pelo fator",
+    Math.abs(gapAfter - gapBefore * firm.factor) < 0.02,
+    `${gapBefore.toFixed(2)} → ${gapAfter.toFixed(2)} (esperado ${(gapBefore * firm.factor).toFixed(2)}) — um ganho anunciado de 5 pontos que vale 2,5 é a diferença entre pagar o hit e não pagar`
+  );
+  check(
+    "e a diferença encolheu mesmo, não ficou igual",
+    gapAfter < gapBefore - 1,
+    "se isto passasse com gapAfter === gapBefore, o teste não testava nada"
+  );
+
+  // ---- 6. a janela segue a mesma proporção da próxima ------------------
+  const ratioNext = top.expectedPointsNext / 9.0;
+  const ratioWindow = top.expectedPoints / 45.0;
+  check(
+    "a janela de cinco jornadas é comprimida na MESMA proporção da próxima",
+    Math.abs(ratioNext - ratioWindow) < 0.01,
+    `próxima ×${ratioNext.toFixed(3)}, janela ×${ratioWindow.toFixed(3)} — se divergissem, a decisão entre gastar agora e guardar mudava por acidente`
+  );
+  check(
+    "e o `score` acompanha a janela, como em todo o resto do pipeline",
+    top.score === top.expectedPoints,
+    "score é alias de expectedPoints"
+  );
+
+  // ---- 7. o alvo é POR POSIÇÃO, não global -----------------------------
+  const lopsided = [
+    sp(1, "MID", 2.0, 90), sp(2, "MID", 2.2, 90), sp(3, "MID", 1.8, 90),
+    sp(4, "MID", 2.1, 90), sp(5, "MID", 1.9, 90), sp(6, "MID", 2.0, 90),
+    sp(7, "FWD", 8.0, 90), sp(8, "FWD", 8.2, 90),
+  ];
+  const lop = applyDispersionCorrection(lopsided, firm);
+  const fwd = lop.applied.find((p) => p.element.id === 7)!;
+  check(
+    "um avançado num pool cheio de médios fracos não é esmagado contra a média deles",
+    fwd.expectedPointsNext > 7.5,
+    `8,00 → ${fwd.expectedPointsNext} — o alvo é a média da POSIÇÃO, e entre avançados este é normal`
+  );
+
+  // ---- 8. o total não é inventado nem destruído ------------------------
+  const before = pool.reduce((s, p) => s + p.expectedPointsNext, 0);
+  const after = applied.applied.reduce((s, p) => s + p.expectedPointsNext, 0);
+  check(
+    "comprimir a largura não muda o nível: o total mantém-se",
+    Math.abs(before - after) < 0.15,
+    `${before.toFixed(2)} → ${after.toFixed(2)} — corrigir a largura e o nível ao mesmo tempo seria duas correções a esconder-se uma na outra`
+  );
+
+  // ---- 9. sem o campo dos minutos, não rebenta -------------------------
+  const legacy = [
+    { ...pool[0], expectedMinutesNext: undefined },
+    { ...pool[1], expectedMinutesNext: undefined },
+    { ...pool[2], expectedMinutesNext: undefined },
+  ] as ScoredPlayer[];
+  const legacyOut = applyDispersionCorrection(legacy, firm);
+  check(
+    "objetos sem `expectedMinutesNext` caem para `pPlay` e continuam a funcionar",
+    legacyOut.applied.every((p) => Number.isFinite(p.expectedPointsNext)),
+    "um campo novo não pode partir registos antigos — foi assim que a v1.51 devolveu 500"
+  );
+
+  // ---- 10. a razão aparece na lista de razões --------------------------
+  check(
+    "o jogador diz porque é que o número dele mudou",
+    top.reasons.some((r) => r.includes("largura calibrada")),
+    "uma correção invisível é indistinguível de um erro"
+  );
+}
+
+testDispersionCompressesWidthWithoutTouchingOrder();
+
+// Um registo de backtest escrito pela v1.60 não tem `perEventSlopes`. Ler
+// esse registo tem de dar um array vazio e não `undefined` — a v1.51
+// devolveu 500 exatamente por não fazer isto com três campos novos.
+function testOldBacktestRecordsSurviveTheNewField() {
+  const old = normalizeBacktestResult({
+    ranAt: "2026-09-01T00:00:00.000Z",
+    fromEvent: 2,
+    toEvent: 3,
+    playersSampled: 220,
+    metrics: { n: 299, events: [2, 3], spearman: 0.32, baselineSpearman: 0.3 },
+    highTrustMetrics: {},
+    notes: [],
+  });
+  check(
+    "um registo antigo sem `perEventSlopes` lê-se com uma lista vazia",
+    Array.isArray(old?.metrics.perEventSlopes) &&
+      old!.metrics.perEventSlopes.length === 0,
+    "e não `undefined`, que rebentava no primeiro `.length`"
+  );
+  check(
+    "e a correção de largura sobre esse registo não mexe em nada de perigoso",
+    computeDispersionCorrection(
+      { regression: old!.metrics.unconditionalRegression, perEventSlopes: old!.metrics.perEventSlopes },
+      old!.metrics.events.length
+    ).factor === 1,
+    "sem regressão guardada não há inclinação, e sem inclinação não há correção"
+  );
+  const junk = normalizeBacktestResult({
+    metrics: { perEventSlopes: [0.4, "x", null, 0.6, NaN] },
+  });
+  check(
+    "e valores não numéricos vindos do armazenamento são deitados fora à leitura",
+    junk!.metrics.perEventSlopes.length === 2,
+    `ficaram ${JSON.stringify(junk!.metrics.perEventSlopes)} — validar é o que se faz a ler, não a escrever`
+  );
+}
+
+testOldBacktestRecordsSurviveTheNewField();
+
 
 void testLossCanNoLongerLookLikeEmptiness()
   .then(() => testOneRefusalNoLongerKillsTheWholeApp())

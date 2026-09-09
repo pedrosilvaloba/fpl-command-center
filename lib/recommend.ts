@@ -1,4 +1,5 @@
 import type { FplBootstrap, FplElement, FplTeam } from "./types";
+import { buildRatePriors } from "./rateprior";
 import { pointsRisk, type PointsRisk } from "./pointsrisk";
 import { averageDifficulty, buildFixtureTicker } from "./fdr";
 import {
@@ -76,6 +77,20 @@ export interface ScoredPlayer {
    * contingency is (1 - pPlay of the captain).
    */
   pPlay: number;
+  /**
+   * Minutos esperados na próxima jornada, já descontada a disponibilidade
+   * publicada pela FPL.
+   *
+   * Existia dentro do cálculo e era deitado fora. Passa a sair porque a
+   * correção de largura precisa dele: o backtest mostra que a
+   * discriminação deste modelo vive em acertar QUEM JOGA e quase não vive
+   * em separar titulares entre si (ver lib/dispersion.ts), e comprimir sem
+   * saber os minutos apertaria justamente o eixo que funciona.
+   *
+   * Opcional para que objetos construídos à mão nos testes continuem a
+   * compilar; quem o consome cai para `pPlay × 90`.
+   */
+  expectedMinutesNext?: number;
   /** How much of `expectedPointsNext` came from THIS MODEL rather than from
    * FPL's own `ep_next`. 0 = entirely FPL's flat league-wide estimate,
    * 1 = entirely this model's per-90 rates and fixture context.
@@ -228,6 +243,11 @@ export function buildScoredPlayers(
    * which is the whole reason they are injectable — see lib/modelparams.ts. */
   modelParams?: Partial<ModelParams>
 ): ScoredPlayer[] {
+  // O prior de encolhimento, estimado uma vez a partir deste bootstrap.
+  // Ver lib/rateprior.ts: o alvo do encolhimento era ZERO, o que afirma
+  // que um jogador sem prova recente não tem ameaça nenhuma.
+  const ratePriors = buildRatePriors(bootstrap);
+
   const teamById = new Map(bootstrap.teams.map((t) => [t.id, t]));
   // The bandwagon, read straight from FPL's transfer counts.
   const momentum = computeMomentum(bootstrap);
@@ -318,7 +338,7 @@ export function buildScoredPlayers(
       isPreseason,
       modelParams
     );
-    const rates = computePlayerRates(el, modelParams);
+    const rates = computePlayerRates(el, modelParams, ratePriors);
     const minutesPlayed = Number.isFinite(el.minutes) ? el.minutes : 0;
 
     // How good is this team's upcoming run RELATIVE TO ITS OWN normal
@@ -595,6 +615,8 @@ export function buildScoredPlayers(
       projectedOwnershipPct: momentum.get(el.id)?.projectedOwnershipPct ?? ownershipPct,
       ownershipTrendPct: momentum.get(el.id)?.trendPct ?? 0,
       pPlay: Math.round(Math.min(1, Math.max(0, mins.pAppear * availability)) * 1000) / 1000,
+      expectedMinutesNext:
+        Math.round(Math.max(0, mins.expectedMinutes * availability) * 10) / 10,
       breakdown: modelWindowPoints,
       // Construído a partir da decomposição de UMA jornada, escalada para o
       // `expectedPointsNext` final — que passou por mistura com o `ep_next`
