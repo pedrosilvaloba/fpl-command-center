@@ -372,6 +372,16 @@ export interface NewInsightInput {
   kind?: InsightKind;
   /** Sobrepõe o tempo de vida por omissão, em jornadas. */
   lifespanEvents?: number;
+  /**
+   * Quem afirmou isto, quando é uma OPINIÃO EXTERNA e não um facto. Um nome
+   * concreto — "Fantasy Football Scout", "Ben Crellin" — nunca "a
+   * comunidade". A presença deste campo muda como a nota é tratada: passa a
+   * ser cruzada com o que o modelo pensa, e o seu efeito é descontado pela
+   * NOVIDADE. Ver lib/expertviews.ts.
+   */
+  expert?: string;
+  /** Direção da opinião: o especialista está otimista ou pessimista. */
+  stance?: "sobe" | "desce";
 }
 
 export interface RejectedInsight {
@@ -668,6 +678,10 @@ export async function saveDynamicInsights(
         kind: input.kind ?? "noticia",
         ...(typeof input.lifespanEvents === "number"
           ? { lifespanEvents: input.lifespanEvents }
+          : {}),
+        ...(input.expert ? { expert: input.expert } : {}),
+        ...(input.stance === "sobe" || input.stance === "desce"
+          ? { stance: input.stance }
           : {}),
         ...(input.events && input.events.length > 0 ? { events: input.events } : {}),
         ...(typeof input.confidence === "number" ? { confidence: input.confidence } : {}),

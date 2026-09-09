@@ -13,6 +13,13 @@
 
 import { computeDynamicTeamFactors } from "../lib/teamrating";
 import {
+  crossCheckExpertView,
+  crossCheckAll,
+  applyExpertViews,
+  isExpertView,
+  type ExpertView,
+} from "../lib/expertviews";
+import {
   insightStatus,
   triageInsights,
   DEFAULT_NEWS_LIFESPAN_EVENTS,
@@ -8004,6 +8011,195 @@ function testInsightsReachTheModelOnlyWhenValid() {
 }
 
 testInsightsReachTheModelOnlyWhenValid();
+
+
+
+/**
+ * v1.60: AS OPINIÕES DOS ESPECIALISTAS ENTRAM — SEM O MODELO SE TORNAR ECO.
+ *
+ * Pedido do Pedro: a investigação externa não pode ser só lesões, tem de ir
+ * buscar o que os especialistas de FPL dizem e cruzar com o modelo.
+ *
+ * ═══ A ARMADILHA QUE ESTES TESTES EXISTEM PARA FECHAR ═══
+ *
+ * A opinião dos especialistas JÁ ESTÁ quase toda dentro do modelo. A posse
+ * é o consenso agregado de milhões de pessoas que leem esses mesmos
+ * analistas; o preço move-se com esse consenso; o `ep_next` da FPL já
+ * reflete forma e calendário.
+ *
+ * Importar "os especialistas gostam do X" e transformá-lo num multiplicador
+ * não acrescenta informação — acrescenta a MESMA informação uma segunda
+ * vez, e empurra o plantel para o template. Seria o mesmo erro que este
+ * projeto já rejeitou nos chips da liga.
+ *
+ * A regra: uma opinião mexe no modelo na medida da sua NOVIDADE. O teste 2
+ * é o que a tranca.
+ */
+function testExpertViewsAddOnlyWhatIsNew() {
+  // Um pool de médios com pontos esperados decrescentes: o id 1 é o melhor
+  // da posição, o id 20 é o pior.
+  const pool: ScoredPlayer[] = Array.from({ length: 20 }, (_, i) =>
+    ({
+      element: { id: i + 1, web_name: `M${i + 1}`, element_type: 3 },
+      team: { id: 1 },
+      positionShort: "MID",
+      expectedPointsNext: 10 - i * 0.4,
+      expectedPoints: (10 - i * 0.4) * 5,
+      score: (10 - i * 0.4) * 5,
+      ownershipPct: 10,
+      pPlay: 1,
+      reasons: [],
+    }) as unknown as ScoredPlayer
+  );
+
+  const view = (id: number, stance: "sobe" | "desce"): ExpertView => ({
+    scope: "player",
+    id,
+    label: `M${id}`,
+    factor: stance === "sobe" ? 1.15 : 0.85,
+    reason: "opinião de teste",
+    addedDate: "2026-09-08",
+    source: "fonte de teste",
+    writtenForEvent: 4,
+    kind: "noticia",
+    expert: "Analista de Teste",
+    stance,
+  });
+
+  // ── 1. A CLASSIFICAÇÃO ──────────────────────────────────────────────
+  const topBull = crossCheckExpertView(view(1, "sobe"), pool);
+  const bottomBull = crossCheckExpertView(view(19, "sobe"), pool);
+  check(
+    "otimismo sobre quem o modelo já tem no topo = concordância",
+    topBull.agreement === "concorda",
+    `${topBull.agreement} (${topBull.modelRank}.º)`
+  );
+  check(
+    "otimismo sobre quem o modelo despreza = DISCORDÂNCIA",
+    bottomBull.agreement === "discorda",
+    `${bottomBull.agreement} (${bottomBull.modelRank}.º)`
+  );
+  const topBear = crossCheckExpertView(view(1, "desce"), pool);
+  check(
+    "pessimismo sobre quem o modelo adora também é discordância",
+    topBear.agreement === "discorda",
+    topBear.agreement
+  );
+
+  // ── 2. O TESTE QUE IMPEDE O MODELO DE SER ECO ───────────────────────
+  // Concordar não pode mexer no número. Se mexer, a app está a contar o
+  // consenso duas vezes e a empurrar-se para o template — que é o oposito
+  // de encontrar vantagem numa liga.
+  const before = pool.map((p) => p.expectedPointsNext);
+  const agreeApp = applyExpertViews(
+    pool.map((p) => ({ ...p, reasons: [] })) as ScoredPlayer[],
+    [view(1, "sobe")]
+  );
+  check(
+    "uma opinião que o modelo já partilha NÃO mexe no número",
+    agreeApp.adjusted === 0,
+    `${agreeApp.adjusted} jogadores ajustados`
+  );
+  check(
+    "e a novidade dessa opinião é praticamente nula",
+    topBull.novelty < 0.05,
+    `novidade ${topBull.novelty}`
+  );
+
+  // ── 3. MAS UMA DISCORDÂNCIA MEXE MESMO ──────────────────────────────
+  // O erro simétrico seria um sistema que nunca ouve ninguém. Isso não é
+  // rigor, é surdez — e tornaria a recolha inútil.
+  const clone = pool.map((p) => ({ ...p, reasons: [] as string[] })) as ScoredPlayer[];
+  const disagreeApp = applyExpertViews(clone, [view(19, "sobe")]);
+  const moved = clone.find((p) => p.element.id === 19)!;
+  check(
+    "uma opinião que contraria o modelo mexe mesmo no número",
+    disagreeApp.adjusted === 1 && moved.expectedPointsNext > before[18],
+    `${before[18].toFixed(2)} → ${moved.expectedPointsNext.toFixed(2)}`
+  );
+  check(
+    "e a razão fica registada para o utilizador poder discordar dela",
+    moved.reasons.some((r) => r.includes("opinião externa")),
+    moved.reasons.join(" | ").slice(0, 60)
+  );
+
+  // ── 4. O EFEITO CONTINUA LIMITADO ───────────────────────────────────
+  // Uma opinião não pode ter mais poder sobre o modelo do que uma notícia
+  // confirmada. Cinco analistas entusiasmados com o mesmo jogador não
+  // valem 80% de acréscimo.
+  const many = pool.map((p) => ({ ...p, reasons: [] as string[] })) as ScoredPlayer[];
+  applyExpertViews(many, [
+    view(19, "sobe"), view(19, "sobe"), view(19, "sobe"),
+    view(19, "sobe"), view(19, "sobe"),
+  ]);
+  const piled = many.find((p) => p.element.id === 19)!;
+  check(
+    "cinco opiniões no mesmo sentido não ultrapassam o teto de 15%",
+    piled.expectedPointsNext <= before[18] * 1.151,
+    `${before[18].toFixed(2)} → ${piled.expectedPointsNext.toFixed(2)} (teto ${(before[18] * 1.15).toFixed(2)})`
+  );
+
+  // ── 5. O DENOMINADOR É GUARDADO ─────────────────────────────────────
+  // Contar só as discordâncias tornaria impossível saber se elas
+  // significam alguma coisa: três em quatro é um sinal, três em quarenta
+  // é ruído.
+  const summary = crossCheckAll(
+    [view(1, "sobe"), view(2, "sobe"), view(19, "sobe"), view(10, "sobe")],
+    pool
+  );
+  check(
+    "as concordâncias são contadas, apesar de não ajustarem nada",
+    summary.total === 4 && summary.agree >= 1 && summary.disagree >= 1,
+    `total ${summary.total}, concorda ${summary.agree}, discorda ${summary.disagree}`
+  );
+
+  // ── 6. A COMPARAÇÃO É DENTRO DA POSIÇÃO ─────────────────────────────
+  // Um defesa nunca aparece no topo de uma lista dominada por avançados.
+  // Sem esta separação, toda a opinião sobre defesas seria classificada
+  // como discordância — uma consequência do formato da lista, não do
+  // modelo.
+  const mixed: ScoredPlayer[] = [
+    ...pool,
+    ...Array.from({ length: 5 }, (_, i) =>
+      ({
+        element: { id: 100 + i, web_name: `D${i}`, element_type: 2 },
+        team: { id: 1 }, positionShort: "DEF",
+        expectedPointsNext: 4 - i * 0.3,
+        expectedPoints: (4 - i * 0.3) * 5, score: (4 - i * 0.3) * 5,
+        ownershipPct: 10, pPlay: 1, reasons: [],
+      }) as unknown as ScoredPlayer
+    ),
+  ];
+  const bestDefender = crossCheckExpertView(
+    { ...view(100, "sobe"), label: "D0" },
+    mixed
+  );
+  check(
+    "o melhor defesa é lido como concordância, não como discordância",
+    bestDefender.agreement === "concorda" && bestDefender.poolSize === 5,
+    `${bestDefender.agreement}, ${bestDefender.modelRank}.º de ${bestDefender.poolSize}`
+  );
+
+  // ── 7. UMA NOTA SEM ESPECIALISTA NÃO É UMA OPINIÃO ──────────────────
+  // Os factos (notícias verificadas) seguem o caminho normal e entram no
+  // modelo diretamente. Confundir os dois faria uma lesão confirmada ser
+  // descontada por "novidade", o que é absurdo.
+  check(
+    "uma nota sem `expert` não é tratada como opinião",
+    isExpertView({
+      scope: "player", id: 1, label: "x", factor: 0.9, reason: "r",
+      addedDate: "2026-09-08", source: "s", writtenForEvent: 4, kind: "noticia",
+    }) === false,
+    "facto, não opinião"
+  );
+  check(
+    "e uma com `expert` é",
+    isExpertView(view(1, "sobe")) === true,
+    "opinião"
+  );
+}
+
+testExpertViewsAddOnlyWhatIsNew();
 
 void testLossCanNoLongerLookLikeEmptiness()
   .then(() => testOneRefusalNoLongerKillsTheWholeApp())

@@ -300,6 +300,15 @@ export async function processInsightSubmission(
       ...(r?.kind === "papel" || r?.kind === "duradoura"
         ? { kind: r.kind as "papel" | "duradoura" }
         : {}),
+      // Opinião externa: quem a disse, e em que direção. A presença de
+      // `expert` faz a nota ser cruzada com o modelo em vez de aplicada
+      // diretamente — ver lib/expertviews.ts.
+      ...(typeof r?.expert === "string" && r.expert.length > 1
+        ? { expert: r.expert as string }
+        : {}),
+      ...(r?.stance === "sobe" || r?.stance === "desce"
+        ? { stance: r.stance as "sobe" | "desce" }
+        : {}),
     });
   }
 

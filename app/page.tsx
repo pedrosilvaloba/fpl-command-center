@@ -27,6 +27,8 @@ import {
 } from "@/lib/accuracy";
 import { loadActiveInsights, getLastResearchRun } from "@/lib/managerinsights";
 import { triageInsights, insightStatus } from "@/lib/insightlife";
+import { isExpertView, applyExpertViews } from "@/lib/expertviews";
+import ExpertViewsPanel from "@/components/ExpertViewsPanel";
 import { isStorageConfigured } from "@/lib/kv";
 import { computeSquadRisk } from "@/lib/correlation";
 import { computeSquadRankProfile } from "@/lib/rankvalue";
@@ -427,7 +429,22 @@ export default async function Home() {
   // nunca existiu, e foi assim que este problema durou três semanas sem
   // ninguém conseguir apontar-lhe o dedo.
   const triaged = triageInsights(allInsights, fromEvent);
-  const activeInsights = triaged.active;
+
+  // ═══ FACTOS E OPINIÕES SEGUEM CAMINHOS DIFERENTES ═══
+  //
+  // Uma notícia verificada ("Carrick confirmou queixa física") entra no
+  // modelo como qualquer outro dado. Uma OPINIÃO de especialista não pode:
+  // para saber se ela acrescenta alguma coisa, é preciso primeiro saber o
+  // que o modelo pensa sozinho. Se a opinião entrasse no cálculo desde o
+  // início, estaria a contaminar a própria referência contra a qual
+  // queremos medi-la.
+  //
+  // Por isso: os factos entram no `buildScoredPlayers`; as opiniões são
+  // cruzadas com o resultado e aplicadas depois, com o peso descontado pela
+  // novidade. Ver lib/expertviews.ts.
+  const factInsights = triaged.active.filter((n) => !isExpertView(n));
+  const expertOpinions = triaged.active.filter(isExpertView);
+  const activeInsights = factInsights;
 
   const rawScored = buildScoredPlayers(
     bootstrap,
@@ -439,6 +456,12 @@ export default async function Home() {
   );
   const learning = await getLearningState();
   const scored = applyCalibration(rawScored, learning.calibration);
+
+  // As opiniões externas entram AQUI, sobre um modelo já formado. O
+  // resultado do cruzamento é guardado para o ecrã: a contagem de
+  // concordâncias é tão importante como a de discordâncias, porque sem
+  // denominador "discordaram três vezes" não quer dizer nada.
+  const expertCheck = applyExpertViews(scored, expertOpinions);
 
   // ---- league standings (optional) --------------------------------------
   let leagueName: string | null = null;
@@ -1170,6 +1193,19 @@ export default async function Home() {
                 </p>
               </div>
             )}
+          </div>
+
+          <div className="mt-6 border-t border-border pt-5">
+            <SubHeading>Opiniões de especialistas — cruzadas com o modelo</SubHeading>
+            <p className="mb-3 text-[13px] leading-relaxed text-text-muted">
+              A investigação semanal recolhe o que analistas e fóruns de FPL
+              estão a dizer. O valor não está em concordarem — a percentagem
+              de posse já é o consenso de milhões de pessoas que os leem. Está
+              em <strong className="text-text">discordarem</strong>: aí, ou
+              eles sabem algo que os números não mostram, ou estão enganados,
+              e as duas hipóteses são úteis.
+            </p>
+            <ExpertViewsPanel application={expertCheck} />
           </div>
 
           <div className="mt-6 border-t border-border pt-5">
