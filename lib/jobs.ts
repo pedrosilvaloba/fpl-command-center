@@ -18,6 +18,9 @@ import {
 } from "./decisions";
 import { DEFAULT_TEAM_ID } from "./constants";
 import { getRedis } from "./kv";
+import { recordOutcomesForFinishedEvents } from "./accuracy";
+import { settleStrategies } from "./strategylearning";
+import { settleForwardSnapshots } from "./forwardbenchmark";
 import {
   LAST_SEASON_KEY,
   ratesFromHistoryPast,
@@ -651,6 +654,16 @@ export async function runDecisionsJob(
     await redis.set(OUTCOME_KEY(event), outcome);
     settled.push(event);
   }
+  // Tracking is deterministic arithmetic over completed GWs. Schedule it
+  // with the daily cron, not on every visitor's SSR request.
+  const finishedEvents = [...finished].sort((a, b) => a - b);
+  const trackingResults = await Promise.allSettled([
+    recordOutcomesForFinishedEvents(finishedEvents),
+    settleStrategies(finishedEvents),
+    settleForwardSnapshots(finishedEvents),
+  ]);
+  const trackingFailures = trackingResults.filter((r) => r.status === "rejected").length;
+  if (trackingFailures) console.warn("fpl-tracking-partial", { trackingFailures });
   return {
     ok: true,
     result: { settled },
