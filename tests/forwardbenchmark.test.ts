@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { buildForwardSnapshot, scoreForwardSnapshot } from "../lib/forwardbenchmark";
+import { buildAccuracyPicks } from "../lib/accuracy";
 import { makeElement } from "./fixtures";
 import type { ScoredPlayer } from "../lib/recommend";
 
@@ -57,5 +58,12 @@ assert.ok(resZero.model.mae > 0);
 const missing = elements.map((e) => ({ ...e, ep_next: undefined }));
 const missingSnap = buildForwardSnapshot(scored, missing, 8, deadline, before);
 assert.equal(missingSnap?.players[0].fpl, null);
+
+// The legacy accuracy tracker had a 5-GW / 1-GW horizon mismatch.
+const p1 = { ...scored[1], score: 30, expectedPointsNext: 1 } as ScoredPlayer;
+const p2 = { ...scored[3], score: 5, expectedPointsNext: 9 } as ScoredPlayer;
+const oneWeek = buildAccuracyPicks([p1, p2]);
+assert.equal(oneWeek[0].elementId, p2.element.id, "sort by next GW, not 5-week score");
+assert.equal(oneWeek[0].score, 9, "snapshot actual next GW forecast");
 
 console.log("forward prospective benchmark tests passed");
