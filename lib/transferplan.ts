@@ -554,6 +554,9 @@ interface SolveOptions {
   /** Jogadores que o gestor fixou: têm de ficar no plantel. Só usado nos
    * cenários de chip — ver `keepIds` em planTransfers. */
   forceIds?: Set<number>;
+  /** Retenção por jogador, em pontos-janela, a substituir `retention` para
+   * quem está no plantel. Ver `provenIncumbentBonus`. */
+  incumbentBonus?: Map<number, number>;
 }
 
 function solveSquad(opts: SolveOptions): ScoredPlayer[] | null {
@@ -609,7 +612,11 @@ function solveSquad(opts: SolveOptions): ScoredPlayer[] | null {
     const valueXi = raw.xi;
 
     variables[squadVar] = {
-      score: valueSquad * BENCH_WEIGHT + (isOwned ? retentionInObjectiveUnits(retention) : 0),
+      score:
+        valueSquad * BENCH_WEIGHT +
+        (isOwned
+          ? retentionInObjectiveUnits(opts.incumbentBonus?.get(p.element.id) ?? retention)
+          : 0),
       cost: costM.get(p.element.id) ?? p.priceM,
       [POS_KEY[p.element.element_type]]: 1,
       [`club_${p.team.id}`]: 1,
@@ -1270,6 +1277,7 @@ export function planTransfers(
     wildcardPlan,
     retention,
     keepIds: new Set((opts.keepIds ?? []).filter((id) => ownedIds.has(id))),
+    scored,
   });
 
   return {
@@ -1310,6 +1318,7 @@ function buildChipScenarios(ctx: {
   wildcardPlan: TransferPlan | null;
   retention: number;
   keepIds: Set<number>;
+  scored: ScoredPlayer[];
 }): ChipScenario[] {
   const { base, state, costM, beta, risers, fallers, ownedSquad, hold, recommended } = ctx;
   const out: ChipScenario[] = [];
@@ -1331,6 +1340,10 @@ function buildChipScenarios(ctx: {
   // sai a exigência de vantagem sobre quem já está no plantel.
   const wcAvailable = chipAvailable(state, "wildcard");
   const forceIds = ctx.keepIds.size > 0 ? ctx.keepIds : undefined;
+  const incumbentBonus = provenIncumbentBonus(ctx.ownedSquad, ctx.scored, ctx.retention);
+  const incumbentBonusNext = new Map(
+    [...incumbentBonus].map(([id, b]) => [id, b / WINDOW_GAMEWEEKS] as [number, number])
+  );
   const keptIds = [...ctx.keepIds];
   // A troca é "clara" quando ganha mais do que o erro de comparação entre os
   // dois jogadores — o mesmo `retention` que o planeador normal usa para não
@@ -1360,6 +1373,7 @@ function buildChipScenarios(ctx: {
   const wcSolved = solveSquad({
     ...base,
     forceIds,
+    incumbentBonus,
     retention: 0,
     maxTransfers: SQUAD_SIZE,
     freeTransfers: SQUAD_SIZE,
@@ -1414,6 +1428,7 @@ function buildChipScenarios(ctx: {
   const fhSolved = solveSquad({
     ...base,
     forceIds,
+    incumbentBonus: incumbentBonusNext,
     pool: base.pool.map(nextOnly),
     // Trocas grátis: o mesmo raciocínio do Wildcard, sem travão de retenção.
     retention: 0,
@@ -1504,5 +1519,57 @@ function buildChipScenarios(ctx: {
         }`,
   });
 
+  return out;
+}
+
+/**
+ * QUANDO O MODELO NÃO SABE, DECIDE O QUE JÁ ACONTECEU EM CAMPO.
+ *
+ * Em produção, à GW8, o Wildcard vendia o João Pedro (47 pts em 7 jornadas)
+ * pelo Barry (28 pts), porque o modelo dava ao Barry 24,3 pts nas próximas
+ * 5 jornadas e ao João Pedro 22,4. Essa diferença está DENTRO da margem de
+ * erro do próprio modelo — o backtest mostra que, entre titulares, ele não
+ * distingue diferenças deste tamanho. Com as trocas grátis do Wildcard, o
+ * solver usava esse ruído para libertar dinheiro para outra troca.
+ *
+ * A regra: um jogador do teu plantel que está a pontuar acima do normal na
+ * posição só sai se o substituto for CLARAMENTE melhor — por mais do que a
+ * margem de erro (`retention`). Quem está abaixo da média não tem proteção
+ * nenhuma; entre os dois, proteção proporcional.
+ *
+ * Não é "nunca vender os melhores": um reforço claramente superior continua
+ * a entrar. É pôr o ónus da prova em quem chega, quando a única prova que
+ * existe — os pontos reais — está do lado de quem já cá está.
+ */
+export function provenIncumbentBonus(
+  owned: ScoredPlayer[],
+  scored: ScoredPlayer[],
+  retention: number,
+  minMinutes = 270
+): Map<number, number> {
+  const ppg = (p: ScoredPlayer) => Number(p.element.points_per_game) || 0;
+  const regulars = (type: number) =>
+    scored
+      .filter((p) => p.element.element_type === type && (Number(p.element.minutes) || 0) >= minMinutes)
+      .map(ppg)
+      .sort((a, b) => a - b);
+  const stats = new Map<number, { mean: number; top: number }>();
+  for (const type of [1, 2, 3, 4]) {
+    const xs = regulars(type);
+    if (xs.length < 5) continue;
+    const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const top = xs[Math.min(xs.length - 1, Math.floor(xs.length * 0.9))];
+    stats.set(type, { mean, top });
+  }
+  const out = new Map<number, number>();
+  for (const p of owned) {
+    const st = stats.get(p.element.element_type);
+    if (!st || (Number(p.element.minutes) || 0) < minMinutes || st.top <= st.mean) {
+      out.set(p.element.id, 0);
+      continue;
+    }
+    const strength = Math.min(1, Math.max(0, (ppg(p) - st.mean) / (st.top - st.mean)));
+    out.set(p.element.id, Math.round(retention * strength * 100) / 100);
+  }
   return out;
 }

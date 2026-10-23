@@ -141,7 +141,7 @@ import {
   type SquadState,
   type ChipStatus,
 } from "../lib/squadstate";
-import { planTransfers, noiseFloor, costlyMoves } from "../lib/transferplan";
+import { planTransfers, noiseFloor, costlyMoves, provenIncumbentBonus } from "../lib/transferplan";
 import { computeSquadRisk, computeTeamExposures } from "../lib/correlation";
 import { computeRankValue, computeSquadRankProfile } from "../lib/rankvalue";
 import {
@@ -8593,6 +8593,61 @@ function testChipScenariosAnswerTheQuestionAsked() {
   check("parseKeepParam lê ids e ignora lixo", parseKeepParam("12, 7,x,-3,12,0") .join(",") === "12,7");
   check("parseKeepParam aceita vazio", parseKeepParam(undefined).length === 0);
   check("parseChipParam só aceita chips conhecidos", parseChipParam("wildcard") === "wildcard" && parseChipParam("hack") === null);
+
+  // QUANDO O MODELO NÃO SABE, DECIDE O QUE JÁ ACONTECEU EM CAMPO.
+  // O Wildcard vendia o João Pedro (47 pts) pelo Barry (28 pts) por uma
+  // diferença de previsão dentro da margem de erro. Um titular a pontuar bem
+  // só sai se o substituto for CLARAMENTE melhor.
+  const provenCase = (gain: number) => {
+    const pool = mkTransferPool([gain]);
+    // Uma distribuição normal de pontos por jogo (2,0 a 5,0), para a
+    // posição ter média e topo distintos — como na realidade.
+    pool.scored.forEach((p, i) => {
+      p.element.minutes = 630;
+      p.element.points_per_game = (2 + (i % 7) * 0.5).toFixed(1);
+    });
+    const first = planTransfers(pool.scored, mkState(pool.owned, 1), { currentEvent: 8 });
+    const swap = first.scenarios
+      .find((s) => s.chip === "wildcard")!
+      .plan!.moves.find((m) => m.out.element.element_type === 3);
+    return { pool, swap };
+  };
+  const small2 = provenCase(1.5);
+  check("sem prova em campo, a troca pequena acontece (controlo)", !!small2.swap);
+  if (small2.swap) {
+    small2.swap.out.element.points_per_game = "7.0";
+    const again = planTransfers(small2.pool.scored, mkState(small2.pool.owned, 1), { currentEvent: 8 });
+    const wcAgain = again.scenarios.find((s) => s.chip === "wildcard")!;
+    check(
+      "um titular a pontuar muito acima da média NÃO é vendido por uma diferença dentro do ruído",
+      wcAgain.plan!.squad.some((p) => p.element.id === small2.swap!.out.element.id)
+    );
+  }
+  const big = provenCase(14);
+  check("controlo: com reforço claro há troca no meio-campo", !!big.swap);
+  if (big.swap) {
+    // TODOS os médios do plantel em grande forma: o reforço só entra se
+    // vencer a proteção — que é o que tem de acontecer quando é claro.
+    for (const p of big.pool.owned) if (p.element.element_type === 3) p.element.points_per_game = "7.0";
+    const again = planTransfers(big.pool.scored, mkState(big.pool.owned, 1), { currentEvent: 8 });
+    const wcAgain = again.scenarios.find((s) => s.chip === "wildcard")!;
+    check(
+      "mas um reforço CLARAMENTE melhor continua a entrar, mesmo contra titulares em forma",
+      wcAgain.plan!.squad.some((p) => p.element.id === big.swap!.in.element.id)
+    );
+  }
+  const bonus = provenIncumbentBonus(
+    small2.pool.owned,
+    small2.pool.scored,
+    5
+  );
+  check("proteção nunca passa a margem de erro", [...bonus.values()].every((b) => b >= 0 && b <= 5));
+  check(
+    "quem pontua abaixo da média da posição não tem proteção",
+    small2.pool.owned
+      .filter((p) => Number(p.element.points_per_game) <= 3)
+      .every((p) => (bonus.get(p.element.id) ?? 0) === 0)
+  );
 
   // Chip já usado: o cenário continua lá, marcado como indisponível e nunca aconselhado.
   const used = mkState(owned, 1);
