@@ -1013,6 +1013,14 @@ export default async function Home({
             <p className="font-display text-lg font-bold leading-snug tracking-tight sm:text-xl md:text-2xl">
               {decisionHeadline}
             </p>
+            {squadState.available && squadState.chips.some((chip) => chip.name === "wildcard" && chip.remaining > 0) && (
+              <a
+                href={`/?chip=wildcard&perfil=${wildcardProfile}#cenarios`}
+                className="mt-2 inline-block text-[13px] font-semibold text-accent underline underline-offset-2"
+              >
+                Quero explorar alternativas de Wildcard, mesmo que o modelo aconselhe guardar →
+              </a>
+            )}
             <div className="mt-2.5 flex flex-wrap items-baseline gap-x-5 gap-y-2">
               <Fact
                 label="Capitão"
