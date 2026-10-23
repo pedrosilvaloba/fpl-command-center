@@ -850,6 +850,9 @@ export function pickBestXIChecked(squad: ScoredPlayer[]): {
  * the dial can reproduce that failure.
  */
 export const MIN_STRATEGIC_RETENTION = 0.8;
+/** Igual a POSTURE_TIEBREAK em lib/optimizer.ts (não importado para não
+ * criar um ciclo): a posse só desempata, não tira pontos esperados. */
+export const CAPTAIN_POSTURE_TIEBREAK = 0.05;
 
 /**
  * A probabilidade mínima de o capitão NÃO aparecer, por muito garantido que
@@ -977,7 +980,8 @@ export function pickCaptain(
       ? p.expectedPointsNext *
         Math.max(
           MIN_STRATEGIC_RETENTION,
-          1 - beta * Math.min(1, Math.max(0, p.ownershipPct / 100))
+          // Só desempate — ver POSTURE_TIEBREAK em lib/optimizer.ts.
+          1 - beta * CAPTAIN_POSTURE_TIEBREAK * Math.min(1, Math.max(0, p.ownershipPct / 100))
         )
       : p.expectedPointsNext;
     if (!spreadWeight) return base;

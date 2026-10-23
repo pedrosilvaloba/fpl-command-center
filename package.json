@@ -4,13 +4,14 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "npm run test && next build",
     "start": "next start",
     "lint": "eslint",
     "test": "tsx tests/regression.test.ts",
     "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",
     "verify": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json && eslint && tsx tests/regression.test.ts && tsx tests/perf.test.ts",
-    "perf": "tsx tests/perf.test.ts"
+    "perf": "tsx tests/perf.test.ts",
+    "build:next": "next build"
   },
   "dependencies": {
     "@upstash/redis": "^1.38.2",

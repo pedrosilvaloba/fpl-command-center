@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkCronAuth } from "@/lib/apitoken";
-import { runBacktestJob, runCalibrationJob } from "@/lib/jobs";
+import {
+  runBacktestJob,
+  runCalibrationJob,
+  runLastSeasonJob,
+  runEliteJob,
+  runDecisionsJob,
+} from "@/lib/jobs";
 import { startJobRun, finishJobRun } from "@/lib/joblog";
 
 /**
@@ -74,7 +80,11 @@ const BACKTEST_SCHEDULE = "0 6 * * *";
 /** The schedule that runs the calibration sweep. Must match vercel.json. */
 const CALIBRATION_SCHEDULE = "0 7 * * *";
 
-export type CronPlan = { backtest: boolean; calibration: boolean };
+/** Trabalhos leves que correm DEPOIS dos principais, com o tempo que sobrar.
+ * Não contam como "uma tarefa por horário": são manutenção de dados. */
+export type CronExtra = "lastseason" | "elite" | "decisions";
+export type CronPlan = { backtest: boolean; calibration: boolean; extras: CronExtra[] };
+const ALL_EXTRAS: CronExtra[] = ["lastseason", "elite", "decisions"];
 
 /**
  * What this invocation should do.
@@ -90,12 +100,17 @@ export function planFromRequest(
   schedule: string | null | undefined,
   only: string | null | undefined
 ): CronPlan {
-  if (only === "backtest") return { backtest: true, calibration: false };
-  if (only === "calibration") return { backtest: false, calibration: true };
+  if (only === "backtest") return { backtest: true, calibration: false, extras: [] };
+  if (only === "calibration") return { backtest: false, calibration: true, extras: [] };
+  if (only && (ALL_EXTRAS as string[]).includes(only)) {
+    return { backtest: false, calibration: false, extras: [only as CronExtra] };
+  }
   const s = (schedule ?? "").trim();
-  if (s === BACKTEST_SCHEDULE) return { backtest: true, calibration: false };
-  if (s === CALIBRATION_SCHEDULE) return { backtest: false, calibration: true };
-  return { backtest: true, calibration: true };
+  // A época passada e a elite vêm ANTES do backtest das 6h: o backtest usa
+  // a época passada, e a elite tem de estar fresca para a página da manhã.
+  if (s === BACKTEST_SCHEDULE) return { backtest: true, calibration: false, extras: ALL_EXTRAS };
+  if (s === CALIBRATION_SCHEDULE) return { backtest: false, calibration: true, extras: ["elite"] };
+  return { backtest: true, calibration: true, extras: ALL_EXTRAS };
 }
 
 export async function GET(req: NextRequest) {
@@ -113,6 +128,35 @@ export async function GET(req: NextRequest) {
   const schedule = req.headers.get("x-vercel-cron-schedule");
   const plan = planFromRequest(schedule, req.nextUrl.searchParams.get("only"));
   const ran: Record<string, unknown> = {};
+
+  // Os extras de dados correm primeiro: são baratos (a época passada só
+  // trabalha uma vez por mês) e o backtest depende de um deles.
+  for (const extra of plan.extras) {
+    if (deadline - Date.now() < 20_000) {
+      ran[extra] = { ok: null, skipped: "sem tempo" };
+      continue;
+    }
+    const entry = await startJobRun(extra, trigger);
+    try {
+      const out =
+        extra === "lastseason"
+          ? await runLastSeasonJob({ deadlineMs: Math.min(deadline - 60_000, Date.now() + 150_000) })
+          : extra === "elite"
+            ? await runEliteJob({ deadlineMs: Math.min(deadline - 30_000, Date.now() + 120_000) })
+            : await runDecisionsJob();
+      await finishJobRun(entry, {
+        ok: out.ok,
+        summary: out.ok ? out.summary : out.error,
+        productive: out.ok ? out.productive : false,
+        detail: out.ok ? out.detail : { error: out.error, retryable: out.retryable },
+      });
+      ran[extra] = out.ok ? { ok: true, summary: out.summary } : { ok: false, error: out.error };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "falha desconhecida";
+      await finishJobRun(entry, { ok: false, summary: message });
+      ran[extra] = { ok: false, error: message };
+    }
+  }
 
   // ---- Backtest --------------------------------------------------------
   // Runs first when both are asked for: it is the cheaper of the two, and it

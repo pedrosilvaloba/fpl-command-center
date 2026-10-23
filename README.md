@@ -90,6 +90,48 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.62 — as melhorias do relatório do consultor (23 out 2026)
+
+O relatório comparou a época com os 50 primeiros da classificação geral
+(594,5 pts à GW7 contra 387) e concluiu que o modelo prevê tanto como a
+média de pontos por jogo. Estas são as mudanças, cada uma com teste:
+
+1. **Época passada como prior** (`lib/lastseason.ts`). As taxas de cada
+   jogador deixam de ser encolhidas para zero: o alvo passa a ser a época
+   anterior (`history_past`) misturada com o prior por preço. Medido no
+   backtest (GW2-7, 250 jogadores, `scripts/eval-model.ts`): viés −0,70 →
+   −0,26, Spearman 0,338 → 0,352, lift do decil 2,71 → 3,02. O MAE sobe
+   0,08. A melhoria na ordenação é pequena e ainda dentro do ruído; o modelo
+   continua sem bater claramente a média de pontos por jogo.
+2. **A posse saiu do valor esperado** (`POSTURE_TIEBREAK` em
+   `lib/optimizer.ts`). Ter A em vez de B rende a diferença de pontos dos
+   dois, seja qual for a posse; a postura fica só como desempate.
+3. **Sinal de elite** (`lib/elite.ts`). O cron lê os 200 primeiros da geral e
+   as escolhas deles; a app mostra os jogadores que a elite tem a 70%+ e tu
+   não, e a posse da elite em cada linha dos cenários.
+4. **Capitão por omissão = o da elite.** O modelo só o contraria quando
+   prevê mais do que o seu próprio erro medido (MAE do backtest, mínimo 2).
+5. **Calendário de chips** (`lib/chipcalendar.ts`): os chips da primeira
+   metade caducam na GW19 e não há duplas previstas, por isso são
+   distribuídos pelas jornadas que restam em vez de guardados.
+6. **"Incluir" nos cenários de Wildcard e Free Hit** (`?incluir=`): forçar
+   a compra de um jogador e montar o resto à volta dele.
+7. **Registo de decisões** (`lib/decisions.ts`): o conselho de cada jornada
+   fica guardado até ao deadline; quando a jornada termina, o cron compara
+   o onze e o capitão da app com os teus, pela mesma regra.
+8. **Testes antes de publicar.** O build da Vercel corre a suite de
+   regressão antes de compilar, e há uma verificação no GitHub.
+9. **Página mais leve.** O Shadow Team e A Minha Equipa recebiam os ~560
+   jogadores completos (a maior parte dos 4,4 MB); passam a receber só os
+   campos que usam.
+
+**Testado e rejeitado:** juntar as margens de incerteza numa só, tirando o
+piso de ruído aos planos que já passaram a retenção. Com ruído puro de 0,8
+pts por jornada o planeador passava a recomendar trocas que valem zero, por
+isso o piso fica.
+
+---
+
 ## Novo na v1.61 — "e se eu usasse um chip esta semana?", e a app volta a publicar
 
 ### 1. Nenhuma versão desde 9 de setembro chegou à app

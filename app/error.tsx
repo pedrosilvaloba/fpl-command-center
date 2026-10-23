@@ -76,6 +76,9 @@ export default function Error({
         >
           Tentar outra vez
         </button>
+        {/* Um <a> e não <Link> de propósito: depois de um erro, o recarregamento
+            completo é o que limpa o estado partido. */}
+        {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
         <a
           href="/"
           className="rounded-md border border-border px-4 py-2 text-sm font-semibold text-text"

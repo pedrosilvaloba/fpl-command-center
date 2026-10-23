@@ -156,8 +156,15 @@ export const DEFAULT_MODEL_PARAMS: ModelParams = {
   startPriorFixtures: 0,
   // Ver a nota acima: construído, medido, e deliberadamente a zero porque a
   // medição não o suportou.
-  pricePriorWeight: 0,
-  lastSeasonShare: 0,
+  // v1.62 — LIGADOS, com medição. Backtest de 23 out 2026 (GW2-7, 250
+  // jogadores, scripts/eval-model.ts): viés −0,70 → −0,26, Spearman 0,338
+  // → 0,352, lift do decil 2,71 → 3,02, inclinação entre titulares 0,13
+  // → 0,17. O MAE sobe 0,08 (2,24 → 2,32). A melhoria na ordenação é real
+  // mas pequena e ainda dentro do ruído de 6 jornadas; o que decidiu foi o
+  // viés cortado para menos de metade e a ordenação melhor em todas as
+  // variantes com prior. Ver o README v1.62.
+  pricePriorWeight: 1,
+  lastSeasonShare: 1,
 };
 
 /** Merge an override onto the defaults. Anything absent keeps its shipped

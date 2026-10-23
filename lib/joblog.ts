@@ -20,7 +20,7 @@ import { getRedis } from "./kv";
  * A log of successes only would have shown nothing wrong for six weeks.
  */
 
-export type JobName = "backtest" | "calibration" | "research";
+export type JobName = "backtest" | "calibration" | "research" | "lastseason" | "elite" | "decisions";
 
 export interface JobRun {
   job: JobName;
@@ -178,6 +178,9 @@ const JOB_LABEL: Record<JobName, string> = {
   backtest: "Backtest",
   calibration: "Calibração",
   research: "Investigação tática",
+  lastseason: "Época passada",
+  elite: "Elite (top da geral)",
+  decisions: "Registo de decisões",
 };
 
 /** How often each job is supposed to happen. The two computational jobs run
@@ -188,6 +191,10 @@ const EXPECTED_EVERY_DAYS: Record<JobName, number> = {
   backtest: 2,
   calibration: 2,
   research: 9,
+  // Só refaz de 20 em 20 dias; um "em cache" conta como sucesso.
+  lastseason: 25,
+  elite: 2,
+  decisions: 9,
 };
 
 export async function getJobHealth(): Promise<JobHealth[]> {

@@ -1,0 +1,24 @@
+# Corre os testes, os tipos e o lint em cada envio para o GitHub.
+#
+# Porque existe: a 9 de setembro de 2026 um envio deixou de fora um ficheiro
+# (components/DispersionPanel.tsx) e nenhuma versão chegou à app durante seis
+# semanas sem ninguém dar por isso. O build da Vercel também corre a suite de
+# regressão antes de compilar (package.json → "build"), por isso um teste
+# falhado já não chega a produção; isto dá o aviso logo no GitHub.
+name: verify
+on:
+  push:
+  pull_request:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx next typegen
+      - run: npm run verify

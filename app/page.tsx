@@ -79,7 +79,22 @@ import LeagueChipsPanel from "@/components/LeagueChipsPanel";
 import CaptainShortlist from "@/components/CaptainShortlist";
 import DeferralPanel from "@/components/DeferralPanel";
 import ChipScenarioPanel from "@/components/ChipScenarioPanel";
-import { toScenarioViews, parseKeepParam, parseChipParam } from "@/lib/chipscenarioview";
+import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates } from "@/lib/chipscenarioview";
+import ElitePanel from "@/components/ElitePanel";
+import type { ScoredPlayer } from "@/lib/recommend";
+import DecisionLogPanel from "@/components/DecisionLogPanel";
+import ChipCalendarPanel from "@/components/ChipCalendarPanel";
+import {
+  ELITE_KEY,
+  normalizeElite,
+  eliteGaps,
+  eliteOwn,
+  chooseCaptainWithElite,
+  captainOverrideMargin,
+} from "@/lib/elite";
+import { recordAdvice, getDecisionHistory } from "@/lib/decisions";
+import { planChipCalendar } from "@/lib/chipcalendar";
+import { loadLastSeasonTable } from "@/lib/jobs";
 import { fetchLeagueChipState } from "@/lib/rivalchips";
 import { EMPTY_LEAGUE_CHIP_STATE } from "@/lib/rivalchips";
 
@@ -166,8 +181,11 @@ function TierHeading({ label, note }: { label: string; note: string }) {
  */
 function StaleDataBanner({
   health,
+  now,
 }: {
   health: { degraded: boolean; oldestSnapshotAt: number | null };
+  /** A hora do pedido, passada de cima: um componente não lê o relógio. */
+  now: number;
 }) {
   if (!health.degraded || health.oldestSnapshotAt === null) return null;
   const when = new Date(health.oldestSnapshotAt).toLocaleString("pt-PT", {
@@ -177,7 +195,7 @@ function StaleDataBanner({
     hour: "2-digit",
     minute: "2-digit",
   });
-  const hours = Math.round((Date.now() - health.oldestSnapshotAt) / 3_600_000);
+  const hours = Math.round((now - health.oldestSnapshotAt) / 3_600_000);
   return (
     <div className="rounded-md border border-warn/40 bg-warn/10 px-4 py-3">
       <p className="eyebrow text-warn">Dados desatualizados</p>
@@ -305,7 +323,9 @@ export default async function Home({
   // gestor fixou. Só mexe nos cenários; o resto da página não muda.
   const sp = await searchParams;
   const keepIds = parseKeepParam(sp.manter);
-  const initialChip = parseChipParam(sp.chip) ?? (keepIds.length > 0 ? "wildcard" : null);
+  const includeIds = parseKeepParam(sp.incluir);
+  const initialChip =
+    parseChipParam(sp.chip) ?? (keepIds.length + includeIds.length > 0 ? "wildcard" : null);
   const [bootstrap, fixtures, oddsResult] = await Promise.all([
     getBootstrap(),
     // Full season (past + future), not just upcoming — the dynamic team-
@@ -462,13 +482,25 @@ export default async function Home({
   const expertOpinions = triaged.active.filter(isExpertView);
   const activeInsights = factInsights;
 
+  // A época passada (prior das taxas) e a elite (consenso dos melhores),
+  // ambas recolhidas pelo cron e lidas do Redis. Sem elas a página funciona
+  // exatamente como antes.
+  const eliteRedis = getRedis();
+  const [lastSeasonTable, elite] = await Promise.all([
+    loadLastSeasonTable(),
+    eliteRedis
+      ? eliteRedis.get(ELITE_KEY).then(normalizeElite).catch(() => null)
+      : Promise.resolve(null),
+  ]);
   const rawScored = buildScoredPlayers(
     bootstrap,
     fixtures,
     fromEvent,
     5,
     oddsMatches,
-    activeInsights
+    activeInsights,
+    undefined,
+    lastSeasonTable
   );
   const learning = await getLearningState();
   const levelled = applyCalibration(rawScored, learning.calibration);
@@ -640,7 +672,11 @@ export default async function Home({
     likelyFallers: fallers.map((r) => r.element.id),
     calendar,
   };
-  const transferAdvice = planTransfers(scored, squadState, { ...transferPlanOpts, keepIds });
+  const transferAdvice = planTransfers(scored, squadState, {
+    ...transferPlanOpts,
+    keepIds,
+    includeIds,
+  });
 
   // "E se não gastar nada esta semana, para na próxima ter duas e meter os
   // dois jogadores que quero?" — a pergunta que qualquer gestor faz e que o
@@ -731,8 +767,15 @@ export default async function Home({
 
   // The one sentence the whole page exists to produce. Kept short enough to
   // read at a glance; the full reasoning lives in the panel below it.
-  const decisionCaptain =
-    transferAdvice.recommended?.captain ?? captain;
+  // v1.62 — CAPITÃO POR OMISSÃO = O DA ELITE. O modelo só o contraria
+  // quando prevê mais do que o seu próprio erro medido (lib/elite.ts).
+  const captainDecision = chooseCaptainWithElite(
+    transferAdvice.recommended?.xi ?? starters,
+    transferAdvice.recommended?.captain ?? captain,
+    elite,
+    captainOverrideMargin(backtest?.metrics.mae)
+  );
+  const decisionCaptain = captainDecision.captain;
   // O VICE PASSA A ESTAR NO CABEÇALHO, AO LADO DO CAPITÃO.
   //
   // É uma decisão que se toma na mesma altura, no mesmo ecrã da FPL, e que
@@ -740,8 +783,13 @@ export default async function Home({
   // motivos: até à v1.41 era escolhido ao acaso (o termo do seguro valia
   // zero para um capitão indiscutível, e ficava o primeiro do array), e um
   // número que ninguém vê é um número que ninguém verifica.
+  const modelVice = transferAdvice.recommended?.viceCaptain ?? viceCaptain;
+  // Se a elite levou a braçadeira para o vice do modelo, o vice passa a ser
+  // o capitão do modelo — a segunda melhor opção continua lá.
   const decisionVice =
-    transferAdvice.recommended?.viceCaptain ?? viceCaptain;
+    modelVice && decisionCaptain && modelVice.element.id === decisionCaptain.element.id
+      ? captainDecision.modelChoice
+      : modelVice;
   const decisionHeadline = (() => {
     const plan = transferAdvice.recommended;
     if (!plan) {
@@ -785,12 +833,82 @@ export default async function Home({
     chips: squadState.chips,
     xi: transferAdvice.recommended?.xi ?? starters,
     bench: transferAdvice.recommended?.bench ?? bench,
-    captain: transferAdvice.recommended?.captain ?? captain,
+    captain: decisionCaptain,
     calendar,
     leagueChips: leagueChipState.available ? leagueChipState.summaries : undefined,
     projections: chipProjections,
   });
   const xiExpected = starters.reduce((s, p) => s + p.expectedPointsNext, 0);
+
+  // ---- v1.62: elite, calendário de chips, registo de decisões ---------
+  const ownedIdSet = new Set(squadState.owned.map((o) => o.elementId));
+  const eliteMissing = eliteGaps(elite, scored, ownedIdSet);
+  const ownedScored = scored.filter((p) => ownedIdSet.has(p.element.id));
+  const chipCalendar = planChipCalendar({
+    currentEvent: fromEvent,
+    chips: squadState.chips,
+    projections: chipProjections,
+    wildcardAdvised: transferAdvice.wildcard?.advise ?? false,
+    eliteGaps: eliteMissing.length,
+  });
+  const eliteLookup = (id: number) => (elite ? eliteOwn(elite, id) : null);
+  const scenarioCandidates = squadState.available
+    ? includeCandidates(scored, ownedIdSet, eliteLookup)
+    : [];
+  // O conselho desta jornada fica registado até ao deadline (lib/decisions.ts).
+  const advisedPlan = transferAdvice.recommended;
+  const advisedChip =
+    chipAdvice.find((c) => c.verdict === "jogar")?.chip ??
+    transferAdvice.scenarios.find(
+      (s) => s.advised && (s.chip === "wildcard" || s.chip === "freehit")
+    )?.chip ??
+    null;
+  if (upcomingEvent && squadState.available) {
+    await recordAdvice(
+      {
+        event: upcomingEvent.id,
+        at: new Date().toISOString(),
+        captain: decisionCaptain?.element.id ?? null,
+        vice: decisionVice?.element.id ?? null,
+        xi: (advisedPlan?.xi ?? starters).map((p) => p.element.id),
+        bench: (advisedPlan?.bench ?? bench).map((p) => p.element.id),
+        transfers: (advisedPlan?.moves ?? []).map((m) => ({
+          out: m.out.element.id,
+          in: m.in.element.id,
+        })),
+        hitCost: advisedPlan?.hitCost ?? 0,
+        chip: advisedChip,
+        captainSource: captainDecision.source,
+        predictedXi: advisedPlan?.xiNextPoints ?? xiExpected,
+      },
+      upcomingEvent.deadline_time
+    );
+  }
+  const decisionHistory = await getDecisionHistory();
+  // v1.62 — A PÁGINA PESAVA 4,4 MB. Quase tudo era isto: os ~560 jogadores
+  // completos (elemento da FPL inteiro, razões, risco, decomposição) eram
+  // enviados para o browser porque o Shadow Team é um componente de
+  // cliente. Ele só usa uma dúzia de campos; vai só isso.
+  const shadowPlayers = scored.map(
+    (p) =>
+      ({
+        element: {
+          id: p.element.id,
+          element_type: p.element.element_type,
+          web_name: p.element.web_name,
+        },
+        team: { id: p.team.id, short_name: p.team.short_name },
+        positionShort: p.positionShort,
+        priceM: p.priceM,
+        score: p.score,
+        expectedPoints: p.expectedPoints,
+        expectedPointsNext: p.expectedPointsNext,
+        pPlay: p.pPlay,
+        ownershipPct: p.ownershipPct,
+        risk: p.risk ? { sdIfPlays: p.risk.sdIfPlays } : undefined,
+      }) as unknown as ScoredPlayer
+  );
+  const playerNames = new Map(bootstrap.elements.map((e) => [e.id, e.web_name]));
 
   return (
     <div className="min-h-full bg-bg text-text">
@@ -850,7 +968,7 @@ export default async function Home({
       <main className="mx-auto flex max-w-6xl flex-col gap-8 px-4 py-6 md:px-6">
         {/* Antes de tudo o resto: se os dados não são de agora, isso é a
             primeira coisa a saber, não uma nota de rodapé no fim. */}
-        <StaleDataBanner health={getFplDataHealth()} />
+        <StaleDataBanner health={getFplDataHealth()} now={nowMs} />
         <TierHeading label="Decidir" note="o que fazer antes do deadline" />
         {/* ================= 1. o que fazer ================= */}
         <Section
@@ -987,13 +1105,32 @@ export default async function Home({
           {/* "E se eu usasse o chip X esta semana?" — o cenário de cada chip
               é sempre calculado, mesmo quando o modelo não o aconselha. */}
           <div className="mt-6 border-t border-border pt-5">
+            <SubHeading>O que a elite faz</SubHeading>
+            <ElitePanel
+              elite={elite}
+              gaps={eliteMissing}
+              squad={ownedScored}
+              captain={captainDecision}
+            />
+          </div>
+
+          {chipCalendar.applies && (
+            <div className="mt-6 border-t border-border pt-5">
+              <SubHeading>Calendário de chips até à GW{chipCalendar.deadlineEvent}</SubHeading>
+              <ChipCalendarPanel calendar={chipCalendar} />
+            </div>
+          )}
+
+          <div className="mt-6 border-t border-border pt-5">
             <SubHeading>E se eu usasse um chip esta semana?</SubHeading>
             <ChipScenarioPanel
               scenarios={toScenarioViews(
                 transferAdvice.scenarios,
-                squadState.owned.map((o) => o.elementId)
+                squadState.owned.map((o) => o.elementId),
+                eliteLookup
               )}
               initialChip={initialChip}
+              candidates={scenarioCandidates}
             />
           </div>
         </Section>
@@ -1102,7 +1239,7 @@ export default async function Home({
           eyebrow="Sandbox — testa antes de aplicar a sério"
         >
           <ShadowTeamPanel
-            scored={scored}
+            scored={shadowPlayers}
             suggestedElementIds={squad.map((p) => p.element.id)}
           />
         </Section>
@@ -1120,6 +1257,10 @@ export default async function Home({
           intro="Previsto contra real, jogador a jogador. Ordenado por desvio face à previsão, não por pontos: um jogador que fez o que era esperado não é notícia; um que ficou muito abaixo, é."
         >
           <GameweekReviewPanel review={gwReview} />
+          <div className="mt-6 border-t border-border pt-5">
+            <SubHeading>Seguir a app teria dado mais pontos?</SubHeading>
+            <DecisionLogPanel history={decisionHistory} names={playerNames} />
+          </div>
         </Section>
 
         {/* ================= 10. aprendizagem ================= */}
@@ -1872,7 +2013,7 @@ export default async function Home({
           title="A Minha Equipa na FPL"
           eyebrow="Ligado ao teu Team ID"
         >
-          <MyTeamPanel scored={scored} eventId={picksEvent} isPreseason={isPreseason} />
+          <MyTeamPanel scored={shadowPlayers} eventId={picksEvent} isPreseason={isPreseason} />
         </Section>
 
         <Section id="sistema" title="Saúde do sistema">

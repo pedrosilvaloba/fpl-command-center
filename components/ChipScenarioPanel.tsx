@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { ChipKey, MoveKind } from "@/lib/transferplan";
 import {
   parseChipQuestion,
+  type IncludeCandidate,
   type ScenarioPlayerView,
   type ScenarioView,
 } from "@/lib/chipscenarioview";
@@ -108,6 +109,12 @@ function PlayerRow({
         <span className="ml-1.5 text-[11px] text-text-muted">{p.team}</span>
       </span>
       {lock}
+      <span
+        className="hidden w-12 text-right font-mono text-[11px] tabular text-text-muted sm:inline"
+        title="% das equipas da elite (topo da classificação geral) que o têm"
+      >
+        {p.elite === null ? "" : `${Math.round(p.elite)}%`}
+      </span>
       <span className="w-10 text-right font-mono text-[12px] tabular text-text-muted">{p.seasonPts}</span>
       <span className="hidden w-12 text-right font-mono text-[12px] tabular text-text-muted sm:inline">
         £{p.price.toFixed(1)}
@@ -155,7 +162,7 @@ function Scenario({
       </div>
       <p className="text-[13px] leading-relaxed text-text">{s.verdict}</p>
 
-      {rebuilds && (
+      {rebuilds && s.xi.length > 0 && (
         <div>
           <p className="eyebrow mb-2 text-text-muted">
             {s.transfers === 0
@@ -210,7 +217,7 @@ function Scenario({
           <div>
             <div className="mb-1 flex justify-between gap-2">
               <p className="eyebrow text-text-muted">Onze para esta jornada</p>
-              <p className="eyebrow text-text-muted">época · £ · prev.</p>
+              <p className="eyebrow text-text-muted">elite · época · £ · prev.</p>
             </div>
             {s.xi.map((p) => (
               <PlayerRow
@@ -241,15 +248,18 @@ function Scenario({
 export default function ChipScenarioPanel({
   scenarios,
   initialChip = null,
+  candidates = [],
 }: {
   scenarios: ScenarioView[];
   initialChip?: ChipKey | null;
+  candidates?: IncludeCandidate[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [active, setActive] = useState<ChipKey | null>(initialChip);
   const [question, setQuestion] = useState("");
   const [notUnderstood, setNotUnderstood] = useState(false);
+  const [includeText, setIncludeText] = useState("");
 
   if (scenarios.length === 0) {
     return (
@@ -259,7 +269,29 @@ export default function ChipScenarioPanel({
     );
   }
 
-  const kept = scenarios.find((s) => s.chip === "wildcard")?.keptIds ?? [];
+  const wcView = scenarios.find((s) => s.chip === "wildcard");
+  const kept = wcView?.keptIds ?? [];
+  const included = wcView?.includedIds ?? [];
+  const nameOf = (id: number) => candidates.find((c) => c.id === id)?.name ?? `#${id}`;
+
+  const go = (nextKept: number[], nextIncluded: number[]) => {
+    const params = new URLSearchParams();
+    params.set("chip", active ?? "wildcard");
+    if (nextKept.length > 0) params.set("manter", nextKept.join(","));
+    if (nextIncluded.length > 0) params.set("incluir", nextIncluded.join(","));
+    startTransition(() => {
+      router.replace(`/?${params.toString()}#cenarios`, { scroll: false });
+    });
+  };
+  const addInclude = () => {
+    const t = includeText.trim().toLowerCase();
+    const c =
+      candidates.find((x) => `${x.name} (${x.team})`.toLowerCase() === t) ??
+      candidates.find((x) => x.name.toLowerCase() === t);
+    if (!c || included.includes(c.id)) return;
+    setIncludeText("");
+    go(kept, [...included, c.id]);
+  };
 
   const ask = (text: string) => {
     const chip = parseChipQuestion(text);
@@ -269,13 +301,7 @@ export default function ChipScenarioPanel({
 
   const toggleKeep = (id: number) => {
     const next = kept.includes(id) ? kept.filter((k) => k !== id) : [...kept, id];
-    const params = new URLSearchParams();
-    if (active) params.set("chip", active);
-    if (next.length > 0) params.set("manter", next.join(","));
-    const qs = params.toString();
-    startTransition(() => {
-      router.replace(qs ? `/?${qs}#cenarios` : "/#cenarios", { scroll: false });
-    });
+    go(next, included);
   };
 
   const current = scenarios.find((s) => s.chip === active) ?? null;
@@ -323,7 +349,7 @@ export default function ChipScenarioPanel({
             {s.advised && " ●"}
           </button>
         ))}
-        {kept.length > 0 && (
+        {kept.length + included.length > 0 && (
           <button
             type="button"
             disabled={pending}
@@ -334,10 +360,63 @@ export default function ChipScenarioPanel({
             }
             className="text-[12px] text-text-muted underline hover:text-text"
           >
-            limpar fixos ({kept.length})
+            limpar fixos e incluídos ({kept.length + included.length})
           </button>
         )}
       </div>
+
+      {(active === "wildcard" || active === "freehit") && candidates.length > 0 && (
+        <div className="rounded-md border border-border bg-surface-2 p-3">
+          <p className="eyebrow mb-2 text-text-muted">Incluir um jogador que não tens</p>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              list="incluir-candidatos"
+              value={includeText}
+              onChange={(e) => setIncludeText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addInclude();
+                }
+              }}
+              placeholder="Ex.: Haaland"
+              className="flex-1 rounded-md border border-border bg-surface px-3 py-1.5 text-[13px] text-text placeholder:text-text-muted focus:border-accent focus:outline-none"
+              aria-label="Jogador a incluir"
+            />
+            <datalist id="incluir-candidatos">
+              {candidates.map((c) => (
+                <option key={c.id} value={`${c.name} (${c.team})`}>
+                  {`${c.pos} · £${c.price.toFixed(1)}${c.elite !== null ? ` · elite ${c.elite}%` : ""}`}
+                </option>
+              ))}
+            </datalist>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={addInclude}
+              className="rounded-md border border-accent px-3 py-1.5 text-[13px] font-semibold text-accent disabled:opacity-50"
+            >
+              Incluir
+            </button>
+          </div>
+          {included.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {included.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  disabled={pending}
+                  onClick={() => go(kept, included.filter((x) => x !== id))}
+                  className="rounded-full border border-accent bg-accent/10 px-2 py-0.5 text-[12px] text-accent"
+                  title="Tirar"
+                >
+                  {nameOf(id)} ✕
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {notUnderstood && (
         <p className="text-[13px] text-warn">

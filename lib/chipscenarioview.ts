@@ -23,6 +23,8 @@ export interface ScenarioPlayerView {
    * se uma troca faz sentido, e que o modelo não mostrava. */
   seasonPts: number;
   ppg: number;
+  /** % de posse na elite, null quando os dados da elite não estão carregados */
+  elite: number | null;
 }
 
 export interface ScenarioView {
@@ -40,6 +42,7 @@ export interface ScenarioView {
   viceCaptainId: number | null;
   moves: { out: ScenarioPlayerView; in: ScenarioPlayerView; sellM: number; kind: MoveKind }[];
   keptIds: number[];
+  includedIds: number[];
   /** Ids do plantel atual, para o painel saber quem pode ser fixado. */
   ownedIds: number[];
   xi: ScenarioPlayerView[];
@@ -48,6 +51,8 @@ export interface ScenarioView {
 }
 
 const r1 = (x: number) => Math.round(x * 10) / 10;
+
+let eliteLookup: (id: number) => number | null = () => null;
 
 function player(p: ScoredPlayer): ScenarioPlayerView {
   return {
@@ -60,10 +65,16 @@ function player(p: ScoredPlayer): ScenarioPlayerView {
     window: r1(p.expectedPoints),
     seasonPts: Number(p.element.total_points) || 0,
     ppg: Number(p.element.points_per_game) || 0,
+    elite: eliteLookup(p.element.id),
   };
 }
 
-export function toScenarioViews(scenarios: ChipScenario[], ownedIds: number[] = []): ScenarioView[] {
+export function toScenarioViews(
+  scenarios: ChipScenario[],
+  ownedIds: number[] = [],
+  eliteOwn: (id: number) => number | null = () => null
+): ScenarioView[] {
+  eliteLookup = eliteOwn;
   return scenarios.map((s) => {
     const plan = s.plan;
     // Bench Boost e Triple Captain jogam-se sobre o plano normal: as trocas
@@ -92,6 +103,7 @@ export function toScenarioViews(scenarios: ChipScenario[], ownedIds: number[] = 
             }))
           : [],
       keptIds: s.keptIds,
+      includedIds: s.includedIds,
       ownedIds,
       xi: plan ? plan.xi.map(player) : [],
       bench: plan ? plan.bench.map(player) : [],
@@ -136,6 +148,49 @@ export function parseKeepParam(raw: string | string[] | undefined): number[] {
         .filter((n) => Number.isInteger(n) && n > 0)
     ),
   ].slice(0, 15);
+}
+
+/** Um jogador que se pode pedir para "incluir": o mínimo para o escolher. */
+export interface IncludeCandidate {
+  id: number;
+  name: string;
+  team: string;
+  pos: string;
+  price: number;
+  /** % de posse na elite, quando conhecida */
+  elite: number | null;
+}
+
+/** Os candidatos a "incluir": os melhores por posição e todos os que a
+ * elite tem a 20% ou mais, sem os que já estão no plantel. Cortado para o
+ * painel não arrastar a base de dados inteira para o browser. */
+export function includeCandidates(
+  scored: ScoredPlayer[],
+  ownedIds: Set<number>,
+  eliteOwn: (id: number) => number | null,
+  perPosition = 25
+): IncludeCandidate[] {
+  const out = new Map<number, IncludeCandidate>();
+  const mk = (p: ScoredPlayer): IncludeCandidate => ({
+    id: p.element.id,
+    name: p.element.web_name,
+    team: p.team.short_name,
+    pos: p.positionShort,
+    price: p.priceM,
+    elite: eliteOwn(p.element.id),
+  });
+  for (const t of [1, 2, 3, 4]) {
+    scored
+      .filter((p) => p.element.element_type === t && !ownedIds.has(p.element.id))
+      .sort((a, b) => b.expectedPoints - a.expectedPoints)
+      .slice(0, perPosition)
+      .forEach((p) => out.set(p.element.id, mk(p)));
+  }
+  for (const p of scored) {
+    const e = eliteOwn(p.element.id);
+    if (e !== null && e >= 20 && !ownedIds.has(p.element.id)) out.set(p.element.id, mk(p));
+  }
+  return [...out.values()].sort((a, b) => (b.elite ?? 0) - (a.elite ?? 0) || a.name.localeCompare(b.name));
 }
 
 const CHIP_KEYS: ChipKey[] = ["wildcard", "freehit", "bboost", "3xc"];

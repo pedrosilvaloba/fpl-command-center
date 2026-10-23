@@ -124,8 +124,31 @@ export function effectiveOwnershipShare(p: ScoredPlayer): number {
 // criava um ciclo. Um teto que existe em dois sítios acaba com dois valores.
 export { MIN_STRATEGIC_RETENTION } from "./recommend";
 
+/**
+ * ═══ v1.62 — A POSSE SAI DO VALOR ESPERADO ═══
+ *
+ * O desconto de posse estava a ser aplicado aos PONTOS ESPERADOS: com
+ * beta 0,12, o Haaland (77% de posse) valia 9% menos só por ser popular.
+ * Mas o ganho esperado de posição de ter o jogador A em vez do B é a
+ * diferença de pontos dos dois, seja qual for a posse — a posse de ambos
+ * aparece dos dois lados da conta e cancela-se. O que a posse muda é o
+ * RISCO (quanto a tua posição oscila), não a média.
+ *
+ * Consequência medida esta época: o top 50 tinha o Haaland a 100% e a app
+ * nunca levou o Pedro até ele; o próprio torneio de estratégias da app
+ * media o template 1,70 pts por escolha acima do diferencial.
+ *
+ * A postura fica, mas só como DESEMPATE: `POSTURE_TIEBREAK` reduz o efeito
+ * a uma fração que separa dois jogadores praticamente iguais e nunca
+ * vira uma diferença real de pontos.
+ */
+export const POSTURE_TIEBREAK = 0.05;
+
 function postureMultiplier(p: ScoredPlayer, beta: number): number {
-  return Math.max(MIN_STRATEGIC_RETENTION, 1 - beta * effectiveOwnershipShare(p));
+  return Math.max(
+    MIN_STRATEGIC_RETENTION,
+    1 - beta * POSTURE_TIEBREAK * effectiveOwnershipShare(p)
+  );
 }
 
 export function strategicValue(p: ScoredPlayer, beta: number): number {

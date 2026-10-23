@@ -293,6 +293,14 @@ export function getElementSummary(playerId: number) {
   }>(`/element-summary/${playerId}/`, 300);
 }
 
+/** Every transfer a team has made this season (event, element_in, element_out). */
+export function getEntryTransfers(teamId: number) {
+  return fplFetch<{ event: number; element_in: number; element_out: number }[]>(
+    `/entry/${teamId}/transfers/`,
+    300
+  );
+}
+
 /** Live, per-player stats for a single gameweek (updates during matches). */
 export function getEventLive(gw: number) {
   return fplFetch<{ elements: { id: number; stats: Record<string, number> }[] }>(

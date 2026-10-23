@@ -409,6 +409,9 @@ export interface TransferPlan {
   confidence: number;
   /** How much this plan had to beat holding by to be recommended. */
   requiredEdge: number;
+  /** True when this plan was solved WITHOUT the retention margin and is
+   * shown only so the user can see what was refused. */
+  unguarded?: boolean;
   /** xiWindowPoints minus the hit cost — the number plans are ranked on. */
   netValue: number;
   /** Versus doing nothing. Negative means the plan is worse than holding. */
@@ -483,6 +486,8 @@ export interface ChipScenario {
   moveKinds: MoveKind[];
   /** Os jogadores que o gestor fixou e que o cenário respeitou. */
   keptIds: number[];
+  /** Jogadores que o gestor pediu para comprar ("incluir"). */
+  includedIds: number[];
 }
 
 export type MoveKind = "clara" | "indiferente" | "financia";
@@ -839,6 +844,9 @@ export function planTransfers(
     /** Jogadores do plantel que o gestor quer manter nos cenários de
      * Wildcard e Free Hit. Ids que não são do plantel são ignorados. */
     keepIds?: number[];
+    /** Jogadores que o gestor quer COMPRAR nos cenários de Wildcard e Free
+     * Hit (por exemplo o Haaland). O plantel é montado à volta deles. */
+    includeIds?: number[];
   } = {}
 ): TransferAdvice {
   const beta = opts.beta ?? 0;
@@ -905,6 +913,13 @@ export function planTransfers(
       .slice(0, CHEAP_ENABLERS_PER_POSITION);
     for (const p of [...best, ...cheap]) poolMap.set(p.element.id, p);
   }
+  // Jogadores pedidos em "incluir" entram sempre no conjunto de candidatos,
+  // mesmo que não estejam entre os melhores da posição — senão o solver não
+  // os podia escolher.
+  const includeIds = new Set(
+    (opts.includeIds ?? []).filter((id) => byId.has(id) && !ownedIds.has(id))
+  );
+  for (const id of includeIds) poolMap.set(id, byId.get(id)!);
   const pool = [...poolMap.values()];
 
   // How much evidence the model actually has: gameweeks already played. This
@@ -985,6 +1000,7 @@ export function planTransfers(
         allowHits: false,
       });
       const shown = unguarded ? mkFree(unguarded) : null;
+      if (shown) shown.unguarded = true;
       if (shown && shown.transfers > 0) {
         shown.rationale = `Esta é a melhor troca que o modelo encontra se ignorar a margem de erro. Não é recomendada: a diferença entre estes dois jogadores é menor do que o erro com que o modelo os estima nesta altura da época, por isso agir sobre ela é perseguir ruído, não vantagem.`;
         plans.push(shown);
@@ -1188,6 +1204,11 @@ export function planTransfers(
   }
   for (const p of plans) {
     p.confidence = Math.round(planConfidence(p) * 1000) / 1000;
+    // v1.62 — TESTADO E REJEITADO: tirar este piso aos planos que já
+    // passaram a margem de retenção. Parecia contar a mesma incerteza duas
+    // vezes, mas com ruído puro de 0,8 pts/jornada o planeador passava a
+    // recomendar trocas que valem zero (teste testPureNoiseProducesNoTransfers).
+    // A retenção sozinha não chega contra o efeito de seleção; fica o piso.
     p.requiredEdge =
       p.key === "manter" ? 0 : noiseFloor(p.confidence, gamesOfEvidence, p.moves.length);
   }
@@ -1277,6 +1298,7 @@ export function planTransfers(
     wildcardPlan,
     retention,
     keepIds: new Set((opts.keepIds ?? []).filter((id) => ownedIds.has(id))),
+    includeIds,
     scored,
   });
 
@@ -1318,6 +1340,7 @@ function buildChipScenarios(ctx: {
   wildcardPlan: TransferPlan | null;
   retention: number;
   keepIds: Set<number>;
+  includeIds: Set<number>;
   scored: ScoredPlayer[];
 }): ChipScenario[] {
   const { base, state, costM, beta, risers, fallers, ownedSquad, hold, recommended } = ctx;
@@ -1339,7 +1362,9 @@ function buildChipScenarios(ctx: {
   // O encolhimento da maldição do vencedor continua dentro do solver; só
   // sai a exigência de vantagem sobre quem já está no plantel.
   const wcAvailable = chipAvailable(state, "wildcard");
-  const forceIds = ctx.keepIds.size > 0 ? ctx.keepIds : undefined;
+  const forced = new Set([...ctx.keepIds, ...ctx.includeIds]);
+  const forceIds = forced.size > 0 ? forced : undefined;
+  const includedIds = [...ctx.includeIds];
   const incumbentBonus = provenIncumbentBonus(ctx.ownedSquad, ctx.scored, ctx.retention);
   const incumbentBonusNext = new Map(
     [...incumbentBonus].map(([id, b]) => [id, b / WINDOW_GAMEWEEKS] as [number, number])
@@ -1403,6 +1428,7 @@ function buildChipScenarios(ctx: {
       advised: wc.advise,
       moveKinds: classify(p.moves, "window"),
       keptIds,
+      includedIds,
       verdict: !wcAvailable
         ? `Já não tens Wildcard nesta metade da época. O plantel abaixo é só a referência do que o dinheiro compraria.`
         : wc.advise
@@ -1413,8 +1439,22 @@ function buildChipScenarios(ctx: {
     });
     const last = out[out.length - 1];
     if (last.available) last.verdict += describeKinds(last.moveKinds);
+  } else if (forceIds && ctx.wildcard) {
+    out.push({
+      chip: "wildcard",
+      label: "Wildcard",
+      available: wcAvailable,
+      plan: null,
+      gainNext: 0,
+      gainWindow: null,
+      advised: false,
+      moveKinds: [],
+      keptIds,
+      includedIds,
+      verdict:
+        "Não há plantel possível com esses jogadores fixos e incluídos: ou não cabem no orçamento, ou ficam mais de 3 do mesmo clube ou de uma posição. Tira um deles e tenta de novo.",
+    });
   }
-
   // --- Free Hit -----------------------------------------------------------
   // One gameweek, and the squad comes back afterwards: solve on NEXT-gameweek
   // points only. Presenting next-gameweek points as the window value is the
@@ -1461,6 +1501,7 @@ function buildChipScenarios(ctx: {
       advised,
       moveKinds: classify(p.moves, "next"),
       keptIds,
+      includedIds,
       verdict: !fhAvailable
         ? "Já não tens Free Hit nesta metade da época."
         : advised
@@ -1486,6 +1527,7 @@ function buildChipScenarios(ctx: {
     advised: bbAvailable && benchNext >= BENCH_BOOST_MIN,
     moveKinds: [],
     keptIds: [],
+    includedIds: [],
     verdict: !bbAvailable
       ? "Já não tens Bench Boost nesta metade da época."
       : `O teu banco vale ${benchNext} pts esperados esta jornada. ${
@@ -1510,6 +1552,7 @@ function buildChipScenarios(ctx: {
     advised: tcAvailable && capNext >= TRIPLE_CAPTAIN_MIN,
     moveKinds: [],
     keptIds: [],
+    includedIds: [],
     verdict: !tcAvailable
       ? "Já não tens Triple Captain nesta metade da época."
       : `${cap?.element.web_name ?? "O capitão"} com braçadeira tripla rende +${capNext} pts esperados. ${

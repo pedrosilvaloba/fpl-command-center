@@ -1,4 +1,22 @@
-import { getBootstrap, getFixtures, getElementSummary } from "./fpl-client";
+import {
+  getBootstrap,
+  getFixtures,
+  getElementSummary,
+  getLeagueStandings,
+  getEntryPicks,
+  getEntryHistory,
+  getEntryTransfers,
+  getEventLive,
+} from "./fpl-client";
+import { ELITE_KEY, ELITE_SIZE, summariseElite, type ElitePick } from "./elite";
+import {
+  ADVICE_KEY,
+  OUTCOME_KEY,
+  DECISION_INDEX_KEY,
+  settleOutcome,
+  type AdviceRecord,
+} from "./decisions";
+import { DEFAULT_TEAM_ID } from "./constants";
 import { getRedis } from "./kv";
 import {
   LAST_SEASON_KEY,
@@ -533,5 +551,107 @@ export async function runLastSeasonJob(
     productive: true,
     summary: `época passada: taxas de ${table.size} jogadores (${failed} falhas)`,
     detail: { players: table.size, failed },
+  };
+}
+
+// --------------------------------------------------------------------------
+// A elite (lib/elite.ts)
+// --------------------------------------------------------------------------
+
+/** Lê os ELITE_SIZE primeiros da classificação geral e as escolhas deles na
+ * última jornada com deadline passado. ~ELITE_SIZE/50 + ELITE_SIZE pedidos. */
+export async function runEliteJob(
+  opts: { size?: number; deadlineMs?: number } = {}
+): Promise<JobOutcome<{ managers: number; event: number }>> {
+  const redis = getRedis();
+  if (!redis) return { ok: false, retryable: false, error: "sem armazenamento" };
+  const size = Math.max(50, Math.min(500, opts.size ?? ELITE_SIZE));
+  const bootstrap = await getBootstrap();
+  const current = bootstrap.events.find((e) => e.is_current) ??
+    [...bootstrap.events].reverse().find((e) => e.finished);
+  if (!current) return { ok: false, retryable: false, error: "sem jornada com deadline passado" };
+  const entries: number[] = [];
+  for (let page = 1; entries.length < size && page <= Math.ceil(size / 50); page++) {
+    const s = await getLeagueStandings(314, page);
+    entries.push(...s.standings.results.map((r) => r.entry));
+    if (!s.standings.has_next) break;
+  }
+  const deadline = opts.deadlineMs ?? Date.now() + 120_000;
+  const picks: ElitePick[] = [];
+  await mapWithLimit(entries.slice(0, size), 8, async (entry) => {
+    if (Date.now() > deadline) return;
+    try {
+      const p = await getEntryPicks(entry, current.id);
+      picks.push({
+        picks: p.picks.map((x) => x.element),
+        captain: p.picks.find((x) => x.is_captain)?.element ?? null,
+      });
+    } catch {
+      /* um gestor a menos não muda o consenso */
+    }
+  });
+  if (picks.length < 20) {
+    return { ok: false, retryable: true, error: `só ${picks.length} planteis da elite lidos` };
+  }
+  await redis.set(ELITE_KEY, summariseElite(current.id, picks));
+  return {
+    ok: true,
+    result: { managers: picks.length, event: current.id },
+    productive: true,
+    summary: `elite: ${picks.length} planteis do topo da classificação geral, GW${current.id}`,
+    detail: { managers: picks.length, event: current.id },
+  };
+}
+
+// --------------------------------------------------------------------------
+// O registo de decisões (lib/decisions.ts)
+// --------------------------------------------------------------------------
+
+/** Fecha as jornadas terminadas que têm conselho guardado e ainda não têm
+ * resultado: lê o que o Pedro fez e os pontos de cada jogador. */
+export async function runDecisionsJob(
+  teamId = Number(DEFAULT_TEAM_ID)
+): Promise<JobOutcome<{ settled: number[] }>> {
+  const redis = getRedis();
+  if (!redis) return { ok: false, retryable: false, error: "sem armazenamento" };
+  const bootstrap = await getBootstrap();
+  const finished = new Set(bootstrap.events.filter((e) => e.finished).map((e) => e.id));
+  const events = ((await redis.smembers(DECISION_INDEX_KEY)) ?? [])
+    .map((x) => Number(x))
+    .filter((e) => finished.has(e));
+  const settled: number[] = [];
+  let transfers: { event: number; element_in: number }[] | null = null;
+  let history: Awaited<ReturnType<typeof getEntryHistory>> | null = null;
+  for (const event of events) {
+    if (await redis.get(OUTCOME_KEY(event))) continue;
+    const advice = await redis.get<AdviceRecord>(ADVICE_KEY(event));
+    if (!advice) continue;
+    const [picks, live] = await Promise.all([getEntryPicks(teamId, event), getEventLive(event)]);
+    transfers ??= await getEntryTransfers(teamId).catch(() => []);
+    history ??= await getEntryHistory(teamId).catch(() => null);
+    const ptsById = new Map(live.elements.map((e) => [e.id, Number(e.stats.total_points) || 0]));
+    const hist = history?.current?.find((h: { event: number }) => h.event === event) as
+      | { points: number; event_transfers_cost: number }
+      | undefined;
+    const outcome = settleOutcome(
+      advice,
+      {
+        picks: picks.picks,
+        activeChip: (picks as unknown as { active_chip?: string | null }).active_chip ?? null,
+        officialPoints: hist?.points ?? picks.entry_history.points,
+        transfersCost: hist?.event_transfers_cost ?? picks.entry_history.event_transfers_cost,
+        transfersIn: (transfers ?? []).filter((t) => t.event === event).map((t) => t.element_in),
+      },
+      (id) => ptsById.get(id) ?? 0
+    );
+    await redis.set(OUTCOME_KEY(event), outcome);
+    settled.push(event);
+  }
+  return {
+    ok: true,
+    result: { settled },
+    productive: settled.length > 0,
+    summary: settled.length > 0 ? `decisões fechadas: GW${settled.join(", GW")}` : "nenhuma jornada nova para fechar",
+    detail: { settled },
   };
 }

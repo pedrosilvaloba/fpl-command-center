@@ -12,6 +12,10 @@
  */
 
 import { toScenarioViews, parseChipQuestion, parseKeepParam, parseChipParam } from "../lib/chipscenarioview";
+import { ratesFromHistoryPast, tableFromRecord, recordFromTable } from "../lib/lastseason";
+import { summariseElite, eliteOwn, eliteCap, chooseCaptainWithElite, captainOverrideMargin, eliteGaps, normalizeElite } from "../lib/elite";
+import { planChipCalendar } from "../lib/chipcalendar";
+import { lineupPoints, settleOutcome } from "../lib/decisions";
 import { computeDynamicTeamFactors } from "../lib/teamrating";
 import {
   crossCheckExpertView,
@@ -196,6 +200,7 @@ import {
 } from "../lib/backtest";
 import {
   check,
+  near,
   report,
   exitCode,
   counts,
@@ -1593,20 +1598,47 @@ function testPostureChangesTheSquad() {
   const avgOwn = (squad: ScoredPlayer[]) =>
     squad.reduce((s, p) => s + p.ownershipPct, 0) / Math.max(1, squad.length);
 
+  // v1.62 — A POSSE SAIU DO VALOR ESPERADO (ver POSTURE_TIEBREAK em
+  // lib/optimizer.ts). O ganho esperado de posição de ter A em vez de B é a
+  // diferença de pontos dos dois, seja qual for a posse; a posse muda só o
+  // risco. Antes estes testes exigiam que a postura trocasse o onze mesmo
+  // com o melhor por pontos disponível — que é exatamente o defeito: o top 50
+  // tinha o Haaland a 100% e a app nunca lá chegou.
+  const epOf = (squad: ScoredPlayer[]) => squad.reduce((s, p) => s + p.expectedPointsNext, 0);
   check(
-    "a postura muda mesmo o onze — não é um painel decorativo",
-    JSON.stringify(chasing.starters.map((p) => p.element.id).sort()) !==
-      JSON.stringify(neutral.starters.map((p) => p.element.id).sort())
+    "a perseguir, a postura não troca pontos esperados por posse",
+    Math.abs(epOf(chasing.starters) - epOf(neutral.starters)) < 1e-6,
+    `perseguir ${epOf(chasing.starters).toFixed(2)} vs neutro ${epOf(neutral.starters).toFixed(2)}`
   );
   check(
-    "a perseguir, o onze tem menos posse média do que o neutro",
-    avgOwn(chasing.starters) < avgOwn(neutral.starters),
-    `perseguir ${avgOwn(chasing.starters).toFixed(1)}% vs neutro ${avgOwn(neutral.starters).toFixed(1)}%`
+    "a proteger, também não",
+    Math.abs(epOf(protecting.starters) - epOf(neutral.starters)) < 1e-6,
+    `proteger ${epOf(protecting.starters).toFixed(2)} vs neutro ${epOf(neutral.starters).toFixed(2)}`
+  );
+  // Mas continua a desempatar: com pontos EXATAMENTE iguais, quem persegue
+  // fica com menos posse e quem protege com mais.
+  const tiePool: ScoredPlayer[] = [];
+  let tid = 5000;
+  let tclub = 0;
+  for (const type of [1, 2, 3, 4]) {
+    for (const own of [60, 3]) {
+      for (let i = 0; i < 8; i++) {
+        tiePool.push(mkSim(tid++, { teamId: (tclub++ % 20) + 1, type, own, epNext: 5, price: 5.5 }));
+      }
+    }
+  }
+  const tieNeutral = buildOptimalSquad(tiePool, 100, 0);
+  const tieChasing = buildOptimalSquad(tiePool, 100, 0.9);
+  const tieProtecting = buildOptimalSquad(tiePool, 100, -0.6);
+  check(
+    "em empate perfeito, perseguir escolhe menos posse",
+    avgOwn(tieChasing.starters) <= avgOwn(tieNeutral.starters) && avgOwn(tieChasing.starters) < 30,
+    `perseguir ${avgOwn(tieChasing.starters).toFixed(1)}%`
   );
   check(
-    "a proteger, o onze tem mais posse média do que o neutro",
-    avgOwn(protecting.starters) > avgOwn(neutral.starters),
-    `proteger ${avgOwn(protecting.starters).toFixed(1)}% vs neutro ${avgOwn(neutral.starters).toFixed(1)}%`
+    "em empate perfeito, proteger escolhe mais posse",
+    avgOwn(tieProtecting.starters) > 30,
+    `proteger ${avgOwn(tieProtecting.starters).toFixed(1)}%`
   );
   check(
     "o valor estratégico nunca fica negativo em todo o intervalo de beta",
@@ -4915,7 +4947,11 @@ function testNeverHavingRunIsTheWorstCaseNotAnUnknownOne() {
     "sem registo nenhum, todas as tarefas aparecem paradas",
     health.every((h) => h.stale === true && h.lastSuccess === null)
   );
-  check("as três tarefas são vigiadas", health.length === 3, health.map((h) => h.job).join(","));
+  check(
+    "as seis tarefas são vigiadas (v1.62: época passada, elite, decisões)",
+    health.length === 6,
+    health.map((h) => h.job).join(",")
+  );
 }
 
 function testAKilledRunLeavesEvidence() {
@@ -6159,13 +6195,19 @@ function testPostureCannotStealTheArmband() {
     `${MIN_STRATEGIC_RETENTION}`
   );
 
-  // E a postura continua a servir para alguma coisa: entre quase-iguais,
-  // ainda favorece o diferencial.
+  // v1.62: a postura só desempata. Com 0,2 pts de diferença ganha o melhor
+  // (antes ganhava o diferencial); com pontos iguais, o diferencial.
   const closeCall = pickCaptain([mk(4, 7.4, 80), mk(5, 7.2, 3), filler], 0.35);
   check(
-    "entre quase-iguais, a postura ainda favorece o diferencial",
-    closeCall.captain?.element.id === 5,
-    `capitão: ${closeCall.captain?.element.id} (5 = diferencial)`
+    "com 0,2 pts de diferença, a braçadeira vai para quem prevê mais",
+    closeCall.captain?.element.id === 4,
+    `capitão: ${closeCall.captain?.element.id} (4 = 7.4)`
+  );
+  const tie = pickCaptain([mk(6, 7.3, 80), mk(7, 7.3, 3), filler], 0.35);
+  check(
+    "em empate, a postura ainda favorece o diferencial",
+    tie.captain?.element.id === 7,
+    `capitão: ${tie.captain?.element.id} (7 = diferencial)`
   );
 }
 
@@ -8690,6 +8732,128 @@ function testChipScenariosAnswerTheQuestionAsked() {
 }
 
 testChipScenariosAnswerTheQuestionAsked();
+
+// ═══ v1.62 — RELATÓRIO DO CONSULTOR: as melhorias, cada uma com o seu teste ═══
+function testConsultantImprovements() {
+  // 1. A época passada vira taxas por 90 minutos, e só conta com minutos.
+  const past = [
+    { season_name: "2024/25", minutes: 2700, expected_goals: "15", goals_scored: 18, expected_assists: "6", assists: 6, bonus: 20, saves: 0, defensive_contribution: 0, clearances_blocks_interceptions: 30, tackles: 20, recoveries: 100 },
+    { season_name: "2025/26", minutes: 1800, expected_goals: "10", goals_scored: 12, expected_assists: "4", assists: 2, bonus: 12, saves: 0, defensive_contribution: 300 },
+    { season_name: "2023/24", minutes: 300, expected_goals: "5", goals_scored: 5 },
+  ];
+  const ls = ratesFromHistoryPast(past, 4)!;
+  check("a época passada usa a mais recente com minutos suficientes", ls.season === "2025/26", ls.season);
+  near("xG/90 da época passada mistura esperado e realizado", ls.xg90, (10 * 0.65 + 12 * 0.35) / 20, 1e-9);
+  near("bónus/90 da época passada", ls.bonus90, 12 / 20, 1e-9);
+  check("sem época com 900 minutos, não há prior", ratesFromHistoryPast([{ season_name: "2025/26", minutes: 400 }], 3) === null);
+  const round = tableFromRecord(recordFromTable(new Map([[7, ls]])));
+  check("a tabela sobrevive ao Redis", round.get(7)?.xg90 === ls.xg90);
+
+  // 2. O prior da época passada puxa a taxa encolhida para ela, não para zero.
+  const el = makeElement({ id: 7, element_type: 4, minutes: 270, now_cost: 80 });
+  (el as unknown as Record<string, unknown>).expected_goals_per_90 = "0";
+  (el as unknown as Record<string, unknown>).goals_scored = 0;
+  const noPrior = computePlayerRates(el, { pricePriorWeight: 0, lastSeasonShare: 0 });
+  const withPrior = computePlayerRates(el, { pricePriorWeight: 0, lastSeasonShare: 1 }, {
+    available: false,
+    fitted: 0,
+    forPlayer: () => ({ xg90: 0, xa90: 0, bonus90: 0, dc90: 0, saves90: 0 }),
+    lastSeason: new Map([[7, ls]]),
+  });
+  check("sem prior, 3 jogos sem golos dão xG zero", noPrior.xg90 === 0);
+  check("com a época passada, a taxa não é zero", withPrior.xg90 > 0.2, withPrior.xg90.toFixed(3));
+  check("os priors ficam ligados por omissão (medidos)", DEFAULT_MODEL_PARAMS.lastSeasonShare === 1 && DEFAULT_MODEL_PARAMS.pricePriorWeight === 1);
+
+  // 3. Capitão: o da elite, salvo vantagem do modelo maior do que a margem.
+  const mk = (id: number, ep: number) =>
+    ({ ...mkSim(id, { teamId: id, type: 4, epNext: ep, price: 8, own: 30 }), pPlay: 1 }) as unknown as ScoredPlayer;
+  const hal = mk(1, 6.0), jp = mk(2, 7.0), other = mk(3, 4);
+  const elite = summariseElite(7, [
+    { picks: [1, 2, 3], captain: 1 },
+    { picks: [1, 2], captain: 1 },
+    { picks: [1], captain: 2 },
+  ]);
+  near("posse na elite em %", eliteOwn(elite, 1), 100, 1e-9);
+  near("capitão na elite em %", eliteCap(elite, 1), 66.7, 0.05);
+  const d1 = chooseCaptainWithElite([hal, jp, other], jp, elite, 2);
+  check("modelo prefere por 1 pt (< margem 2): fica o capitão da elite", d1.captain?.element.id === 1 && d1.source === "elite");
+  const d2 = chooseCaptainWithElite([mk(1, 4), mk(2, 7.5), other], mk(2, 7.5), elite, 2);
+  check("modelo prefere por 3,5 pts (> margem): o modelo ganha", d2.captain?.element.id === 2 && d2.source === "modelo");
+  const d3 = chooseCaptainWithElite([hal, jp], jp, null, 2);
+  check("sem dados da elite, manda o modelo", d3.captain?.element.id === 2 && d3.source === "modelo-sem-elite");
+  near("a margem nunca é menos de 2", captainOverrideMargin(1.1), 2, 1e-9);
+  near("a margem acompanha o MAE do backtest", captainOverrideMargin(2.4), 2.4, 1e-9);
+  const gaps = eliteGaps(elite, [hal, jp, other], new Set([2]));
+  check("alerta de elite: quem ela tem a 70%+ e tu não", gaps.length === 1 && gaps[0].player.element.id === 1);
+  check("snapshot da elite inválido é ignorado", normalizeElite({ event: 3, managers: 0, own: {}, cap: {} }) === null);
+
+  // 4. Calendário de chips: todos usados antes da GW19, BB a seguir ao WC.
+  const chips = summariseChips([{ name: "3xc", event: 4 }]);
+  const cal = planChipCalendar({
+    currentEvent: 8,
+    chips,
+    projections: [
+      { event: 8, maxFixtures: 1, blanking: 0, benchBoost: 9, tripleCaptain: 7, captainName: "A" },
+      { event: 9, maxFixtures: 1, blanking: 0, benchBoost: 12, tripleCaptain: 9, captainName: "B" },
+      { event: 10, maxFixtures: 1, blanking: 0, benchBoost: 8, tripleCaptain: 11, captainName: "C" },
+    ],
+    wildcardAdvised: false,
+    eliteGaps: 3,
+  });
+  const ev = (c: string) => cal.slots.find((x) => x.chip === c)?.event;
+  check("calendário: 3 chips por usar (o Triple Captain já foi)", cal.slots.length === 3 && ev("3xc") === undefined, cal.slots.map((x) => x.chip).join(","));
+  check("calendário: com 3 jogadores da elite em falta, Wildcard já", ev("wildcard") === 8);
+  check("calendário: Bench Boost na jornada a seguir ao Wildcard", ev("bboost") === 9);
+  check("calendário: tudo antes do limite da GW19", cal.slots.every((x) => x.event <= 19 && x.event >= 8));
+  check("calendário: semanas distintas", new Set(cal.slots.map((x) => x.event)).size === cal.slots.length);
+  const late = planChipCalendar({ currentEvent: 22, chips, projections: [], wildcardAdvised: false, eliteGaps: 0 });
+  check("na segunda metade o calendário não se aplica", !late.applies);
+
+  // 5. Registo de decisões: a mesma regra para a app e para o Pedro.
+  const pts = (id: number) => ({ 1: 10, 2: 2, 3: 6, 4: 1, 5: 8 } as Record<number, number>)[id] ?? 0;
+  near("pontos de um onze: capitão a dobrar", lineupPoints([1, 2, 3], 1, pts), 10 * 2 + 2 + 6, 1e-9);
+  near("triplo capitão e hits", lineupPoints([1, 2], 1, pts, { tripleCaptain: true, hitCost: 4 }), 30 + 2 - 4, 1e-9);
+  const out = settleOutcome(
+    { event: 7, at: "", captain: 1, vice: 3, xi: [1, 3, 4], bench: [5], transfers: [{ out: 9, in: 3 }], hitCost: 0, chip: null, captainSource: "elite", predictedXi: 0 },
+    {
+      picks: [
+        { element: 2, position: 1, is_captain: true, multiplier: 2 },
+        { element: 3, position: 2, is_captain: false, multiplier: 1 },
+        { element: 4, position: 3, is_captain: false, multiplier: 1 },
+        { element: 5, position: 12, is_captain: false, multiplier: 0 },
+      ],
+      activeChip: null,
+      officialPoints: 11,
+      transfersCost: 0,
+      transfersIn: [3],
+    },
+    pts
+  );
+  check("app: 10x2+6+1 = 27", out.app.points === 27, String(out.app.points));
+  check("Pedro: 2x2+6+1 = 11", out.pedro.points === 11, String(out.pedro.points));
+  check("diferença = app − Pedro", out.diff === 16);
+  check("não seguiu o capitão, seguiu as trocas", !out.followedCaptain && out.followedTransfers);
+
+  // 6. "Incluir" no Wildcard compra o jogador pedido.
+  const { owned, scored } = mkTransferPool([10, 6, 2]);
+  const outsider = scored.find((p) => !owned.some((o) => o.element.id === p.element.id) && p.element.element_type === 2)!;
+  const adv = planTransfers(scored, mkState(owned, 1), { currentEvent: 8, includeIds: [outsider.element.id] });
+  const wcInc = adv.scenarios.find((s) => s.chip === "wildcard")!;
+  check("incluir: o jogador pedido entra no plantel do Wildcard", !!wcInc.plan && wcInc.plan.squad.some((p) => p.element.id === outsider.element.id));
+  check("incluir: fica registado no cenário", wcInc.includedIds.join(",") === String(outsider.element.id));
+  const imposs = planTransfers(scored, mkState(owned, 1), {
+    currentEvent: 8,
+    includeIds: scored.filter((p) => p.element.element_type === 1 && !owned.some((o) => o.element.id === p.element.id)).slice(0, 3).map((p) => p.element.id),
+  });
+  const wcImp = imposs.scenarios.find((s) => s.chip === "wildcard")!;
+  check("incluir 3 guarda-redes é impossível e o cenário diz isso", wcImp.plan === null && /Não há plantel possível/.test(wcImp.verdict));
+
+  // 7. Cron: os extras correm às 6h e podem ser pedidos à mão.
+  check("as 6h também recolhem a época passada, a elite e as decisões", planFromRequest("0 6 * * *", null).extras.join(",") === "lastseason,elite,decisions");
+  check("?only=elite corre só a elite", (() => { const p = planFromRequest(null, "elite"); return !p.backtest && !p.calibration && p.extras.join(",") === "elite"; })());
+}
+
+testConsultantImprovements();
 
 void testLossCanNoLongerLookLikeEmptiness()
   .then(() => testOneRefusalNoLongerKillsTheWholeApp())
