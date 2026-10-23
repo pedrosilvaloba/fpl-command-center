@@ -8776,7 +8776,7 @@ function testConsultantImprovements() {
   near("posse na elite em %", eliteOwn(elite, 1), 100, 1e-9);
   near("capitão na elite em %", eliteCap(elite, 1), 66.7, 0.05);
   const d1 = chooseCaptainWithElite([hal, jp, other], jp, elite, 2);
-  check("modelo prefere por 1 pt (< margem 2): fica o capitão da elite", d1.captain?.element.id === 1 && d1.source === "elite");
+  check("histórico elite da GW anterior não substitui previsão futura dentro da margem", d1.captain?.element.id === 2 && d1.source === "modelo" && /não na próxima jornada/.test(d1.reason));
   const d2 = chooseCaptainWithElite([mk(1, 4), mk(2, 7.5), other], mk(2, 7.5), elite, 2);
   check("modelo prefere por 3,5 pts (> margem): o modelo ganha", d2.captain?.element.id === 2 && d2.source === "modelo");
   const d3 = chooseCaptainWithElite([hal, jp], jp, null, 2);
