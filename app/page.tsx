@@ -80,7 +80,7 @@ import LeagueChipsPanel from "@/components/LeagueChipsPanel";
 import CaptainShortlist from "@/components/CaptainShortlist";
 import DeferralPanel from "@/components/DeferralPanel";
 import ChipScenarioPanel from "@/components/ChipScenarioPanel";
-import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates } from "@/lib/chipscenarioview";
+import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, parseWildcardProfile } from "@/lib/chipscenarioview";
 import ElitePanel from "@/components/ElitePanel";
 import type { ScoredPlayer } from "@/lib/recommend";
 import DecisionLogPanel from "@/components/DecisionLogPanel";
@@ -325,6 +325,7 @@ export default async function Home({
   const sp = await searchParams;
   const keepIds = parseKeepParam(sp.manter);
   const includeIds = parseKeepParam(sp.incluir);
+  const wildcardProfile = parseWildcardProfile(sp.perfil);
   const initialChip =
     parseChipParam(sp.chip) ?? (keepIds.length + includeIds.length > 0 ? "wildcard" : null);
   const [bootstrap, fixtures, oddsResult] = await Promise.all([
@@ -686,6 +687,7 @@ export default async function Home({
     keepIds,
     includeIds,
     defaultIncludeIds: [],
+    wildcardProfile,
   });
   // eslint-disable-next-line react-hooks/purity
   const plannerDurationMs = Math.round(performance.now() - plannerStartedAt);
@@ -1158,6 +1160,7 @@ export default async function Home({
                 eliteLookup
               )}
               initialChip={initialChip}
+              wildcardProfile={wildcardProfile}
               candidates={scenarioCandidates}
             />
           </div>
