@@ -1,7 +1,7 @@
 import type { DecisionHistory } from "@/lib/decisions";
 
 /**
- * SEGUIR A APP TERIA DADO MAIS PONTOS?
+ * A SIMULAÇÃO DA APP TERIA DADO MAIS PONTOS?
  *
  * A única pergunta que decide se vale a pena melhorar este modelo — e até
  * à v1.62 não tinha resposta. Uma linha por jornada: o onze e o capitão que
@@ -37,9 +37,15 @@ export default function DecisionLogPanel({
             {history.totalDiff >= 0 ? "+" : ""}
             {history.totalDiff} pts
           </b>{" "}
-          face ao que fizeste.
+          face aos multiplicadores da tua equipa na API (comparação simulada, não transferências executadas).
         </p>
       )}
+      <p className="text-xs leading-relaxed text-text-muted">
+        Apenas jornadas com dados de minutos completos, substituições calculadas e
+        pontuação que coincide com o valor oficial entram no acumulado.
+        Os registos antigos continuam visíveis, mas não provam vantagem real.
+        Um plantel teórico pode não ser financeiramente executável.
+      </p>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[34rem] text-[12px]">
           <thead>
@@ -63,14 +69,16 @@ export default function DecisionLogPanel({
                 <td className="py-1.5 pr-3">
                   {r.outcome ? `${n(r.outcome.pedro.captain)} (${r.outcome.pedro.captainPts})` : "por jogar"}
                 </td>
-                <td className="py-1.5 pr-3 text-right font-mono">{r.outcome ? r.outcome.app.points : "—"}</td>
-                <td className="py-1.5 pr-3 text-right font-mono">{r.outcome ? r.outcome.pedro.points : "—"}</td>
+                <td className="py-1.5 pr-3 text-right font-mono">{r.outcome?.settlement ? r.outcome.settlement.simulated : "—"}</td>
+                <td className="py-1.5 pr-3 text-right font-mono">{r.outcome?.settlement ? r.outcome.settlement.actualViaMultipliers : "—"}</td>
                 <td
                   className={`py-1.5 text-right font-mono ${
-                    !r.outcome ? "text-text-muted" : r.outcome.diff >= 0 ? "text-accent" : "text-danger"
+                    !r.outcome?.settlement || Math.abs(r.outcome.settlement.officialDelta) > 1 ? "text-text-muted" : r.outcome.settlement.netDifference >= 0 ? "text-accent" : "text-danger"
                   }`}
                 >
-                  {r.outcome ? `${r.outcome.diff >= 0 ? "+" : ""}${r.outcome.diff}` : "aberta"}
+                  {r.outcome?.settlement && Math.abs(r.outcome.settlement.officialDelta) <= 1
+                    ? `${r.outcome.settlement.netDifference >= 0 ? "+" : ""}${r.outcome.settlement.netDifference}`
+                    : r.outcome ? "indicativa" : "aberta"}
                 </td>
               </tr>
             ))}
