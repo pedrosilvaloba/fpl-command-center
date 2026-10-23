@@ -4948,8 +4948,8 @@ function testNeverHavingRunIsTheWorstCaseNotAnUnknownOne() {
     health.every((h) => h.stale === true && h.lastSuccess === null)
   );
   check(
-    "as seis tarefas são vigiadas (v1.62: época passada, elite, decisões)",
-    health.length === 6,
+    "as sete tarefas são vigiadas, incluindo observação oficial",
+    health.length === 7,
     health.map((h) => h.job).join(",")
   );
 }
