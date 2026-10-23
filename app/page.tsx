@@ -74,6 +74,8 @@ import StrategyPanel from "@/components/StrategyPanel";
 import TransferPlanPanel from "@/components/TransferPlanPanel";
 import GameweekReviewPanel from "@/components/GameweekReviewPanel";
 import BacktestPanel from "@/components/BacktestPanel";
+import ForwardBenchmarkPanel from "@/components/ForwardBenchmarkPanel";
+import { saveForwardSnapshot, settleForwardSnapshots, getForwardHistory } from "@/lib/forwardbenchmark";
 import DispersionPanel from "@/components/DispersionPanel";
 import LeagueChipsPanel from "@/components/LeagueChipsPanel";
 import CaptainShortlist from "@/components/CaptainShortlist";
@@ -728,6 +730,7 @@ export default async function Home({
   );
   await Promise.all([
     upcomingEvent ? snapshotIfMissing(rawScored, upcomingEvent.id) : Promise.resolve(),
+    upcomingEvent ? saveForwardSnapshot(scored, bootstrap.elements, upcomingEvent.id, upcomingEvent.deadline_time) : Promise.resolve(),
     upcomingEvent ? snapshotStrategies(rawScored, upcomingEvent.id) : Promise.resolve(),
     // Per-player predictions for the gameweek review. Written BEFORE the
     // deadline because reconstructing them afterwards is not a test the
@@ -738,9 +741,13 @@ export default async function Home({
     // previsão que ninguém usou — e corrigir duas vezes o mesmo desvio.
     upcomingEvent ? snapshotPredictions(scored, upcomingEvent.id) : Promise.resolve(),
     recordOutcomesForFinishedEvents(finishedEventIds),
+    settleForwardSnapshots(finishedEventIds),
     settleStrategies(finishedEventIds),
   ]);
-  const accuracyHistory = await getAccuracyHistory();
+  const [accuracyHistory, forwardHistory] = await Promise.all([
+    getAccuracyHistory(),
+    getForwardHistory(),
+  ]);
   // O backtest corria todas as noites e o resultado morria no Redis: nada
   // na app o lia. A pergunta "posso confiar neste modelo?" tinha resposta
   // guardada e invisível.
@@ -1289,6 +1296,10 @@ export default async function Home({
               result={backtest}
               configured={storageConfigured}
             />
+          </div>
+          <div className="mt-6 border-t border-border pt-5">
+            <SubHeading>Benchmark prospetivo — modelo vs. FPL vs. média</SubHeading>
+            <ForwardBenchmarkPanel history={forwardHistory} />
           </div>
 
           <div className="mt-6 border-t border-border pt-5">
