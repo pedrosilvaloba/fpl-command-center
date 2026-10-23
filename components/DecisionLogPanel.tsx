@@ -44,7 +44,7 @@ export default function DecisionLogPanel({
         Apenas jornadas com dados de minutos completos, substituições calculadas e
         pontuação que coincide com o valor oficial entram no acumulado.
         Os registos antigos continuam visíveis, mas não provam vantagem real.
-        Um plantel teórico pode não ser financeiramente executável.
+        A coluna “vs. manter” confronta o conselho da app com o plantel sem transferências, ambos registados antes do deadline. Um plantel teórico pode não ser financeiramente executável.
       </p>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[34rem] text-[12px]">
@@ -56,6 +56,7 @@ export default function DecisionLogPanel({
               <th className="py-1 pr-3 text-right font-medium">Onze app</th>
               <th className="py-1 pr-3 text-right font-medium">Teu onze</th>
               <th className="py-1 text-right font-medium">Diferença</th>
+              <th className="py-1 text-right font-medium">vs. manter</th>
             </tr>
           </thead>
           <tbody>
@@ -79,6 +80,11 @@ export default function DecisionLogPanel({
                   {r.outcome?.settlement && Math.abs(r.outcome.settlement.officialDelta) <= 1
                     ? `${r.outcome.settlement.netDifference >= 0 ? "+" : ""}${r.outcome.settlement.netDifference}`
                     : r.outcome ? "indicativa" : "aberta"}
+                </td>
+                <td className="py-1.5 text-right font-mono text-text-muted">
+                  {r.outcome?.settlement?.gainVsHold !== undefined
+                    ? `${r.outcome.settlement.gainVsHold >= 0 ? "+" : ""}${r.outcome.settlement.gainVsHold}`
+                    : "—"}
                 </td>
               </tr>
             ))}
