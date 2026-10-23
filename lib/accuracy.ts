@@ -64,6 +64,31 @@ export interface AccuracyResult {
   lift: number; // topAvgPoints - restAvgPoints
 }
 
+/**
+ * Select NEXT-GW forecasts, not the five-GW total. Previous implementation
+ * used score, which aliases the five-GW sum, and then compared that
+ * multi-GW ranking against points in one GW. This is an apples/oranges
+ * diagnostic even when both values are individually correct.
+ */
+export function buildAccuracyPicks(scored: ScoredPlayer[]): SnapshotPick[] {
+  const picks: SnapshotPick[] = [];
+  for (const posId of [1, 2, 3, 4]) {
+    const top = scored
+      .filter((p) => p.element.element_type === posId && Number.isFinite(p.expectedPointsNext))
+      .sort((a, b) => b.expectedPointsNext - a.expectedPointsNext)
+      .slice(0, TOP_N_PER_POSITION);
+    for (const p of top) {
+      picks.push({
+        elementId: p.element.id,
+        positionShort: p.positionShort,
+        score: p.expectedPointsNext,
+        webName: p.element.web_name,
+      });
+    }
+  }
+  return picks;
+}
+
 /** Best-effort snapshot of the model's current top-N-per-position picks
  * for `eventId` — only writes once per gameweek (idempotent), and only
  * ever called by the page for a gameweek whose deadline hasn't passed
@@ -75,20 +100,7 @@ export async function snapshotIfMissing(scored: ScoredPlayer[], eventId: number)
     const existing = await redis.get(SNAPSHOT_KEY(eventId));
     if (existing) return;
 
-    const picks: SnapshotPick[] = [];
-    for (const posId of [1, 2, 3, 4]) {
-      const top = scored
-        .filter((p) => p.element.element_type === posId)
-        .slice(0, TOP_N_PER_POSITION);
-      for (const p of top) {
-        picks.push({
-          elementId: p.element.id,
-          positionShort: p.positionShort,
-          score: p.score,
-          webName: p.element.web_name,
-        });
-      }
-    }
+    const picks = buildAccuracyPicks(scored);
     if (picks.length === 0) return;
     const snapshot: Snapshot = { event: eventId, takenAt: new Date().toISOString(), picks };
     await redis.set(SNAPSHOT_KEY(eventId), snapshot);
