@@ -1,0 +1,30 @@
+name: Regenerate audited lockfile (temporary)
+on:
+  push:
+    branches:
+      - feature/decision-integrity-deploy-20261023
+    paths:
+      - package.json
+permissions:
+  contents: write
+jobs:
+  update:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install --package-lock-only --ignore-scripts --no-audit
+      - name: Commit lockfile with registry-provided integrity hashes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(security): regenerate Next 16.4.1 / React 19.2.9 lockfile"
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
