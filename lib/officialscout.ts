@@ -78,16 +78,16 @@ export function buildScoutReport(data: FplBootstrap, at = new Date().toISOString
     items: ranked.slice(0, MAX_ITEMS).map(x => x.item),
   };
 }
-export async function runOfficialScout(): Promise<{
-  ok: boolean; productive: boolean; summary: string; detail: Record<string, unknown>;
-  error?: string;
-}> {
+export type ScoutJobOutcome =
+  | { ok: true; productive: boolean; summary: string; detail: Record<string, unknown> }
+  | { ok: false; retryable: boolean; error: string; productive: false; summary: string; detail: Record<string, unknown> };
+export async function runOfficialScout(): Promise<ScoutJobOutcome> {
   const redis = getRedis();
-  if (!redis) return { ok: false, productive: false, error: "Redis não configurado", summary: "Sem armazenamento", detail: {} };
+  if (!redis) return { ok: false, retryable: false, productive: false, error: "Redis não configurado", summary: "Sem armazenamento", detail: {} };
   try {
     const bootstrap = await getBootstrap();
     const report = buildScoutReport(bootstrap);
-    if (!report.checkedPlayers) return { ok: false, productive: false, summary: "API FPL devolveu zero jogadores", detail: {} };
+    if (!report.checkedPlayers) return { ok: false, retryable: true, productive: false, error: "API FPL sem jogadores", summary: "API FPL devolveu zero jogadores", detail: {} };
     await redis.set(SCOUT_KEY, report);
     return {
       ok: true, productive: true,
@@ -95,7 +95,7 @@ export async function runOfficialScout(): Promise<{
       detail: { checkedPlayers: report.checkedPlayers, findings: report.items.length, event: report.event },
     };
   } catch (error) {
-    return { ok: false, productive: false, summary: "Falha a recolher dados oficiais", error: String(error), detail: {} };
+    return { ok: false, retryable: true, productive: false, summary: "Falha a recolher dados oficiais", error: String(error), detail: {} };
   }
 }
 export async function readOfficialScout(): Promise<ScoutReport | null> {
