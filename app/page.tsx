@@ -672,16 +672,16 @@ export default async function Home({
     likelyFallers: fallers.map((r) => r.element.id),
     calendar,
   };
-  // Núcleo da elite que falta: entra por omissão no cenário de Wildcard,
-  // a não ser que o gestor tenha dito o que incluir (`?incluir=` presente,
-  // mesmo "nenhum").
+  // Elite ownership is evidence about PAST successful squads, not a causal
+  // requirement for a future Wildcard. No auto-forcing into the solver:
+  // explicit ?incluir= remains available for user-directed scenarios.
   const ownedIdSet = new Set(squadState.owned.map((o) => o.elementId));
   const eliteMissing = eliteGaps(elite, scored, ownedIdSet);
   const transferAdvice = planTransfers(scored, squadState, {
     ...transferPlanOpts,
     keepIds,
     includeIds,
-    defaultIncludeIds: sp.incluir === undefined ? eliteMissing.map((g) => g.player.element.id) : [],
+    defaultIncludeIds: [],
   });
 
   // "E se não gastar nada esta semana, para na próxima ter duas e meter os

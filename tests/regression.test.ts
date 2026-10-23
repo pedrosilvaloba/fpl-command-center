@@ -8802,8 +8802,8 @@ function testConsultantImprovements() {
   });
   const ev = (c: string) => cal.slots.find((x) => x.chip === c)?.event;
   check("calendário: 3 chips por usar (o Triple Captain já foi)", cal.slots.length === 3 && ev("3xc") === undefined, cal.slots.map((x) => x.chip).join(","));
-  check("calendário: com 3 jogadores da elite em falta, Wildcard já", ev("wildcard") === 8);
-  check("calendário: Bench Boost na jornada a seguir ao Wildcard", ev("bboost") === 9);
+  check("calendário: posse da elite não obriga ao Wildcard imediato", ev("wildcard") !== 8);
+  check("calendário: Bench Boost na jornada a seguir à reserva de Wildcard", ev("bboost") === (ev("wildcard") ?? 0) + 1);
   check("calendário: tudo antes do limite da GW19", cal.slots.every((x) => x.event <= 19 && x.event >= 8));
   check("calendário: semanas distintas", new Set(cal.slots.map((x) => x.event)).size === cal.slots.length);
   const late = planChipCalendar({ currentEvent: 22, chips, projections: [], wildcardAdvised: false, eliteGaps: 0 });

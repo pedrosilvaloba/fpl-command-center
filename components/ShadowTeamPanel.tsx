@@ -136,7 +136,7 @@ export default function ShadowTeamPanel({
     ? pickCaptain(starters)
     : { captain: undefined, viceCaptain: undefined };
   const projectedTotal = isComplete
-    ? starters.reduce((sum, p) => sum + (p === captain ? p.score * 2 : p.score), 0)
+    ? starters.reduce((sum, p) => sum + (p === captain ? p.expectedPointsNext * 2 : p.expectedPointsNext), 0)
     : 0;
 
   function canAdd(p: ScoredPlayer): string | null {
@@ -353,7 +353,7 @@ export default function ShadowTeamPanel({
         {syncMode === "synced"
           ? syncError ?? "Sincronizado entre dispositivos."
           : syncMode === "local-only"
-          ? "Guardado só neste browser (liga a integração Upstash Redis na Vercel para sincronizar entre dispositivos)."
+          ? "Guardado apenas neste browser. Sincronização entre dispositivos desativada até existir autenticação segura."
           : "A verificar sincronização…"}{" "}
         Isto não mexe na tua equipa real — é só para testares ideias antes de
         decidires uma transferência a sério.

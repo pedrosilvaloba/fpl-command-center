@@ -78,18 +78,25 @@ export function planChipCalendar(input: {
 
   let wcEvent: number | null = null;
   if (available("wildcard")) {
-    const now = input.wildcardAdvised || input.eliteGaps >= 2;
-    wcEvent = now ? currentEvent : Math.min(deadlineEvent, currentEvent + 1);
+    // IMPORTANT: being absent from today's top-ranked squads is NOT proof
+    // that spending a Wildcard now increases future expected points. Ranking
+    // leaders after GW7 conditions on their past returns (survivorship).
+    // Elite ownership remains diagnostic; only the transfer planner's
+    // explicit, threshold-tested signal can recommend an immediate Wildcard.
+    const now = input.wildcardAdvised;
+    // A provisional calendar slot is NOT a call to play the chip.
+    // Avoid prescribing "next week" without any positive evidence.
+    wcEvent = now
+      ? currentEvent
+      : Math.min(deadlineEvent, currentEvent + Math.max(1, Math.ceil((deadlineEvent - currentEvent) / 2)));
     taken.add(wcEvent);
     slots.push({
       chip: "wildcard",
       label: LABEL.wildcard,
       event: wcEvent,
       why: now
-        ? input.eliteGaps >= 2
-          ? `Faltam-te ${input.eliteGaps} jogadores que a elite tem a 70% ou mais; chegar lá com transferências custaria várias jornadas. Se o jogares, o conselho de transferências desta jornada deixa de contar: segue o cenário de Wildcard abaixo, que já os inclui.`
-          : "O planeador de transferências já o aconselha."
-        : "Na próxima jornada, depois de veres as notícias desta semana.",
+        ? "O planeador de transferências aconselha o Wildcard. Confirma a vantagem líquida, o orçamento e as notícias antes do deadline."
+        : "Reserva provisória, não uma recomendação para jogar nessa GW. A falta de jogadores populares na elite não justifica por si só um Wildcard; rever quando houver evidência de ganhos reais.",
     });
   }
 
@@ -153,6 +160,6 @@ export function planChipCalendar(input: {
     note:
       slots.length === 0
         ? "Já usaste todos os chips da primeira metade."
-        : `Os chips da primeira metade caducam no deadline da GW${deadlineEvent}: restam ${weeksLeft} jornadas e ${slots.length} chip${slots.length === 1 ? "" : "s"}. Sem jornadas duplas previstas até lá, guardar um chip rende pouco e perdê-lo rende zero.`,
+        : `Os chips da primeira metade caducam no deadline da GW${deadlineEvent}: restam ${weeksLeft} jornadas e ${slots.length} chip${slots.length === 1 ? "" : "s"}. Este calendário é uma reserva de datas para não deixar chips caducar, não uma ordem para os jogar: reavaliar valor, calendário e notícias antes de cada deadline.`,
   };
 }
