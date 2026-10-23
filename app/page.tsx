@@ -22,7 +22,6 @@ import { getOddsStatus } from "@/lib/oddsapi";
 import { findScheduleAnomalies } from "@/lib/schedule";
 import {
   snapshotIfMissing,
-  recordOutcomesForFinishedEvents,
   getAccuracyHistory,
 } from "@/lib/accuracy";
 import { loadActiveInsights, getLastResearchRun } from "@/lib/managerinsights";
@@ -41,7 +40,6 @@ import {
 import type { LeagueOutlook } from "@/lib/rivals";
 import {
   snapshotStrategies,
-  settleStrategies,
   getLearningState,
   applyCalibration,
 } from "@/lib/strategylearning";
@@ -75,7 +73,7 @@ import TransferPlanPanel from "@/components/TransferPlanPanel";
 import GameweekReviewPanel from "@/components/GameweekReviewPanel";
 import BacktestPanel from "@/components/BacktestPanel";
 import ForwardBenchmarkPanel from "@/components/ForwardBenchmarkPanel";
-import { saveForwardSnapshot, settleForwardSnapshots, getForwardHistory } from "@/lib/forwardbenchmark";
+import { saveForwardSnapshot, getForwardHistory } from "@/lib/forwardbenchmark";
 import DispersionPanel from "@/components/DispersionPanel";
 import LeagueChipsPanel from "@/components/LeagueChipsPanel";
 import CaptainShortlist from "@/components/CaptainShortlist";
@@ -740,9 +738,6 @@ export default async function Home({
     // o ecrã mostra os corrigidos faria a camada de aprendizagem medir uma
     // previsão que ninguém usou — e corrigir duas vezes o mesmo desvio.
     upcomingEvent ? snapshotPredictions(scored, upcomingEvent.id) : Promise.resolve(),
-    recordOutcomesForFinishedEvents(finishedEventIds),
-    settleForwardSnapshots(finishedEventIds),
-    settleStrategies(finishedEventIds),
   ]);
   const [accuracyHistory, forwardHistory] = await Promise.all([
     getAccuracyHistory(),
