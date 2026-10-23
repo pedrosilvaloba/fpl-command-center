@@ -221,7 +221,19 @@ export async function saveForwardSnapshot(
 export async function settleForwardSnapshots(finishedEvents: number[]): Promise<void> {
   const redis = getRedis();
   if (!redis || !finishedEvents.length) return;
-  for (const gw of finishedEvents) {
+  let candidates: number[] = [];
+  try {
+    // Only gameweeks that were really snapshotted. Otherwise every page
+    // made Redis lookups for all finished weeks, including those that
+    // predate installation of this benchmark.
+    const tracked = (await redis.smembers(INDEX_KEY)) ?? [];
+    const finished = new Set(finishedEvents);
+    candidates = tracked.map((x) => Number(x))
+      .filter((gw) => Number.isInteger(gw) && finished.has(gw));
+  } catch {
+    return;
+  }
+  for (const gw of candidates) {
     try {
       if (await redis.get(resultKey(gw))) continue;
       const snapshot = await redis.get<ForwardSnapshot>(snapshotKey(gw));
