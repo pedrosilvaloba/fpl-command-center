@@ -8862,7 +8862,7 @@ function testConsultantImprovements() {
   check("o que o gestor inclui substitui as inclusões por omissão", (explicitWins.scenarios.find((s) => s.chip === "wildcard")!.includedByDefault ?? []).length === 0);
 
   // 7. Cron: os extras correm às 6h e podem ser pedidos à mão.
-  check("as 6h também recolhem a época passada, a elite e as decisões", planFromRequest("0 6 * * *", null).extras.join(",") === "lastseason,elite,decisions");
+  check("as 6h também recolhem a época passada, a elite e as decisões", planFromRequest("0 6 * * *", null).extras.join(",") === "officialscout,lastseason,elite,decisions");
   check("?only=elite corre só a elite", (() => { const p = planFromRequest(null, "elite"); return !p.backtest && !p.calibration && p.extras.join(",") === "elite"; })());
 }
 
