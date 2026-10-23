@@ -898,6 +898,14 @@ export default async function Home({
         chip: advisedChip,
         captainSource: captainDecision.source,
         predictedXi: advisedPlan?.xiNextPoints ?? xiExpected,
+        holdBaseline: transferAdvice.hold
+          ? {
+              xi: transferAdvice.hold.xi.map((p) => p.element.id),
+              bench: transferAdvice.hold.bench.map((p) => p.element.id),
+              captain: transferAdvice.hold.captain?.element.id ?? null,
+              vice: transferAdvice.hold.viceCaptain?.element.id ?? null,
+            }
+          : undefined,
       },
       upcomingEvent.deadline_time
     );
