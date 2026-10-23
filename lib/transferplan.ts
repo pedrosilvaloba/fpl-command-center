@@ -443,6 +443,39 @@ export interface WildcardSignal {
   text: string;
 }
 
+/**
+ * A PERGUNTA QUE O GESTOR FAZ, E NÃO A QUE O MODELO ACHA QUE DEVIA FAZER.
+ *
+ * Até aqui o plantel de Wildcard era calculado em todas as visitas e só era
+ * mostrado quando o modelo aconselhava o chip. Quem quisesse saber "se eu
+ * usar o Wildcard esta semana, o que faço?" não tinha resposta, porque o
+ * modelo já tinha decidido que a pergunta não interessava. Agora cada chip
+ * tem um cenário calculado, com a recomendação do modelo ao lado — a
+ * decisão é do Pedro, a conta é da app.
+ */
+export type ChipKey = "wildcard" | "freehit" | "bboost" | "3xc";
+
+export interface ChipScenario {
+  chip: ChipKey;
+  label: string;
+  /** Ainda há um destes chips por usar nesta metade da época. */
+  available: boolean;
+  /** O plantel com que se joga o chip. Para Wildcard e Free Hit é um
+   * plantel reconstruído; para Bench Boost e Triple Captain é o plano
+   * recomendado desta jornada, com o chip por cima. */
+  plan: TransferPlan | null;
+  /** Pontos esperados a mais na PRÓXIMA jornada face a não jogar o chip
+   * (mantendo o plano recomendado). */
+  gainNext: number;
+  /** Pontos esperados a mais nas próximas 5 jornadas, quando o chip mexe
+   * nelas (só o Wildcard). Já limitado pelo teto de plausibilidade. */
+  gainWindow: number | null;
+  /** O que o modelo faria: true = o chip compensa agora. */
+  advised: boolean;
+  /** Frase pronta para o ecrã: o veredicto e porquê. */
+  verdict: string;
+}
+
 export interface TransferAdvice {
   available: boolean;
   reason: string | null;
@@ -450,6 +483,9 @@ export interface TransferAdvice {
   plans: TransferPlan[];
   recommended: TransferPlan | null;
   wildcard: WildcardSignal | null;
+  /** "E se eu jogasse o chip X esta semana?" — sempre calculado, mesmo
+   * quando o modelo não aconselha o chip. Ver `ChipScenario`. */
+  scenarios: ChipScenario[];
   shortTerm: string;
   mediumTerm: string;
   longTerm: string;
@@ -794,6 +830,7 @@ export function planTransfers(
       plans: [],
       recommended: null,
       wildcard: null,
+      scenarios: [],
       shortTerm: "",
       mediumTerm: "",
       longTerm: "",
@@ -816,6 +853,7 @@ export function planTransfers(
       plans: [],
       recommended: null,
       wildcard: null,
+      scenarios: [],
       shortTerm: "",
       mediumTerm: "",
       longTerm: "",
@@ -988,6 +1026,7 @@ export function planTransfers(
     : 0;
 
   let wildcard: WildcardSignal | null = null;
+  let wildcardPlan: TransferPlan | null = null;
   if (idealSquad) {
     const plan = makePlan(
       "wildcard",
@@ -1077,9 +1116,11 @@ export function planTransfers(
               ? `O modelo não encontra nenhuma mudança que valha a pena. Se ignorasse a sua própria margem de erro trocaria ${unguardedDistance} jogador${unguardedDistance === 1 ? "" : "es"} — mas nesta altura da época duas estimativas só são distinguíveis a partir de ${retention.toFixed(1)} pontos em 5 jornadas, e nenhuma dessas diferenças chega lá. Não é que estejas perto do ideal: é que a diferença que existe é menor do que o erro com que ela é medida.`
               : `Plantel a ${distance} transferências do ideal (${gain >= 0 ? "+" : ""}${gain} pts em 5 jornadas) — perto o suficiente para fechar com transferências livres. Guardar o Wildcard.`,
     };
+    plan.rationale =
+      "Com o Wildcard não pagas pontos por nenhuma transferência, por isso este é simplesmente o melhor plantel que o teu dinheiro compra hoje, otimizado para as próximas 5 jornadas.";
+    wildcardPlan = plan;
     if (advise) {
-      plan.rationale =
-        "Com o Wildcard não pagas pontos por nenhuma transferência, por isso este é simplesmente o melhor plantel que o teu dinheiro compra hoje. Aparece aqui porque a distância ao ideal já justifica gastar o chip.";
+      plan.rationale += " Aparece na lista de planos porque a distância ao ideal já justifica gastar o chip.";
       plans.push(plan);
     }
   }
@@ -1196,6 +1237,21 @@ export function planTransfers(
     ? wildcard.text
     : "Sem leitura de longo prazo enquanto não houver plantel ideal calculável.";
 
+  const scenarios = buildChipScenarios({
+    base,
+    state,
+    costM,
+    beta,
+    risers,
+    fallers,
+    ownedSquad,
+    hold,
+    recommended,
+    wildcard,
+    wildcardPlan,
+    retention,
+  });
+
   return {
     available: true,
     reason: null,
@@ -1203,8 +1259,158 @@ export function planTransfers(
     plans: ranked,
     recommended,
     wildcard,
+    scenarios,
     shortTerm,
     mediumTerm,
     longTerm,
   };
+}
+
+// --------------------------------------------------------------------------
+// Chip scenarios — "e se eu usasse o chip X esta semana?"
+// --------------------------------------------------------------------------
+
+const round1 = (x: number) => Math.round(x * 10) / 10;
+
+function chipAvailable(state: SquadState, chip: ChipKey): boolean {
+  return (state.chips.find((c) => c.name === chip)?.remaining ?? 0) > 0;
+}
+
+function buildChipScenarios(ctx: {
+  base: Omit<SolveOptions, "maxTransfers" | "freeTransfers" | "allowHits">;
+  state: SquadState;
+  costM: Map<number, number>;
+  beta: number;
+  risers: Set<number>;
+  fallers: Set<number>;
+  ownedSquad: ScoredPlayer[];
+  hold: TransferPlan;
+  recommended: TransferPlan;
+  wildcard: WildcardSignal | null;
+  wildcardPlan: TransferPlan | null;
+  retention: number;
+}): ChipScenario[] {
+  const { base, state, costM, beta, risers, fallers, ownedSquad, hold, recommended } = ctx;
+  const out: ChipScenario[] = [];
+  // The baseline every chip is measured against: playing the gameweek with
+  // the plan the app already recommends, no chip.
+  const baseNext = recommended.xiNextPoints + (recommended.captain?.expectedPointsNext ?? 0);
+  const withCaptain = (p: TransferPlan) => p.xiNextPoints + (p.captain?.expectedPointsNext ?? 0);
+
+  // --- Wildcard -----------------------------------------------------------
+  const wcAvailable = chipAvailable(state, "wildcard");
+  if (ctx.wildcardPlan && ctx.wildcard) {
+    const p = ctx.wildcardPlan;
+    const wc = ctx.wildcard;
+    const gainNext = round1(withCaptain(p) - baseNext);
+    out.push({
+      chip: "wildcard",
+      label: "Wildcard",
+      available: wcAvailable,
+      plan: p,
+      gainNext,
+      gainWindow: wc.gain,
+      advised: wc.advise,
+      verdict: !wcAvailable
+        ? `Já não tens Wildcard nesta metade da época. O plantel abaixo é só a referência do que o dinheiro compraria.`
+        : wc.advise
+          ? `O modelo também o jogaria: ${p.transfers} trocas valem ${wc.gain >= 0 ? "+" : ""}${wc.gain} pts nas próximas 5 jornadas, acima dos ${wc.requiredGain.toFixed(0)} que o chip tem de render para compensar guardá-lo.`
+          : `O modelo guardava-o: ${p.transfers} trocas valem ${wc.gain >= 0 ? "+" : ""}${wc.gain} pts em 5 jornadas, e o chip precisa de render pelo menos ${wc.requiredGain.toFixed(0)} agora para valer mais do que guardá-lo (só há um por metade da época). Se decidires usá-lo na mesma, este é o melhor plantel.`,
+    });
+  }
+
+  // --- Free Hit -----------------------------------------------------------
+  // One gameweek, and the squad comes back afterwards: solve on NEXT-gameweek
+  // points only. Presenting next-gameweek points as the window value is the
+  // same trick `evaluate` uses for the starting eleven.
+  const fhAvailable = chipAvailable(state, "freehit");
+  const nextOnly = (p: ScoredPlayer): ScoredPlayer => ({
+    ...p,
+    expectedPoints: p.expectedPointsNext,
+    score: p.expectedPointsNext,
+  });
+  const fhSolved = solveSquad({
+    ...base,
+    pool: base.pool.map(nextOnly),
+    retention: ctx.retention / WINDOW_GAMEWEEKS,
+    maxTransfers: SQUAD_SIZE,
+    freeTransfers: SQUAD_SIZE,
+    allowHits: false,
+  });
+  if (fhSolved) {
+    const byId = new Map(base.pool.map((p) => [p.element.id, p]));
+    const squad = fhSolved.map((p) => byId.get(p.element.id) ?? p);
+    const p = makePlan("wildcard", "Free Hit", squad, ownedSquad, state, costM, beta, risers, fallers, 0);
+    // Free Hit is judged on one gameweek only.
+    const fhEval = evaluate(squad.map(nextOnly), beta);
+    const fhNext = fhEval.xiNextPoints + (fhEval.captain?.expectedPointsNext ?? 0);
+    const gainNext = round1(fhNext - baseNext);
+    p.rationale =
+      "Plantel só para esta jornada: o Free Hit não paga transferências e na jornada seguinte voltas ao plantel que tinhas. Otimizado apenas para a próxima jornada.";
+    // A Free Hit is a rescue chip. Without blanks or a double gameweek the
+    // same 11-ish points are available every week, and spending it on an
+    // ordinary week throws away its real use.
+    const FREE_HIT_MIN_GAIN = 12;
+    const advised = fhAvailable && gainNext >= FREE_HIT_MIN_GAIN;
+    out.push({
+      chip: "freehit",
+      label: "Free Hit",
+      available: fhAvailable,
+      plan: p,
+      gainNext,
+      gainWindow: null,
+      advised,
+      verdict: !fhAvailable
+        ? "Já não tens Free Hit nesta metade da época."
+        : advised
+          ? `Rende ${gainNext >= 0 ? "+" : ""}${gainNext} pts esta jornada face ao plano normal — acima do limiar de ${FREE_HIT_MIN_GAIN} a partir do qual vale gastar o chip de socorro.`
+          : `Rende ${gainNext >= 0 ? "+" : ""}${gainNext} pts esta jornada face ao plano normal. Abaixo de ${FREE_HIT_MIN_GAIN} o modelo guarda-o para uma jornada em branco ou dupla, que é onde ele vale mesmo.`,
+    });
+  }
+
+  // --- Bench Boost ----------------------------------------------------------
+  const bbAvailable = chipAvailable(state, "bboost");
+  const benchNext = round1(recommended.bench.reduce((s, p) => s + p.expectedPointsNext, 0));
+  const BENCH_BOOST_MIN = 10;
+  out.push({
+    chip: "bboost",
+    label: "Bench Boost",
+    available: bbAvailable,
+    plan: recommended,
+    gainNext: benchNext,
+    gainWindow: null,
+    advised: bbAvailable && benchNext >= BENCH_BOOST_MIN,
+    verdict: !bbAvailable
+      ? "Já não tens Bench Boost nesta metade da época."
+      : `O teu banco vale ${benchNext} pts esperados esta jornada. ${
+          benchNext >= BENCH_BOOST_MIN
+            ? "Acima de " + BENCH_BOOST_MIN + ": é uma boa semana para o chip."
+            : "Abaixo de " + BENCH_BOOST_MIN + ": guarda-o para uma jornada dupla ou para depois de um Wildcard, quando os 15 jogam."
+        }`,
+  });
+
+  // --- Triple Captain -------------------------------------------------------
+  const tcAvailable = chipAvailable(state, "3xc");
+  const cap = recommended.captain;
+  const capNext = round1(cap?.expectedPointsNext ?? 0);
+  const TRIPLE_CAPTAIN_MIN = 9;
+  out.push({
+    chip: "3xc",
+    label: "Triple Captain",
+    available: tcAvailable,
+    plan: recommended,
+    gainNext: capNext,
+    gainWindow: null,
+    advised: tcAvailable && capNext >= TRIPLE_CAPTAIN_MIN,
+    verdict: !tcAvailable
+      ? "Já não tens Triple Captain nesta metade da época."
+      : `${cap?.element.web_name ?? "O capitão"} com braçadeira tripla rende +${capNext} pts esperados. ${
+          capNext >= TRIPLE_CAPTAIN_MIN
+            ? "É uma previsão alta o suficiente para valer o chip."
+            : "Previsões de uma só jornada falham muito; abaixo de " + TRIPLE_CAPTAIN_MIN + " o modelo guardava-o para uma jornada dupla."
+        }`,
+  });
+
+  void hold;
+  return out;
 }

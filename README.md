@@ -90,6 +90,35 @@ components/
   ShadowTeamPanel.tsx Shadow Team — simulador de plantel (client, Redis + localStorage)
 ```
 
+## Novo na v1.61 — "e se eu usasse um chip esta semana?", e a app volta a publicar
+
+### 1. Nenhuma versão desde 9 de setembro chegou à app
+
+O último envio (commit dd35036) importava `components/DispersionPanel.tsx`,
+mas o ficheiro não foi enviado. O build falhou com "Module not found" e a
+Vercel continuou a servir a versão anterior. Tudo o que veio nesse envio,
+incluindo a correção de largura das previsões (`lib/dispersion.ts`), que é
+exatamente o que o backtest pede, nunca esteve em produção. O painel está
+agora no repositório.
+
+### 2. Cenários de chip, sempre calculados
+
+O plantel de Wildcard era calculado em todas as visitas e só aparecia quando
+o modelo aconselhava o chip. Agora, em "O Que Fazer", há uma caixa onde se
+escreve a pergunta ("gostava de usar o wildcard esta semana") ou se carrega
+num botão, e a app mostra para Wildcard, Free Hit, Bench Boost e Triple
+Captain: o plantel ou o onze com que se joga o chip, as trocas, o banco que
+sobra, quantos pontos rende face ao plano normal, e se o próprio modelo o
+jogaria. A pergunta é lida por palavras-chave (`parseChipQuestion` em
+`lib/chipscenarioview.ts`), sem modelo de linguagem: são quatro respostas
+possíveis, tem de ser instantâneo e não pode falhar por falta de rede.
+
+O Free Hit é otimizado só para a jornada seguinte (o plantel volta na
+outra); o Wildcard para 5 jornadas, com os mesmos travões do resto do
+planeador.
+
+---
+
 ## Novo na v1.48 — as duas fraquezas que a auditoria tinha deixado por corrigir
 
 ### 1. O Free Hit ignorava as substituições automáticas

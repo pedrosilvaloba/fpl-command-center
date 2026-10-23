@@ -11,6 +11,7 @@
  * Run with: npm test
  */
 
+import { toScenarioViews, parseChipQuestion } from "../lib/chipscenarioview";
 import { computeDynamicTeamFactors } from "../lib/teamrating";
 import {
   crossCheckExpertView,
@@ -8481,6 +8482,93 @@ function testOldBacktestRecordsSurviveTheNewField() {
 
 testOldBacktestRecordsSurviveTheNewField();
 
+
+// ═══ CENÁRIOS DE CHIP — "e se eu usasse o Wildcard esta semana?" ═══
+//
+// O plantel de Wildcard era calculado em todas as visitas e só aparecia
+// quando o modelo aconselhava o chip. A pergunta do gestor — "se eu o usar,
+// o que faço?" — não tinha resposta. Estes testes garantem que tem, que o
+// plantel respeita as regras, e que a recomendação do modelo continua
+// visível ao lado em vez de ser substituída pela vontade de quem pergunta.
+function testChipScenariosAnswerTheQuestionAsked() {
+  const { owned, scored } = mkTransferPool([10, 6, 2]);
+  const advice = planTransfers(scored, mkState(owned, 1), { currentEvent: 8 });
+  const keys = advice.scenarios.map((s) => s.chip).sort().join(",");
+  check("há um cenário para cada um dos quatro chips", keys === "3xc,bboost,freehit,wildcard", keys);
+
+  const wc = advice.scenarios.find((s) => s.chip === "wildcard")!;
+  const fh = advice.scenarios.find((s) => s.chip === "freehit")!;
+  for (const s of [wc, fh]) {
+    const squad = s.plan!.squad;
+    const byType = [1, 2, 3, 4].map((t) => squad.filter((p) => p.element.element_type === t).length);
+    check(`${s.label}: plantel de 15 em 2-5-5-3`, squad.length === 15 && byType.join("-") === "2-5-5-3", byType.join("-"));
+    const perClub = new Map<number, number>();
+    for (const p of squad) perClub.set(p.team.id, (perClub.get(p.team.id) ?? 0) + 1);
+    check(`${s.label}: máximo 3 por clube`, Math.max(...perClub.values()) <= 3);
+    check(`${s.label}: cabe no orçamento`, s.plan!.bankAfterM >= -1e-9, String(s.plan!.bankAfterM));
+    check(`${s.label}: não cobra hits`, s.plan!.hitCost === 0);
+    check(`${s.label}: o onze tem 11 e o banco 4`, s.plan!.xi.length === 11 && s.plan!.bench.length === 4);
+  }
+  check("o Wildcard está disponível quando nenhum chip foi usado", wc.available);
+  check(
+    "o cenário de Wildcard existe mesmo quando o modelo NÃO o aconselha",
+    wc.plan !== null && (wc.advised || /guardava/.test(wc.verdict))
+  );
+  check(
+    "o veredicto do Wildcard bate com o sinal do planeador",
+    wc.advised === advice.wildcard!.advise
+  );
+  check(
+    "o Free Hit nunca é pior do que manter o plantel na jornada seguinte",
+    fh.plan!.xiNextPoints >= advice.hold!.xiNextPoints - 0.5,
+    `${fh.plan!.xiNextPoints} vs ${advice.hold!.xiNextPoints}`
+  );
+  check(
+    "o cenário de Wildcard não entra na lista de planos quando não é aconselhado",
+    wc.advised || !advice.plans.some((p) => p.label.startsWith("Wildcard"))
+  );
+
+  // Chip já usado: o cenário continua lá, marcado como indisponível e nunca aconselhado.
+  const used = mkState(owned, 1);
+  used.chips = summariseChips([
+    { name: "wildcard", event: 3 },
+    { name: "wildcard", event: 20 },
+  ]);
+  const usedWc = planTransfers(scored, used, { currentEvent: 8 }).scenarios.find((s) => s.chip === "wildcard")!;
+  check("Wildcard usado: indisponível", !usedWc.available);
+  check("Wildcard usado: nunca aconselhado", !usedWc.advised);
+
+  // Sem plantel real não há cenários inventados.
+  const none = planTransfers(scored, { ...mkState(owned, 1), available: false, owned: [] });
+  check("sem plantel real, nenhum cenário", none.scenarios.length === 0);
+
+  // O que vai para o browser tem de sobreviver a JSON sem perder nada.
+  const views = toScenarioViews(advice.scenarios);
+  check("as vistas serializam sem perdas", JSON.stringify(JSON.parse(JSON.stringify(views))) === JSON.stringify(views));
+  const wcView = views.find((v) => v.chip === "wildcard")!;
+  check("a vista do Wildcard lista as trocas do plano", wcView.moves.length === wc.plan!.moves.length);
+  check("Bench Boost e Triple Captain não mostram trocas como se fossem do chip", views.filter((v) => v.chip === "bboost" || v.chip === "3xc").every((v) => v.moves.length === 0));
+
+  // A pergunta escrita à mão.
+  const cases: [string, string | null][] = [
+    ["gostava de usar wildcard esta semana, quais são as minhas melhores opções", "wildcard"],
+    ["E se eu fizer WC?", "wildcard"],
+    ["quero refazer a equipa toda", "wildcard"],
+    ["e se fizer free hit?", "freehit"],
+    ["Free-Hit esta jornada", "freehit"],
+    ["vale a pena o bench boost", "bboost"],
+    ["Triplo capitão no Haaland?", "3xc"],
+    ["triple captain", "3xc"],
+    ["quem devo pôr a capitão", null],
+    ["olá", null],
+  ];
+  for (const [q, want] of cases) {
+    const got = parseChipQuestion(q);
+    check(`pergunta "${q}" → ${want}`, got === want, String(got));
+  }
+}
+
+testChipScenariosAnswerTheQuestionAsked();
 
 void testLossCanNoLongerLookLikeEmptiness()
   .then(() => testOneRefusalNoLongerKillsTheWholeApp())

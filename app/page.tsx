@@ -78,6 +78,8 @@ import DispersionPanel from "@/components/DispersionPanel";
 import LeagueChipsPanel from "@/components/LeagueChipsPanel";
 import CaptainShortlist from "@/components/CaptainShortlist";
 import DeferralPanel from "@/components/DeferralPanel";
+import ChipScenarioPanel from "@/components/ChipScenarioPanel";
+import { toScenarioViews } from "@/lib/chipscenarioview";
 import { fetchLeagueChipState } from "@/lib/rivalchips";
 import { EMPTY_LEAGUE_CHIP_STATE } from "@/lib/rivalchips";
 
@@ -972,6 +974,13 @@ export default async function Home() {
               />
             }
           />
+
+          {/* "E se eu usasse o chip X esta semana?" — o cenário de cada chip
+              é sempre calculado, mesmo quando o modelo não o aconselha. */}
+          <div className="mt-6 border-t border-border pt-5">
+            <SubHeading>E se eu usasse um chip esta semana?</SubHeading>
+            <ChipScenarioPanel scenarios={toScenarioViews(transferAdvice.scenarios)} />
+          </div>
         </Section>
 
         {/* ================= alerts =================
