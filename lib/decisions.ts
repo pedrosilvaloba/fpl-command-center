@@ -40,6 +40,14 @@ export interface AdviceRecord {
   chip: string | null;
   captainSource: string;
   predictedXi: number;
+  /** Baseline: do not transfer, but choose the strongest XI/captain from
+   * the existing squad. Recorded BEFORE the deadline, not reconstructed. */
+  holdBaseline?: {
+    xi: number[];
+    bench: number[];
+    captain: number | null;
+    vice: number | null;
+  };
 }
 
 export interface OutcomeRecord {
@@ -59,6 +67,8 @@ export interface OutcomeRecord {
     actualViaMultipliers: number;
     netDifference: number;
     subCount: number;
+    holdPoints?: number;
+    gainVsHold?: number;
     officialReported: number;
     officialDelta: number;
     note: string;
@@ -110,7 +120,7 @@ export function settleOutcome(
     advisedIn.size === madeIn.size && [...advisedIn].every((id) => madeIn.has(id));
   let settlement: OutcomeRecord["settlement"];
   if (actual.picks.length === 15 && actual.minutesById && actual.positionById) {
-    const ids = [...new Set([...advice.xi, ...advice.bench, ...actual.picks.map((p) => p.element)])];
+    const ids = [...new Set([...advice.xi, ...advice.bench, ...(advice.holdBaseline?.xi ?? []), ...(advice.holdBaseline?.bench ?? []), ...actual.picks.map((p) => p.element)])];
     const allComplete = ids.every((id) =>
       actual.minutesById!.has(id) &&
       actual.positionById!.has(id) &&
@@ -137,6 +147,17 @@ export function settleOutcome(
         players,
       });
       if (app.reliable) {
+        const hold = advice.holdBaseline && advice.chip === null
+          ? simulateLineup({
+              xi: advice.holdBaseline.xi,
+              bench: advice.holdBaseline.bench,
+              captain: advice.holdBaseline.captain,
+              vice: advice.holdBaseline.vice,
+              chip: null,
+              hitCost: 0,
+              players,
+            })
+          : null;
         // FPL returns final per-player multipliers once a GW is completed.
         // They encode captain doubling and substitutions. This is NOT
         // identical to the official GW score when adjusted hits/other
@@ -151,6 +172,9 @@ export function settleOutcome(
           actualViaMultipliers,
           netDifference: app.points - actualViaMultipliers,
           subCount: app.subs.length,
+          ...(hold?.reliable
+            ? { holdPoints: hold.points, gainVsHold: app.points - hold.points }
+            : {}),
           officialReported: actual.officialPoints,
           officialDelta,
           note: Math.abs(officialDelta) > 1
