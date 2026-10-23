@@ -56,6 +56,7 @@ const advice: AdviceRecord = {
   event: 8, at: "2026-10-23T16:00:00Z",
   captain: 11, vice: 7, xi, bench, transfers: [],
   hitCost: 4, chip: null, captainSource: "modelo", predictedXi: 40,
+  holdBaseline: { xi, bench, captain: 7, vice: 6 },
 };
 const officialPicks = [...xi, ...bench].map((id, i) => ({
   element: id, position: i + 1,
@@ -69,5 +70,7 @@ const compare = settleOutcome(advice, {
 }, (id) => points.get(id) ?? 0);
 assert.equal(compare.settlement?.simulated, normal.points);
 assert.equal(compare.settlement?.subCount, 2);
+assert.equal(compare.settlement?.holdPoints, normal.points + 4);
+assert.equal(compare.settlement?.gainVsHold, -4, "hit cost must reduce realised gain vs holding");
 assert.ok(compare.settlement?.officialDelta !== undefined);
 console.log("decision integrity tests passed");
