@@ -278,7 +278,9 @@ export default function ChipScenarioPanel({
     const params = new URLSearchParams();
     params.set("chip", active ?? "wildcard");
     if (nextKept.length > 0) params.set("manter", nextKept.join(","));
-    if (nextIncluded.length > 0) params.set("incluir", nextIncluded.join(","));
+    // Sempre explícito: "nenhum" desliga as inclusões por omissão (o núcleo
+    // da elite) — sem isto, tirar o último incluído voltava a pô-los.
+    params.set("incluir", nextIncluded.length > 0 ? nextIncluded.join(",") : "nenhum");
     startTransition(() => {
       router.replace(`/?${params.toString()}#cenarios`, { scroll: false });
     });
@@ -355,7 +357,7 @@ export default function ChipScenarioPanel({
             disabled={pending}
             onClick={() =>
               startTransition(() =>
-                router.replace(active ? `/?chip=${active}#cenarios` : "/#cenarios", { scroll: false })
+                router.replace(`/?chip=${active ?? "wildcard"}&incluir=nenhum#cenarios`, { scroll: false })
               )
             }
             className="text-[12px] text-text-muted underline hover:text-text"

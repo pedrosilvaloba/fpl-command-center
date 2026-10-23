@@ -8848,6 +8848,19 @@ function testConsultantImprovements() {
   const wcImp = imposs.scenarios.find((s) => s.chip === "wildcard")!;
   check("incluir 3 guarda-redes é impossível e o cenário diz isso", wcImp.plan === null && /Não há plantel possível/.test(wcImp.verdict));
 
+  // 6b. Núcleo da elite por omissão no Wildcard: entra sem o gestor pedir,
+  // e os que não cabem caem um a um em vez de anular o cenário.
+  const def = planTransfers(scored, mkState(owned, 1), { currentEvent: 8, defaultIncludeIds: [outsider.element.id] });
+  const wcDef = def.scenarios.find((s) => s.chip === "wildcard")!;
+  check("elite por omissão: entra no plantel do Wildcard", !!wcDef.plan && wcDef.plan.squad.some((p) => p.element.id === outsider.element.id));
+  check("elite por omissão: marcada como tal e explicada", (wcDef.includedByDefault ?? []).join(",") === String(outsider.element.id) && /Incluí por omissão/.test(wcDef.verdict));
+  const gks = scored.filter((p) => p.element.element_type === 1 && !owned.some((o) => o.element.id === p.element.id)).slice(0, 3).map((p) => p.element.id);
+  const defImp = planTransfers(scored, mkState(owned, 1), { currentEvent: 8, defaultIncludeIds: [outsider.element.id, ...gks] });
+  const wcDefImp = defImp.scenarios.find((s) => s.chip === "wildcard")!;
+  check("elite por omissão impossível: o cenário não morre, larga só os que não cabem", !!wcDefImp.plan && (wcDefImp.includedByDefault ?? []).length < 4 && (wcDefImp.includedByDefault ?? []).includes(outsider.element.id));
+  const explicitWins = planTransfers(scored, mkState(owned, 1), { currentEvent: 8, includeIds: [outsider.element.id], defaultIncludeIds: gks.slice(0, 1) });
+  check("o que o gestor inclui substitui as inclusões por omissão", (explicitWins.scenarios.find((s) => s.chip === "wildcard")!.includedByDefault ?? []).length === 0);
+
   // 7. Cron: os extras correm às 6h e podem ser pedidos à mão.
   check("as 6h também recolhem a época passada, a elite e as decisões", planFromRequest("0 6 * * *", null).extras.join(",") === "lastseason,elite,decisions");
   check("?only=elite corre só a elite", (() => { const p = planFromRequest(null, "elite"); return !p.backtest && !p.calibration && p.extras.join(",") === "elite"; })());

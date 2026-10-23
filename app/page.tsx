@@ -672,10 +672,16 @@ export default async function Home({
     likelyFallers: fallers.map((r) => r.element.id),
     calendar,
   };
+  // Núcleo da elite que falta: entra por omissão no cenário de Wildcard,
+  // a não ser que o gestor tenha dito o que incluir (`?incluir=` presente,
+  // mesmo "nenhum").
+  const ownedIdSet = new Set(squadState.owned.map((o) => o.elementId));
+  const eliteMissing = eliteGaps(elite, scored, ownedIdSet);
   const transferAdvice = planTransfers(scored, squadState, {
     ...transferPlanOpts,
     keepIds,
     includeIds,
+    defaultIncludeIds: sp.incluir === undefined ? eliteMissing.map((g) => g.player.element.id) : [],
   });
 
   // "E se não gastar nada esta semana, para na próxima ter duas e meter os
@@ -841,8 +847,6 @@ export default async function Home({
   const xiExpected = starters.reduce((s, p) => s + p.expectedPointsNext, 0);
 
   // ---- v1.62: elite, calendário de chips, registo de decisões ---------
-  const ownedIdSet = new Set(squadState.owned.map((o) => o.elementId));
-  const eliteMissing = eliteGaps(elite, scored, ownedIdSet);
   const ownedScored = scored.filter((p) => ownedIdSet.has(p.element.id));
   const chipCalendar = planChipCalendar({
     currentEvent: fromEvent,

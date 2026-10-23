@@ -488,6 +488,8 @@ export interface ChipScenario {
   keptIds: number[];
   /** Jogadores que o gestor pediu para comprar ("incluir"). */
   includedIds: number[];
+  /** Os incluídos que vieram do núcleo da elite e não do gestor. */
+  includedByDefault?: number[];
 }
 
 export type MoveKind = "clara" | "indiferente" | "financia";
@@ -847,6 +849,11 @@ export function planTransfers(
     /** Jogadores que o gestor quer COMPRAR nos cenários de Wildcard e Free
      * Hit (por exemplo o Haaland). O plantel é montado à volta deles. */
     includeIds?: number[];
+    /** Inclusões POR OMISSÃO no cenário de Wildcard quando o gestor não
+     * escolheu nenhuma: o núcleo da elite (jogadores em ≥70% das 200 melhores
+     * equipas) que ele não tem. Ordenados do mais para o menos possuído; os
+     * que não couberem no orçamento ficam de fora, um a um. */
+    defaultIncludeIds?: number[];
   } = {}
 ): TransferAdvice {
   const beta = opts.beta ?? 0;
@@ -920,6 +927,10 @@ export function planTransfers(
     (opts.includeIds ?? []).filter((id) => byId.has(id) && !ownedIds.has(id))
   );
   for (const id of includeIds) poolMap.set(id, byId.get(id)!);
+  const defaultIncludeIds = (opts.defaultIncludeIds ?? []).filter(
+    (id) => byId.has(id) && !ownedIds.has(id) && !includeIds.has(id)
+  );
+  for (const id of defaultIncludeIds) poolMap.set(id, byId.get(id)!);
   const pool = [...poolMap.values()];
 
   // How much evidence the model actually has: gameweeks already played. This
@@ -1299,6 +1310,7 @@ export function planTransfers(
     retention,
     keepIds: new Set((opts.keepIds ?? []).filter((id) => ownedIds.has(id))),
     includeIds,
+    defaultIncludeIds: includeIds.size > 0 ? [] : defaultIncludeIds,
     scored,
   });
 
@@ -1341,6 +1353,7 @@ function buildChipScenarios(ctx: {
   retention: number;
   keepIds: Set<number>;
   includeIds: Set<number>;
+  defaultIncludeIds: number[];
   scored: ScoredPlayer[];
 }): ChipScenario[] {
   const { base, state, costM, beta, risers, fallers, ownedSquad, hold, recommended } = ctx;
@@ -1395,15 +1408,43 @@ function buildChipScenarios(ctx: {
     ].filter(Boolean);
     return ` Das ${kinds.length} trocas: ${parts.join(", ")}. Fixa os jogadores que não queres perder e o plantel é refeito à volta deles.`;
   };
-  const wcSolved = solveSquad({
-    ...base,
-    forceIds,
-    incumbentBonus,
-    retention: 0,
-    maxTransfers: SQUAD_SIZE,
-    freeTransfers: SQUAD_SIZE,
-    allowHits: false,
-  });
+  const solveWc = (ids: Set<number> | undefined) =>
+    solveSquad({
+      ...base,
+      forceIds: ids,
+      incumbentBonus,
+      retention: 0,
+      maxTransfers: SQUAD_SIZE,
+      freeTransfers: SQUAD_SIZE,
+      allowHits: false,
+    });
+  // Núcleo da elite por omissão. O backtest mostra que o modelo não prevê
+  // melhor do que a média de pontos por jogo; um jogador em 70%+ das 200
+  // melhores equipas é um consenso que o modelo não tem base para contrariar.
+  // Um Wildcard que não o traz não fecha a lacuna que justifica jogá-lo.
+  // Entram do mais para o menos possuído; quem não couber fica de fora.
+  let wcSolved = null as ReturnType<typeof solveSquad>;
+  const defaultUsed: number[] = [];
+  if (ctx.defaultIncludeIds.length > 0) {
+    const all = new Set([...forced, ...ctx.defaultIncludeIds]);
+    wcSolved = solveWc(all);
+    if (wcSolved) defaultUsed.push(...ctx.defaultIncludeIds);
+    else {
+      for (const id of ctx.defaultIncludeIds) {
+        const trial = solveWc(new Set([...forced, ...defaultUsed, id]));
+        if (trial) {
+          defaultUsed.push(id);
+          wcSolved = trial;
+        }
+      }
+    }
+  }
+  if (!wcSolved) wcSolved = solveWc(forceIds);
+  const nameById = new Map(ctx.scored.map((p) => [p.element.id, p.element.web_name] as [number, string]));
+  const defaultNote =
+    defaultUsed.length > 0
+      ? `Incluí por omissão ${defaultUsed.map((id) => nameById.get(id) ?? `#${id}`).join(", ")}: ${defaultUsed.length === 1 ? "está" : "estão"} em 70% ou mais das 200 melhores equipas e o modelo não prevê melhor do que a média de pontos, por isso não tem base para ${defaultUsed.length === 1 ? "o" : "os"} deixar de fora. Tira-${defaultUsed.length === 1 ? "o" : "os"} em "limpar". `
+      : "";
   const wcPlanForScenario = wcSolved
     ? makePlan("wildcard", "Wildcard — reconstruir o plantel", wcSolved, ownedSquad, state, costM, beta, risers, fallers, 0)
     : forceIds
@@ -1428,7 +1469,8 @@ function buildChipScenarios(ctx: {
       advised: wc.advise,
       moveKinds: classify(p.moves, "window"),
       keptIds,
-      includedIds,
+      includedIds: [...includedIds, ...defaultUsed],
+      includedByDefault: defaultUsed,
       verdict: !wcAvailable
         ? `Já não tens Wildcard nesta metade da época. O plantel abaixo é só a referência do que o dinheiro compraria.`
         : wc.advise
@@ -1438,7 +1480,7 @@ function buildChipScenarios(ctx: {
             : `O modelo guardava-o: estas ${p.transfers} trocas valem ${scenarioGain >= 0 ? "+" : ""}${scenarioGain} pts em 5 jornadas, e o chip precisa de render pelo menos ${wc.requiredGain.toFixed(0)} agora para valer mais do que guardá-lo (só há um por metade da época). Se decidires usá-lo na mesma, este é o melhor plantel.`,
     });
     const last = out[out.length - 1];
-    if (last.available) last.verdict += describeKinds(last.moveKinds);
+    if (last.available) last.verdict = defaultNote + last.verdict + describeKinds(last.moveKinds);
   } else if (forceIds && ctx.wildcard) {
     out.push({
       chip: "wildcard",

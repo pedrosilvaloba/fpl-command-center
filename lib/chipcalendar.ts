@@ -87,7 +87,7 @@ export function planChipCalendar(input: {
       event: wcEvent,
       why: now
         ? input.eliteGaps >= 2
-          ? `Faltam-te ${input.eliteGaps} jogadores que a elite tem a 70% ou mais; chegar lá com transferências custaria várias jornadas.`
+          ? `Faltam-te ${input.eliteGaps} jogadores que a elite tem a 70% ou mais; chegar lá com transferências custaria várias jornadas. Se o jogares, o conselho de transferências desta jornada deixa de contar: segue o cenário de Wildcard abaixo, que já os inclui.`
           : "O planeador de transferências já o aconselha."
         : "Na próxima jornada, depois de veres as notícias desta semana.",
     });

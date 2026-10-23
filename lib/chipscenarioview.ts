@@ -43,6 +43,7 @@ export interface ScenarioView {
   moves: { out: ScenarioPlayerView; in: ScenarioPlayerView; sellM: number; kind: MoveKind }[];
   keptIds: number[];
   includedIds: number[];
+  includedByDefault: number[];
   /** Ids do plantel atual, para o painel saber quem pode ser fixado. */
   ownedIds: number[];
   xi: ScenarioPlayerView[];
@@ -104,6 +105,7 @@ export function toScenarioViews(
           : [],
       keptIds: s.keptIds,
       includedIds: s.includedIds,
+      includedByDefault: s.includedByDefault ?? [],
       ownedIds,
       xi: plan ? plan.xi.map(player) : [],
       bench: plan ? plan.bench.map(player) : [],
