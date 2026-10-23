@@ -1,4 +1,5 @@
 import { getRedis } from "./kv";
+import { simulateLineup, type SimulatedPlayer } from "./lineupsettlement";
 
 /**
  * O REGISTO DE DECISÕES.
@@ -50,6 +51,18 @@ export interface OutcomeRecord {
   followedTransfers: boolean;
   /** pontos do onze da app menos os do teu, pela mesma regra */
   diff: number;
+  /** Only populated when all 15 FPL players have completed minute/points
+   * data and the hypothetical squad has a valid formation. Older rows are
+   * retained but never presented as exact verified superiority. */
+  settlement?: {
+    simulated: number;
+    actualViaMultipliers: number;
+    netDifference: number;
+    subCount: number;
+    officialReported: number;
+    officialDelta: number;
+    note: string;
+  };
 }
 
 export function lineupPoints(
@@ -73,6 +86,8 @@ export function settleOutcome(
     officialPoints: number;
     transfersCost: number;
     transfersIn: number[];
+    minutesById?: Map<number, number>;
+    positionById?: Map<number, number>;
   },
   pts: (id: number) => number
 ): OutcomeRecord {
@@ -93,6 +108,58 @@ export function settleOutcome(
   const madeIn = new Set(actual.transfersIn);
   const followedTransfers =
     advisedIn.size === madeIn.size && [...advisedIn].every((id) => madeIn.has(id));
+  let settlement: OutcomeRecord["settlement"];
+  if (actual.picks.length === 15 && actual.minutesById && actual.positionById) {
+    const ids = [...new Set([...advice.xi, ...advice.bench, ...actual.picks.map((p) => p.element)])];
+    const allComplete = ids.every((id) =>
+      actual.minutesById!.has(id) &&
+      actual.positionById!.has(id) &&
+      Number.isFinite(actual.minutesById!.get(id)) &&
+      Number.isFinite(pts(id))
+    );
+    if (allComplete) {
+      const players = new Map<number, SimulatedPlayer>(ids.map((id) => [
+        id,
+        {
+          id,
+          position: actual.positionById!.get(id) as SimulatedPlayer["position"],
+          minutes: actual.minutesById!.get(id)!,
+          points: pts(id),
+        },
+      ]));
+      const app = simulateLineup({
+        xi: advice.xi,
+        bench: advice.bench,
+        captain: advice.captain,
+        vice: advice.vice,
+        chip: advice.chip,
+        hitCost: advice.hitCost,
+        players,
+      });
+      if (app.reliable) {
+        // FPL returns final per-player multipliers once a GW is completed.
+        // They encode captain doubling and substitutions. This is NOT
+        // identical to the official GW score when adjusted hits/other
+        // scoring rules differ; retain the official delta for transparency.
+        const actualViaMultipliers = actual.picks.reduce(
+          (total, pick) => total + (pick.multiplier ?? 0) * pts(pick.element),
+          0
+        ) - actual.transfersCost;
+        const officialDelta = actualViaMultipliers - actual.officialPoints;
+        settlement = {
+          simulated: app.points,
+          actualViaMultipliers,
+          netDifference: app.points - actualViaMultipliers,
+          subCount: app.subs.length,
+          officialReported: actual.officialPoints,
+          officialDelta,
+          note: Math.abs(officialDelta) > 1
+            ? "Pontos pela API divergem dos oficiais (possível ajuste de hits); diferença indicativa, não resultado validado."
+            : "Simulação de auto-subs e capitania vs multiplicadores finais da API; não prova a exequibilidade das transferências.",
+        };
+      }
+    }
+  }
   return {
     event: advice.event,
     settledAt: new Date().toISOString(),
@@ -107,6 +174,7 @@ export function settleOutcome(
     followedCaptain: advice.captain !== null && advice.captain === myCap,
     followedTransfers,
     diff: appPts - pedroPts,
+    ...(settlement ? { settlement } : {}),
   };
 }
 
@@ -145,11 +213,13 @@ export async function getDecisionHistory(): Promise<DecisionHistory> {
         outcome: (await redis.get<OutcomeRecord>(OUTCOME_KEY(event))) ?? null,
       }))
     );
-    const settled = rows.filter((r) => r.outcome);
+    const settled = rows.filter((r) =>
+      r.outcome?.settlement && Math.abs(r.outcome.settlement.officialDelta) <= 1
+    );
     return {
       configured: true,
       rows,
-      totalDiff: settled.reduce((s, r) => s + (r.outcome?.diff ?? 0), 0),
+      totalDiff: settled.reduce((s, r) => s + (r.outcome?.settlement?.netDifference ?? 0), 0),
       settled: settled.length,
     };
   } catch {
