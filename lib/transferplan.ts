@@ -1298,24 +1298,49 @@ function buildChipScenarios(ctx: {
   const withCaptain = (p: TransferPlan) => p.xiNextPoints + (p.captain?.expectedPointsNext ?? 0);
 
   // --- Wildcard -----------------------------------------------------------
+  //
+  // SEM O TRAVÃO DE RETENÇÃO. O plano de Wildcard do planeador é resolvido
+  // com `retention`, que obriga um reforço a bater o titular por mais do que
+  // a margem de erro antes de o substituir. Isso está certo para DECIDIR se
+  // o chip compensa: trocar por ruído é gastar uma transferência a troco de
+  // nada. Mas quando o gestor JÁ decidiu jogar o chip as trocas são grátis,
+  // e o travão só o impede de ficar com o melhor plantel. Em produção, na
+  // jornada 8, devolvia "0 trocas" — a resposta certa à pergunta errada.
+  // O encolhimento da maldição do vencedor continua dentro do solver; só
+  // sai a exigência de vantagem sobre quem já está no plantel.
   const wcAvailable = chipAvailable(state, "wildcard");
-  if (ctx.wildcardPlan && ctx.wildcard) {
-    const p = ctx.wildcardPlan;
+  const wcSolved = solveSquad({
+    ...base,
+    retention: 0,
+    maxTransfers: SQUAD_SIZE,
+    freeTransfers: SQUAD_SIZE,
+    allowHits: false,
+  });
+  const wcPlanForScenario = wcSolved
+    ? makePlan("wildcard", "Wildcard — reconstruir o plantel", wcSolved, ownedSquad, state, costM, beta, risers, fallers, 0)
+    : ctx.wildcardPlan;
+  if (wcPlanForScenario) {
+    wcPlanForScenario.rationale =
+      "Com o Wildcard não pagas pontos por nenhuma transferência, por isso este é o melhor plantel que o teu dinheiro compra hoje, otimizado para as próximas 5 jornadas.";
+  }
+  if (wcPlanForScenario && ctx.wildcard) {
+    const p = wcPlanForScenario;
     const wc = ctx.wildcard;
     const gainNext = round1(withCaptain(p) - baseNext);
+    const { gain: scenarioGain } = decisionGain(p.xiWindowPoints, hold.xiWindowPoints, WINDOW_GAMEWEEKS);
     out.push({
       chip: "wildcard",
       label: "Wildcard",
       available: wcAvailable,
       plan: p,
       gainNext,
-      gainWindow: wc.gain,
+      gainWindow: scenarioGain,
       advised: wc.advise,
       verdict: !wcAvailable
         ? `Já não tens Wildcard nesta metade da época. O plantel abaixo é só a referência do que o dinheiro compraria.`
         : wc.advise
           ? `O modelo também o jogaria: ${p.transfers} trocas valem ${wc.gain >= 0 ? "+" : ""}${wc.gain} pts nas próximas 5 jornadas, acima dos ${wc.requiredGain.toFixed(0)} que o chip tem de render para compensar guardá-lo.`
-          : `O modelo guardava-o: ${p.transfers} trocas valem ${wc.gain >= 0 ? "+" : ""}${wc.gain} pts em 5 jornadas, e o chip precisa de render pelo menos ${wc.requiredGain.toFixed(0)} agora para valer mais do que guardá-lo (só há um por metade da época). Se decidires usá-lo na mesma, este é o melhor plantel.`,
+          : `O modelo guardava-o: estas ${p.transfers} trocas valem ${scenarioGain >= 0 ? "+" : ""}${scenarioGain} pts em 5 jornadas, e o chip precisa de render pelo menos ${wc.requiredGain.toFixed(0)} agora para valer mais do que guardá-lo (só há um por metade da época). Se decidires usá-lo na mesma, este é o melhor plantel.`,
     });
   }
 
@@ -1332,7 +1357,8 @@ function buildChipScenarios(ctx: {
   const fhSolved = solveSquad({
     ...base,
     pool: base.pool.map(nextOnly),
-    retention: ctx.retention / WINDOW_GAMEWEEKS,
+    // Trocas grátis: o mesmo raciocínio do Wildcard, sem travão de retenção.
+    retention: 0,
     maxTransfers: SQUAD_SIZE,
     freeTransfers: SQUAD_SIZE,
     allowHits: false,
@@ -1411,6 +1437,5 @@ function buildChipScenarios(ctx: {
         }`,
   });
 
-  void hold;
   return out;
 }

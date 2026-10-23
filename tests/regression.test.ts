@@ -8528,6 +8528,28 @@ function testChipScenariosAnswerTheQuestionAsked() {
     wc.advised || !advice.plans.some((p) => p.label.startsWith("Wildcard"))
   );
 
+  // Quem JÁ decidiu jogar o Wildcard tem trocas grátis: o travão de
+  // retenção (não trocar por diferenças dentro da margem de erro) não se
+  // aplica. Em produção, à jornada 8, devolvia "0 trocas" mesmo havendo
+  // jogadores melhores — a resposta certa a outra pergunta.
+  const small = mkTransferPool([1.5, 1.5]);
+  const early = planTransfers(small.scored, mkState(small.owned, 1), { currentEvent: 3 });
+  const smallWc = early.scenarios.find((s) => s.chip === "wildcard")!;
+  check(
+    "o planeador normal não troca por diferenças dentro do ruído",
+    early.recommended!.key === "manter",
+    early.recommended!.key
+  );
+  check(
+    "mas o cenário de Wildcard troca, porque as trocas são grátis",
+    smallWc.plan!.transfers > 0,
+    String(smallWc.plan!.transfers)
+  );
+  check(
+    "e não aconselha o chip só por essas trocas pequenas",
+    !smallWc.advised
+  );
+
   // Chip já usado: o cenário continua lá, marcado como indisponível e nunca aconselhado.
   const used = mkState(owned, 1);
   used.chips = summariseChips([
