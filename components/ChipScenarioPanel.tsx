@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import type { ChipKey, MoveKind } from "@/lib/transferplan";
+import type { ChipKey, MoveKind, WildcardProfile } from "@/lib/transferplan";
 import {
   parseChipQuestion,
   type IncludeCandidate,
@@ -25,6 +25,12 @@ import ClubKit from "./ClubKit";
  * cada meio ponto — e vende o melhor marcador da época para pagar outra
  * troca. O gestor sabe coisas que o modelo não mede; fixar é dizer-lhe.
  */
+
+const WILDCARD_PROFILES: { id: WildcardProfile; label: string; description: string }[] = [
+  { id: "equilibrado", label: "Equilibrado · 5 GW", description: "Pondera as cinco jornadas seguintes e a utilização do plantel ao longo desse período." },
+  { id: "imediato", label: "Atacar já · próxima GW", description: "Prioriza jogadores com pontos esperados na próxima jornada, mesmo sacrificando calendário futuro." },
+  { id: "continuidade", label: "Preservar o núcleo", description: "Procura manter até quatro dos teus titulares mais fiáveis e constrói o resto em torno deles." },
+];
 
 const EXAMPLES = [
   "Gostava de usar o wildcard esta semana",
@@ -161,6 +167,12 @@ function Scenario({
         {pending && <span className="text-[12px] text-text-muted">a refazer o plantel…</span>}
       </div>
       <p className="text-[13px] leading-relaxed text-text">{s.verdict}</p>
+      {s.chip === "wildcard" && s.wildcardProfile && (
+        <p className="text-xs text-text-muted">
+          Estratégia simulada: <strong className="text-text">{WILDCARD_PROFILES.find((p) => p.id === s.wildcardProfile)?.label ?? "Equilibrado"}</strong>.
+          Os pontos são estimativas, não um resultado garantido; os preços de venda podem variar face à tua conta FPL.
+        </p>
+      )}
 
       {rebuilds && s.xi.length > 0 && (
         <div>
@@ -248,10 +260,12 @@ function Scenario({
 export default function ChipScenarioPanel({
   scenarios,
   initialChip = null,
+  wildcardProfile = "equilibrado",
   candidates = [],
 }: {
   scenarios: ScenarioView[];
   initialChip?: ChipKey | null;
+  wildcardProfile?: WildcardProfile;
   candidates?: IncludeCandidate[];
 }) {
   const router = useRouter();
@@ -274,9 +288,10 @@ export default function ChipScenarioPanel({
   const included = wcView?.includedIds ?? [];
   const nameOf = (id: number) => candidates.find((c) => c.id === id)?.name ?? `#${id}`;
 
-  const go = (nextKept: number[], nextIncluded: number[]) => {
+  const go = (nextKept: number[], nextIncluded: number[], profile: WildcardProfile = wildcardProfile) => {
     const params = new URLSearchParams();
     params.set("chip", active ?? "wildcard");
+    params.set("perfil", profile);
     if (nextKept.length > 0) params.set("manter", nextKept.join(","));
     // Sempre explícito: "nenhum" desliga as inclusões por omissão (o núcleo
     // da elite) — sem isto, tirar o último incluído voltava a pô-los.
@@ -357,7 +372,7 @@ export default function ChipScenarioPanel({
             disabled={pending}
             onClick={() =>
               startTransition(() =>
-                router.replace(`/?chip=${active ?? "wildcard"}&incluir=nenhum#cenarios`, { scroll: false })
+                router.replace(`/?chip=${active ?? "wildcard"}&perfil=${wildcardProfile}&incluir=nenhum#cenarios`, { scroll: false })
               )
             }
             className="text-[12px] text-text-muted underline hover:text-text"
@@ -366,6 +381,42 @@ export default function ChipScenarioPanel({
           </button>
         )}
       </div>
+
+      {active === "wildcard" && (
+        <div className="rounded-lg border border-border bg-surface p-3 space-y-3">
+          <div>
+            <p className="text-sm font-semibold text-text">Quero usar o Wildcard — mostra-me as alternativas</p>
+            <p className="mt-1 text-xs text-text-muted">
+              O modelo pode aconselhar guardar o chip. Isso não impede simular um plantel para cada estratégia.
+              Estas opções não executam transferências na FPL.
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {WILDCARD_PROFILES.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                disabled={pending}
+                aria-pressed={wildcardProfile === p.id}
+                onClick={() => go(kept, included, p.id)}
+                className={`rounded-lg border p-3 text-left disabled:opacity-50 ${
+                  wildcardProfile === p.id
+                    ? "border-accent bg-accent/10"
+                    : "border-border bg-surface-2 hover:border-accent/50"
+                }`}
+              >
+                <span className="block text-sm font-semibold text-text">{p.label}</span>
+                <span className="mt-1 block text-xs leading-relaxed text-text-muted">{p.description}</span>
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-text-muted">
+            Só o perfil selecionado é calculado de cada vez para não atrasar a página. Os ganhos apresentados
+            utilizam sempre as previsões originais, não os pesos temporários do perfil.
+            Podes fixar jogadores, exigir inclusões e voltar a comparar.
+          </p>
+        </div>
+      )}
 
       {(active === "wildcard" || active === "freehit") && candidates.length > 0 && (
         <div className="rounded-md border border-border bg-surface-2 p-3">
