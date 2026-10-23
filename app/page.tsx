@@ -677,12 +677,24 @@ export default async function Home({
   // explicit ?incluir= remains available for user-directed scenarios.
   const ownedIdSet = new Set(squadState.owned.map((o) => o.elementId));
   const eliteMissing = eliteGaps(elite, scored, ownedIdSet);
+  // eslint-disable-next-line react-hooks/purity
+  const plannerStartedAt = performance.now();
   const transferAdvice = planTransfers(scored, squadState, {
     ...transferPlanOpts,
     keepIds,
     includeIds,
     defaultIncludeIds: [],
   });
+  // eslint-disable-next-line react-hooks/purity
+  const plannerDurationMs = Math.round(performance.now() - plannerStartedAt);
+  if (plannerDurationMs > 3000) {
+    console.warn("fpl:slow-transfer-planner", {
+      durationMs: plannerDurationMs,
+      gw: fromEvent,
+      players: scored.length,
+      solutions: transferAdvice.plans.length,
+    });
+  }
 
   // "E se não gastar nada esta semana, para na próxima ter duas e meter os
   // dois jogadores que quero?" — a pergunta que qualquer gestor faz e que o
@@ -775,8 +787,8 @@ export default async function Home({
 
   // The one sentence the whole page exists to produce. Kept short enough to
   // read at a glance; the full reasoning lives in the panel below it.
-  // v1.62 — CAPITÃO POR OMISSÃO = O DA ELITE. O modelo só o contraria
-  // quando prevê mais do que o seu próprio erro medido (lib/elite.ts).
+  // A elite anterior é sinal de contexto; não obriga a copiar a capitania
+  // noutra jornada. Quando a diferença é pequena, a incerteza é explícita.
   const captainDecision = chooseCaptainWithElite(
     transferAdvice.recommended?.xi ?? starters,
     transferAdvice.recommended?.captain ?? captain,
