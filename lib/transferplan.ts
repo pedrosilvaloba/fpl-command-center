@@ -457,10 +457,13 @@ export interface WildcardSignal {
  * decisão é do Pedro, a conta é da app.
  */
 export type ChipKey = "wildcard" | "freehit" | "bboost" | "3xc";
+export type WildcardProfile = "equilibrado" | "imediato" | "continuidade";
 
 export interface ChipScenario {
   chip: ChipKey;
   label: string;
+  /** Perfil escolhido pelo gestor para um cenário hipotético de Wildcard. */
+  wildcardProfile?: WildcardProfile;
   /** Ainda há um destes chips por usar nesta metade da época. */
   available: boolean;
   /** O plantel com que se joga o chip. Para Wildcard e Free Hit é um
@@ -854,6 +857,8 @@ export function planTransfers(
      * equipas) que ele não tem. Ordenados do mais para o menos possuído; os
      * que não couberem no orçamento ficam de fora, um a um. */
     defaultIncludeIds?: number[];
+    /** Um só cenário calculado por visita: evita 3 solves adicionais em SSR. */
+    wildcardProfile?: WildcardProfile;
   } = {}
 ): TransferAdvice {
   const beta = opts.beta ?? 0;
@@ -1311,6 +1316,7 @@ export function planTransfers(
     keepIds: new Set((opts.keepIds ?? []).filter((id) => ownedIds.has(id))),
     includeIds,
     defaultIncludeIds: includeIds.size > 0 ? [] : defaultIncludeIds,
+    wildcardProfile: opts.wildcardProfile ?? "equilibrado",
     scored,
   });
 
@@ -1354,6 +1360,7 @@ function buildChipScenarios(ctx: {
   keepIds: Set<number>;
   includeIds: Set<number>;
   defaultIncludeIds: number[];
+  wildcardProfile: WildcardProfile;
   scored: ScoredPlayer[];
 }): ChipScenario[] {
   const { base, state, costM, beta, risers, fallers, ownedSquad, hold, recommended } = ctx;
@@ -1408,9 +1415,22 @@ function buildChipScenarios(ctx: {
     ].filter(Boolean);
     return ` Das ${kinds.length} trocas: ${parts.join(", ")}. Fixa os jogadores que não queres perder e o plantel é refeito à volta deles.`;
   };
-  const solveWc = (ids: Set<number> | undefined) =>
-    solveSquad({
+  const profile = ctx.wildcardProfile;
+  const originalById = new Map(base.pool.map((p) => [p.element.id, p]));
+  // The objective may change, but displayed points and costs must ALWAYS
+  // come from the original model — never from temporary solver weights.
+  const profilePool =
+    profile === "imediato"
+      ? base.pool.map((p) => ({
+          ...p,
+          expectedPoints: p.expectedPointsNext * WINDOW_GAMEWEEKS,
+          score: p.expectedPointsNext * WINDOW_GAMEWEEKS,
+        }))
+      : base.pool;
+  const solveWc = (ids: Set<number> | undefined) => {
+    const solved = solveSquad({
       ...base,
+      pool: profilePool,
       forceIds: ids,
       incumbentBonus,
       retention: 0,
@@ -1418,6 +1438,24 @@ function buildChipScenarios(ctx: {
       freeTransfers: SQUAD_SIZE,
       allowHits: false,
     });
+    return solved?.map((p) => originalById.get(p.element.id) ?? p) ?? null;
+  };
+  const protectedByProfile: number[] = [];
+  // Protect a *small*, clearly identified existing core. We only auto-fix
+  // reliable and already productive starters. Always honour the user's
+  // explicit constraints first; if an additional player makes the squad
+  // impossible, drop that automatic protection, not the user's selection.
+  const profileCore =
+    profile === "continuidade"
+      ? [...ownedSquad]
+          .filter((p) => p.pPlay >= 0.8 && p.element.minutes >= 180)
+          .sort((a, b) =>
+            Number(b.element.points_per_game) - Number(a.element.points_per_game) ||
+            b.expectedPointsNext - a.expectedPointsNext
+          )
+          .slice(0, 4)
+          .map((p) => p.element.id)
+      : [];
   // Núcleo da elite por omissão. O backtest mostra que o modelo não prevê
   // melhor do que a média de pontos por jogo; um jogador em 70%+ das 200
   // melhores equipas é um consenso que o modelo não tem base para contrariar.
@@ -1440,6 +1478,17 @@ function buildChipScenarios(ctx: {
     }
   }
   if (!wcSolved) wcSolved = solveWc(forceIds);
+  if (wcSolved && profileCore.length > 0) {
+    const mandatory = new Set([...forced, ...defaultUsed]);
+    for (const id of profileCore) {
+      if (mandatory.has(id)) continue;
+      const trial = solveWc(new Set([...mandatory, ...protectedByProfile, id]));
+      if (trial) {
+        protectedByProfile.push(id);
+        wcSolved = trial;
+      }
+    }
+  }
   const nameById = new Map(ctx.scored.map((p) => [p.element.id, p.element.web_name] as [number, string]));
   const defaultNote =
     defaultUsed.length > 0
@@ -1452,7 +1501,11 @@ function buildChipScenarios(ctx: {
       : ctx.wildcardPlan;
   if (wcPlanForScenario) {
     wcPlanForScenario.rationale =
-      "Com o Wildcard não pagas pontos por nenhuma transferência, por isso este é o melhor plantel que o teu dinheiro compra hoje, otimizado para as próximas 5 jornadas.";
+      profile === "imediato"
+        ? "Cenário de curto prazo: o solver prioriza a próxima jornada, mas os ganhos de 5 jornadas continuam medidos com as previsões originais. Não é necessariamente a melhor equipa para o mês."
+        : profile === "continuidade"
+          ? `Cenário de continuidade: preserva automaticamente ${protectedByProfile.length} titulares fiáveis (${protectedByProfile.map((id) => nameById.get(id) ?? "#" + id).join(", ") || "nenhum possível"}), além dos fixos escolhidos por ti. Só são preservados quando existe plantel legal.`
+          : "Cenário equilibrado: o solver privilegia o conjunto das próximas cinco jornadas. Isto é uma opção de simulação, não uma ordem para gastar o Wildcard.";
   }
   if (wcPlanForScenario && ctx.wildcard) {
     const p = wcPlanForScenario;
@@ -1462,6 +1515,7 @@ function buildChipScenarios(ctx: {
     out.push({
       chip: "wildcard",
       label: "Wildcard",
+      wildcardProfile: profile,
       available: wcAvailable,
       plan: p,
       gainNext,

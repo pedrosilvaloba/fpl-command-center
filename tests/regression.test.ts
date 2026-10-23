@@ -11,7 +11,7 @@
  * Run with: npm test
  */
 
-import { toScenarioViews, parseChipQuestion, parseKeepParam, parseChipParam } from "../lib/chipscenarioview";
+import { toScenarioViews, parseChipQuestion, parseKeepParam, parseChipParam, parseWildcardProfile } from "../lib/chipscenarioview";
 import { ratesFromHistoryPast, tableFromRecord, recordFromTable } from "../lib/lastseason";
 import { summariseElite, eliteOwn, eliteCap, chooseCaptainWithElite, captainOverrideMargin, eliteGaps, normalizeElite } from "../lib/elite";
 import { planChipCalendar } from "../lib/chipcalendar";
@@ -8841,6 +8841,26 @@ function testConsultantImprovements() {
   const wcInc = adv.scenarios.find((s) => s.chip === "wildcard")!;
   check("incluir: o jogador pedido entra no plantel do Wildcard", !!wcInc.plan && wcInc.plan.squad.some((p) => p.element.id === outsider.element.id));
   check("incluir: fica registado no cenário", wcInc.includedIds.join(",") === String(outsider.element.id));
+  // Three deliberate user-selected Wildcard profiles, not a single
+  // recommendation disguised as three labels.
+  check("perfil WC inválido volta ao equilibrado", parseWildcardProfile("agressivo-inventado") === "equilibrado");
+  check("perfil WC imediato reconhecido", parseWildcardProfile("imediato") === "imediato");
+  check("perfil WC continuidade reconhecido", parseWildcardProfile(["continuidade"]) === "continuidade");
+  for (const profile of ["equilibrado", "imediato", "continuidade"] as const) {
+    const variant = planTransfers(scored, mkState(owned, 1), {
+      currentEvent: 8,
+      wildcardProfile: profile,
+      includeIds: [outsider.element.id],
+    });
+    const wc = variant.scenarios.find((s) => s.chip === "wildcard");
+    check(`perfil WC ${profile}: opção válida e com orçamento verificado`,
+      wc?.wildcardProfile === profile &&
+      wc.plan?.squad.length === 15 &&
+      wc.plan.bankAfterM >= -0.01 &&
+      wc.plan.squad.some((p) => p.element.id === outsider.element.id));
+    check(`perfil WC ${profile}: previsões originais e ganhos numéricos`,
+      typeof wc?.gainNext === "number" && Number.isFinite(wc.gainNext));
+  }
   const imposs = planTransfers(scored, mkState(owned, 1), {
     currentEvent: 8,
     includeIds: scored.filter((p) => p.element.element_type === 1 && !owned.some((o) => o.element.id === p.element.id)).slice(0, 3).map((p) => p.element.id),
