@@ -729,7 +729,7 @@ export default async function Home({
     (e) => !e.finished && new Date(e.deadline_time).getTime() > nowMs
   );
   await Promise.all([
-    upcomingEvent ? snapshotIfMissing(rawScored, upcomingEvent.id) : Promise.resolve(),
+    upcomingEvent ? snapshotIfMissing(scored, upcomingEvent.id) : Promise.resolve(),
     upcomingEvent ? saveForwardSnapshot(scored, bootstrap.elements, upcomingEvent.id, upcomingEvent.deadline_time) : Promise.resolve(),
     upcomingEvent ? snapshotStrategies(rawScored, upcomingEvent.id) : Promise.resolve(),
     // Per-player predictions for the gameweek review. Written BEFORE the
