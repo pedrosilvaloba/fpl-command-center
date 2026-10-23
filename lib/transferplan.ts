@@ -1340,7 +1340,9 @@ function buildChipScenarios(ctx: {
         ? `Já não tens Wildcard nesta metade da época. O plantel abaixo é só a referência do que o dinheiro compraria.`
         : wc.advise
           ? `O modelo também o jogaria: ${p.transfers} trocas valem ${wc.gain >= 0 ? "+" : ""}${wc.gain} pts nas próximas 5 jornadas, acima dos ${wc.requiredGain.toFixed(0)} que o chip tem de render para compensar guardá-lo.`
-          : `O modelo guardava-o: estas ${p.transfers} trocas valem ${scenarioGain >= 0 ? "+" : ""}${scenarioGain} pts em 5 jornadas, e o chip precisa de render pelo menos ${wc.requiredGain.toFixed(0)} agora para valer mais do que guardá-lo (só há um por metade da época). Se decidires usá-lo na mesma, este é o melhor plantel.`,
+          : scenarioGain >= wc.requiredGain
+            ? `O modelo guardava-o. No papel estas ${p.transfers} trocas valem +${scenarioGain} pts em 5 jornadas, acima dos ${wc.requiredGain.toFixed(0)} que o chip tem de render. Mas cada troca, sozinha, ganha menos do que o erro com que o modelo distingue os dois jogadores; contando só as diferenças que ele consegue mesmo medir, o ganho fica em ${wc.gain >= 0 ? "+" : ""}${wc.gain}. Se decidires usá-lo na mesma, este é o melhor plantel.`
+            : `O modelo guardava-o: estas ${p.transfers} trocas valem ${scenarioGain >= 0 ? "+" : ""}${scenarioGain} pts em 5 jornadas, e o chip precisa de render pelo menos ${wc.requiredGain.toFixed(0)} agora para valer mais do que guardá-lo (só há um por metade da época). Se decidires usá-lo na mesma, este é o melhor plantel.`,
     });
   }
 
