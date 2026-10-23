@@ -51,6 +51,7 @@ import { projectChipsByEvent } from "@/lib/chipschedule";
 import ChipPlanPanel from "@/components/ChipPlanPanel";
 import AutomationPanel from "@/components/AutomationPanel";
 import { getJobHealth, mergeResearchHealth } from "@/lib/joblog";
+import { readOfficialScout } from "@/lib/officialscout";
 import { BACKTEST_CACHE_KEY } from "@/lib/jobs";
 import { getRedis } from "@/lib/kv";
 import { normalizeBacktestResult } from "@/lib/backtest";
@@ -348,6 +349,7 @@ export default async function Home({
   const oddsProblem = oddsResult.status === "ok" ? null : oddsResult.message;
   const storageConfigured = isStorageConfigured();
   const lastResearchRun = await getLastResearchRun();
+  const officialScout = await readOfficialScout();
   // The research layer runs weekly. Anything past nine days means a run was
   // missed, not that the schedule is merely between passes.
   const researchAgeDays = lastResearchRun
@@ -1453,6 +1455,20 @@ export default async function Home({
           </div>
 
           <div className="mt-6 border-t border-border pt-5">
+            <SubHeading>Observação automática — dados oficiais da FPL</SubHeading>
+            {!officialScout ? (
+              <p className="text-sm text-text-muted">Ainda não foi registada uma recolha automática. A tarefa diária é independente da investigação qualitativa externa.</p>
+            ) : (
+              <div className="mb-5 space-y-2">
+                <p className="text-xs text-text-muted">GW{officialScout.event} · última recolha {new Date(officialScout.at).toLocaleString("pt-PT", { timeZone: "Europe/Lisbon", dateStyle: "short", timeStyle: "short" })} · {officialScout.checkedPlayers} jogadores analisados.</p>
+                {officialScout.items.slice(0, 12).map((item, i) => (
+                  <p key={item.playerId + "-" + item.category + "-" + i} className="text-xs leading-relaxed text-text-muted">
+                    <strong className="text-text">{item.name} ({item.club})</strong> — {item.detail} <a href={item.officialUrl} target="_blank" rel="noopener noreferrer" className="underline">FPL</a>
+                  </p>
+                ))}
+                <p className="text-xs text-warn">Esta recolha é factual; não corresponde a pesquisa de especialistas nem altera automaticamente os pontos esperados. A investigação tática externa mantém o seu estado independente.</p>
+              </div>
+            )}
             <SubHeading>Notas táticas ativas</SubHeading>
             {!storageConfigured ? (
               <p className="text-sm text-danger">

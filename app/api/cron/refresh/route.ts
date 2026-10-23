@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { runOfficialScout } from "@/lib/officialscout";
 import { checkCronAuth } from "@/lib/apitoken";
 import {
   runBacktestJob,
@@ -82,9 +83,9 @@ const CALIBRATION_SCHEDULE = "0 7 * * *";
 
 /** Trabalhos leves que correm DEPOIS dos principais, com o tempo que sobrar.
  * Não contam como "uma tarefa por horário": são manutenção de dados. */
-export type CronExtra = "lastseason" | "elite" | "decisions";
+export type CronExtra = "lastseason" | "elite" | "decisions" | "officialscout";
 export type CronPlan = { backtest: boolean; calibration: boolean; extras: CronExtra[] };
-const ALL_EXTRAS: CronExtra[] = ["lastseason", "elite", "decisions"];
+const ALL_EXTRAS: CronExtra[] = ["officialscout", "lastseason", "elite", "decisions"];
 
 /**
  * What this invocation should do.
@@ -139,7 +140,9 @@ export async function GET(req: NextRequest) {
     const entry = await startJobRun(extra, trigger);
     try {
       const out =
-        extra === "lastseason"
+        extra === "officialscout"
+          ? await runOfficialScout()
+          : extra === "lastseason"
           ? await runLastSeasonJob({ deadlineMs: Math.min(deadline - 60_000, Date.now() + 150_000) })
           : extra === "elite"
             ? await runEliteJob({ deadlineMs: Math.min(deadline - 30_000, Date.now() + 120_000) })
