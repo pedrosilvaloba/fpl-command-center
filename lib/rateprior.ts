@@ -88,6 +88,9 @@ export interface RatePriors {
   available: boolean;
   /** Quantos jogadores entraram no ajuste. */
   fitted: number;
+  /** Taxas da época passada por jogador (lib/lastseason.ts), quando
+   * carregadas. Opcional: sem elas o prior é só o do preço. */
+  lastSeason?: import("./lastseason").LastSeasonTable;
   /** O prior para um jogador, dada a sua posição e preço. */
   forPlayer: (elementType: number, priceTenths: number) => RatePrior;
 }

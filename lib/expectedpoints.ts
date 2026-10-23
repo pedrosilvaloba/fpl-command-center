@@ -444,14 +444,26 @@ export function computePlayerRates(
   const prior = priors.available
     ? priors.forPlayer(el.element_type, toNum(el.now_cost))
     : null;
-  const P = (v: number) => (prior ? v * w : 0);
+  // ═══ v1.62 — A ÉPOCA PASSADA ═══
+  //
+  // Quando há uma época anterior com minutos suficientes (lib/lastseason.ts),
+  // o prior passa a misturá-la com o prior por preço. A parte da época
+  // passada cresce com os minutos que ela teve (`lastSeasonShare` a 1800+
+  // minutos) — meia época pesa metade.
+  const ls = priors.lastSeason?.get(el.id) ?? null;
+  const lsShare = ls
+    ? Math.min(1, Math.max(0, params.lastSeasonShare)) * Math.min(1, ls.minutes / 1800)
+    : 0;
+  type Field = "xg90" | "xa90" | "bonus90" | "saves90" | "dc90";
+  const P = (field: Field) =>
+    (prior ? prior[field] * w : 0) * (1 - lsShare) + (ls ? ls[field] * lsShare : 0);
 
   return {
-    xg90: shrink(xg90, params.shrinkXg, P(prior?.xg90 ?? 0)),
-    xa90: shrink(xa90, params.shrinkXa, P(prior?.xa90 ?? 0)),
-    bonus90: shrink(bonus90, params.shrinkBonus, P(prior?.bonus90 ?? 0)),
-    saves90: shrink(saves90, params.shrinkSaves, P(prior?.saves90 ?? 0)),
-    dc90: shrink(dc90, params.shrinkDc, P(prior?.dc90 ?? 0)),
+    xg90: shrink(xg90, params.shrinkXg, P("xg90")),
+    xa90: shrink(xa90, params.shrinkXa, P("xa90")),
+    bonus90: shrink(bonus90, params.shrinkBonus, P("bonus90")),
+    saves90: shrink(saves90, params.shrinkSaves, P("saves90")),
+    dc90: shrink(dc90, params.shrinkDc, P("dc90")),
     yellow90: shrink(yellow90, params.shrinkYellow, params.priorYellow90),
     red90: shrink(red90, params.shrinkRed, params.priorRed90),
     setPieceXg90,

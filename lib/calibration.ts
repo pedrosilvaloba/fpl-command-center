@@ -125,6 +125,7 @@ export interface CalibrationInput {
    * budget, hitting that wall returns nothing at all, and a partial answer
    * is worth infinitely more than a timeout. */
   deadlineMs?: number;
+  lastSeason?: import("./lastseason").LastSeasonTable;
 }
 
 /**
@@ -149,6 +150,7 @@ export function calibrate(input: CalibrationInput): CalibrationReport {
       fromEvent,
       toEvent,
       modelParams: over,
+      lastSeason: input.lastSeason,
     });
     const byEvent = new Map<number, BacktestRow[]>();
     for (const r of rows) {

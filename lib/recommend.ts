@@ -241,12 +241,15 @@ export function buildScoredPlayers(
   managerInsights: ManagerInsight[] = MANAGER_INSIGHTS,
   /** Model constants. Omitted everywhere except the calibration sweep,
    * which is the whole reason they are injectable — see lib/modelparams.ts. */
-  modelParams?: Partial<ModelParams>
+  modelParams?: Partial<ModelParams>,
+  /** Taxas da época passada (lib/lastseason.ts). Ausente = só o prior
+   * por preço, exatamente como antes. */
+  lastSeason?: import("./lastseason").LastSeasonTable
 ): ScoredPlayer[] {
   // O prior de encolhimento, estimado uma vez a partir deste bootstrap.
   // Ver lib/rateprior.ts: o alvo do encolhimento era ZERO, o que afirma
   // que um jogador sem prova recente não tem ameaça nenhuma.
-  const ratePriors = buildRatePriors(bootstrap);
+  const ratePriors = { ...buildRatePriors(bootstrap), lastSeason };
 
   const teamById = new Map(bootstrap.teams.map((t) => [t.id, t]));
   // The bandwagon, read straight from FPL's transfer counts.

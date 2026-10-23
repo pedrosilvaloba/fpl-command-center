@@ -1,5 +1,12 @@
 import { getBootstrap, getFixtures, getElementSummary } from "./fpl-client";
 import { getRedis } from "./kv";
+import {
+  LAST_SEASON_KEY,
+  ratesFromHistoryPast,
+  recordFromTable,
+  tableFromRecord,
+  type LastSeasonTable,
+} from "./lastseason";
 import { runBacktest, type ElementHistoryRow, type BacktestResult } from "./backtest";
 import { calibrate, type CalibrationReport } from "./calibration";
 import { PARAM_GRIDS, type TunableParam } from "./modelparams";
@@ -255,6 +262,7 @@ export async function runBacktestJob(
     historyByElement: load.historyByElement,
     fromEvent,
     toEvent,
+    lastSeason: await loadLastSeasonTable(),
   });
 
   const redis = getRedis();
@@ -397,6 +405,7 @@ export async function runCalibrationJob(
     historyByElement: load.historyByElement,
     fromEvent,
     toEvent,
+    lastSeason: await loadLastSeasonTable(),
     params: chosen,
     deadlineMs: opts.deadlineMs,
   });
@@ -440,5 +449,89 @@ export async function runCalibrationJob(
       })),
       stored: !!redis,
     },
+  };
+}
+
+// --------------------------------------------------------------------------
+// A época passada (lib/lastseason.ts)
+// --------------------------------------------------------------------------
+
+interface LastSeasonStored {
+  at: string;
+  players: number;
+  rec: Record<string, unknown>;
+}
+
+/** Lê a tabela da época passada do Redis. Vazia quando ainda não existe —
+ * o modelo funciona na mesma, só sem esse prior. */
+export async function loadLastSeasonTable(): Promise<LastSeasonTable> {
+  const redis = getRedis();
+  if (!redis) return new Map();
+  try {
+    const stored = await redis.get<LastSeasonStored>(LAST_SEASON_KEY);
+    return tableFromRecord(stored?.rec ?? null);
+  } catch {
+    return new Map();
+  }
+}
+
+/** A época passada não muda; refaz-se de 20 em 20 dias só para apanhar
+ * jogadores que entretanto entraram na base da FPL. */
+const LAST_SEASON_REFRESH_DAYS = 20;
+
+/**
+ * Recolhe `history_past` de todos os jogadores e guarda as taxas.
+ * ~750 pedidos, 8 em paralelo; corre no cron das 06:00 só quando a tabela
+ * falta ou envelheceu, por isso o custo é uma vez por mês.
+ */
+export async function runLastSeasonJob(
+  opts: { force?: boolean; deadlineMs?: number } = {}
+): Promise<JobOutcome<{ players: number }>> {
+  const redis = getRedis();
+  if (!redis) return { ok: false, retryable: false, error: "sem armazenamento" };
+  if (!opts.force) {
+    const stored = await redis.get<LastSeasonStored>(LAST_SEASON_KEY).catch(() => null);
+    if (stored?.at) {
+      const ageDays = (Date.now() - Date.parse(stored.at)) / 86_400_000;
+      if (ageDays < LAST_SEASON_REFRESH_DAYS) {
+        return {
+          ok: true,
+          result: { players: stored.players },
+          productive: false,
+          summary: `tabela da época passada em cache (${stored.players} jogadores, ${ageDays.toFixed(0)} dias)`,
+          detail: { cached: true },
+        };
+      }
+    }
+  }
+  const season = await loadSeason();
+  const table: LastSeasonTable = new Map();
+  let failed = 0;
+  const deadline = opts.deadlineMs ?? Date.now() + 150_000;
+  await mapWithLimit(season.bootstrap.elements, 8, async (el) => {
+    if (Date.now() > deadline) return;
+    try {
+      const summary = await getElementSummary(el.id);
+      const r = ratesFromHistoryPast(summary.history_past ?? [], el.element_type);
+      if (r) table.set(el.id, r);
+    } catch {
+      failed++;
+    }
+  });
+  if (table.size === 0) {
+    return { ok: false, retryable: true, error: `nenhum histórico de época passada lido (${failed} falhas)` };
+  }
+  const stored: LastSeasonStored = {
+    at: new Date().toISOString(),
+    players: table.size,
+    rec: recordFromTable(table),
+  };
+  await redis.set(LAST_SEASON_KEY, stored);
+  return {
+    ok: true,
+    result: { players: table.size },
+    productive: true,
+    summary: `época passada: taxas de ${table.size} jogadores (${failed} falhas)`,
+    detail: { players: table.size, failed },
   };
 }

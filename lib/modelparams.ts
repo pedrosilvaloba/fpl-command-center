@@ -125,6 +125,12 @@ export interface ModelParams {
    * seria o erro que este ficheiro existe para não repetir.
    */
   pricePriorWeight: number;
+  /**
+   * Quanto do prior vem da ÉPOCA PASSADA do próprio jogador (0 a 1), para
+   * quem jogou pelo menos 1800 minutos nela; proporcionalmente menos para
+   * quem jogou menos. Ver lib/lastseason.ts. O resto vem do prior por preço.
+   */
+  lastSeasonShare: number;
 }
 
 export const DEFAULT_MODEL_PARAMS: ModelParams = {
@@ -151,6 +157,7 @@ export const DEFAULT_MODEL_PARAMS: ModelParams = {
   // Ver a nota acima: construído, medido, e deliberadamente a zero porque a
   // medição não o suportou.
   pricePriorWeight: 0,
+  lastSeasonShare: 0,
 };
 
 /** Merge an override onto the defaults. Anything absent keeps its shipped
@@ -183,6 +190,7 @@ export const PARAM_GRIDS: Partial<Record<keyof ModelParams, number[]>> = {
   modelTrustMinutes: [180, 270, 360, 540, 720],
   // Inclui 0 para o varrimento poder concluir que o prior faz mal.
   pricePriorWeight: [0, 0.5, 0.75, 1],
+  lastSeasonShare: [0, 0.5, 0.8, 1],
   // Inclui o 0 de propósito: o varrimento tem de poder concluir que a
   // melhor opção é continuar desligado.
   startPriorFixtures: [0, 0.75, 1.5, 3],

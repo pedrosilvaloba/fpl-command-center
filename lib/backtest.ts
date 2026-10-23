@@ -519,6 +519,9 @@ export interface BacktestInput {
   /** Model constants to run the replay with. Omitted means the shipped
    * defaults; the calibration sweep varies them one at a time. */
   modelParams?: Partial<ModelParams>;
+  /** Taxas da época passada (lib/lastseason.ts). São de uma época já
+   * terminada, por isso não contaminam o backtest com informação futura. */
+  lastSeason?: import("./lastseason").LastSeasonTable;
 }
 
 /** How many minutes of evidence a prediction needs before it counts as
@@ -574,7 +577,8 @@ export function collectBacktestRows(input: BacktestInput): {
       5,
       null,
       [],
-      input.modelParams
+      input.modelParams,
+      input.lastSeason
     );
 
     for (const p of scored) {
