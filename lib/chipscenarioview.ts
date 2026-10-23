@@ -1,4 +1,4 @@
-import type { ChipKey, ChipScenario } from "./transferplan";
+import type { ChipKey, ChipScenario, MoveKind } from "./transferplan";
 import type { ScoredPlayer } from "./recommend";
 
 /**
@@ -19,6 +19,10 @@ export interface ScenarioPlayerView {
   price: number;
   next: number;
   window: number;
+  /** Pontos reais desta época e por jogo — o que o gestor usa para julgar
+   * se uma troca faz sentido, e que o modelo não mostrava. */
+  seasonPts: number;
+  ppg: number;
 }
 
 export interface ScenarioView {
@@ -34,7 +38,10 @@ export interface ScenarioView {
   xiNextPoints: number | null;
   captainId: number | null;
   viceCaptainId: number | null;
-  moves: { out: ScenarioPlayerView; in: ScenarioPlayerView; sellM: number }[];
+  moves: { out: ScenarioPlayerView; in: ScenarioPlayerView; sellM: number; kind: MoveKind }[];
+  keptIds: number[];
+  /** Ids do plantel atual, para o painel saber quem pode ser fixado. */
+  ownedIds: number[];
   xi: ScenarioPlayerView[];
   bench: ScenarioPlayerView[];
   rationale: string;
@@ -51,10 +58,12 @@ function player(p: ScoredPlayer): ScenarioPlayerView {
     price: p.priceM,
     next: r1(p.expectedPointsNext),
     window: r1(p.expectedPoints),
+    seasonPts: Number(p.element.total_points) || 0,
+    ppg: Number(p.element.points_per_game) || 0,
   };
 }
 
-export function toScenarioViews(scenarios: ChipScenario[]): ScenarioView[] {
+export function toScenarioViews(scenarios: ChipScenario[], ownedIds: number[] = []): ScenarioView[] {
   return scenarios.map((s) => {
     const plan = s.plan;
     // Bench Boost e Triple Captain jogam-se sobre o plano normal: as trocas
@@ -75,8 +84,15 @@ export function toScenarioViews(scenarios: ChipScenario[]): ScenarioView[] {
       viceCaptainId: plan?.viceCaptain?.element.id ?? null,
       moves:
         ownsSquad && plan
-          ? plan.moves.map((m) => ({ out: player(m.out), in: player(m.in), sellM: m.outSellingPriceM }))
+          ? plan.moves.map((m, i) => ({
+              out: player(m.out),
+              in: player(m.in),
+              sellM: m.outSellingPriceM,
+              kind: s.moveKinds[i] ?? "indiferente",
+            }))
           : [],
+      keptIds: s.keptIds,
+      ownedIds,
       xi: plan ? plan.xi.map(player) : [],
       bench: plan ? plan.bench.map(player) : [],
       rationale: plan && ownsSquad ? plan.rationale : "",
@@ -107,4 +123,23 @@ export function parseChipQuestion(text: string): ChipKey | null {
   if (/\btriple\b|\btriplo\b|\btripla\b|\btc\b|\b3xc\b|capitao triplo|bracadeira tripla/.test(t))
     return "3xc";
   return null;
+}
+
+/** Lê `?manter=1,2,3` do URL. Ignora o que não for um id inteiro positivo. */
+export function parseKeepParam(raw: string | string[] | undefined): number[] {
+  const text = Array.isArray(raw) ? raw.join(",") : (raw ?? "");
+  return [
+    ...new Set(
+      text
+        .split(",")
+        .map((x) => Number(x.trim()))
+        .filter((n) => Number.isInteger(n) && n > 0)
+    ),
+  ].slice(0, 15);
+}
+
+const CHIP_KEYS: ChipKey[] = ["wildcard", "freehit", "bboost", "3xc"];
+export function parseChipParam(raw: string | string[] | undefined): ChipKey | null {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return CHIP_KEYS.includes(v as ChipKey) ? (v as ChipKey) : null;
 }

@@ -11,7 +11,7 @@
  * Run with: npm test
  */
 
-import { toScenarioViews, parseChipQuestion } from "../lib/chipscenarioview";
+import { toScenarioViews, parseChipQuestion, parseKeepParam, parseChipParam } from "../lib/chipscenarioview";
 import { computeDynamicTeamFactors } from "../lib/teamrating";
 import {
   crossCheckExpertView,
@@ -8549,6 +8549,50 @@ function testChipScenariosAnswerTheQuestionAsked() {
     "e não aconselha o chip só por essas trocas pequenas",
     !smallWc.advised
   );
+
+  // FIXAR UM JOGADOR. Em produção, à GW8, o Wildcard vendia o João Pedro —
+  // um dos melhores marcadores da época — para pagar outra troca, por uma
+  // diferença de meio ponto que o modelo não consegue medir. O gestor tem de
+  // poder dizer "este fica" e ver o plantel refeito à volta dele.
+  check("cada troca do Wildcard tem uma classificação", wc.moveKinds.length === wc.plan!.moves.length);
+  const sold = wc.plan!.moves[0]?.out;
+  check("o Wildcard de teste vende alguém (senão o teste seguinte não prova nada)", !!sold);
+  if (sold) {
+    const locked = planTransfers(scored, mkState(owned, 1), {
+      currentEvent: 8,
+      keepIds: [sold.element.id, 999999],
+    });
+    const lwc = locked.scenarios.find((s) => s.chip === "wildcard")!;
+    const lfh = locked.scenarios.find((s) => s.chip === "freehit")!;
+    check(
+      "jogador fixado fica no plantel do Wildcard",
+      lwc.plan!.squad.some((p) => p.element.id === sold.element.id)
+    );
+    check(
+      "jogador fixado fica no plantel do Free Hit",
+      lfh.plan!.squad.some((p) => p.element.id === sold.element.id)
+    );
+    check("ids fora do plantel são ignorados", lwc.keptIds.join(",") === String(sold.element.id), lwc.keptIds.join(","));
+    check(
+      "fixar não muda o plano recomendado da jornada",
+      locked.recommended!.key === advice.recommended!.key &&
+        locked.recommended!.transfers === advice.recommended!.transfers
+    );
+    const lockedSquad = lwc.plan!.squad;
+    const lockedTypes = [1, 2, 3, 4].map((t) => lockedSquad.filter((p) => p.element.element_type === t).length);
+    check("com fixos, continua 2-5-5-3 e dentro do orçamento", lockedTypes.join("-") === "2-5-5-3" && lwc.plan!.bankAfterM >= -1e-9);
+  }
+  // A classificação das trocas: "financia" quando quem entra vale menos.
+  for (const s of [wc, fh]) {
+    s.plan!.moves.forEach((m, i) => {
+      const d = s.chip === "wildcard" ? m.in.expectedPoints - m.out.expectedPoints : m.in.expectedPointsNext - m.out.expectedPointsNext;
+      if (d < 0) check(`${s.label}: troca que perde pontos marcada como "financia"`, s.moveKinds[i] === "financia");
+      else check(`${s.label}: troca que ganha nunca é "financia"`, s.moveKinds[i] !== "financia");
+    });
+  }
+  check("parseKeepParam lê ids e ignora lixo", parseKeepParam("12, 7,x,-3,12,0") .join(",") === "12,7");
+  check("parseKeepParam aceita vazio", parseKeepParam(undefined).length === 0);
+  check("parseChipParam só aceita chips conhecidos", parseChipParam("wildcard") === "wildcard" && parseChipParam("hack") === null);
 
   // Chip já usado: o cenário continua lá, marcado como indisponível e nunca aconselhado.
   const used = mkState(owned, 1);

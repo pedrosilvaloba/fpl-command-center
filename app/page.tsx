@@ -79,7 +79,7 @@ import LeagueChipsPanel from "@/components/LeagueChipsPanel";
 import CaptainShortlist from "@/components/CaptainShortlist";
 import DeferralPanel from "@/components/DeferralPanel";
 import ChipScenarioPanel from "@/components/ChipScenarioPanel";
-import { toScenarioViews } from "@/lib/chipscenarioview";
+import { toScenarioViews, parseKeepParam, parseChipParam } from "@/lib/chipscenarioview";
 import { fetchLeagueChipState } from "@/lib/rivalchips";
 import { EMPTY_LEAGUE_CHIP_STATE } from "@/lib/rivalchips";
 
@@ -296,7 +296,16 @@ function AlertStrip({
   );
 }
 
-export default async function Home() {
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
+  // Cenários de chip: `?chip=wildcard&manter=123,456` — jogadores que o
+  // gestor fixou. Só mexe nos cenários; o resto da página não muda.
+  const sp = await searchParams;
+  const keepIds = parseKeepParam(sp.manter);
+  const initialChip = parseChipParam(sp.chip) ?? (keepIds.length > 0 ? "wildcard" : null);
   const [bootstrap, fixtures, oddsResult] = await Promise.all([
     getBootstrap(),
     // Full season (past + future), not just upcoming — the dynamic team-
@@ -631,7 +640,7 @@ export default async function Home() {
     likelyFallers: fallers.map((r) => r.element.id),
     calendar,
   };
-  const transferAdvice = planTransfers(scored, squadState, transferPlanOpts);
+  const transferAdvice = planTransfers(scored, squadState, { ...transferPlanOpts, keepIds });
 
   // "E se não gastar nada esta semana, para na próxima ter duas e meter os
   // dois jogadores que quero?" — a pergunta que qualquer gestor faz e que o
@@ -979,7 +988,13 @@ export default async function Home() {
               é sempre calculado, mesmo quando o modelo não o aconselha. */}
           <div className="mt-6 border-t border-border pt-5">
             <SubHeading>E se eu usasse um chip esta semana?</SubHeading>
-            <ChipScenarioPanel scenarios={toScenarioViews(transferAdvice.scenarios)} />
+            <ChipScenarioPanel
+              scenarios={toScenarioViews(
+                transferAdvice.scenarios,
+                squadState.owned.map((o) => o.elementId)
+              )}
+              initialChip={initialChip}
+            />
           </div>
         </Section>
 
