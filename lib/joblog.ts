@@ -20,7 +20,7 @@ import { getRedis } from "./kv";
  * A log of successes only would have shown nothing wrong for six weeks.
  */
 
-export type JobName = "backtest" | "calibration" | "research" | "lastseason" | "elite" | "decisions";
+export type JobName = "backtest" | "calibration" | "research" | "lastseason" | "elite" | "decisions" | "officialscout";
 
 export interface JobRun {
   job: JobName;
@@ -178,6 +178,7 @@ const JOB_LABEL: Record<JobName, string> = {
   backtest: "Backtest",
   calibration: "Calibração",
   research: "Investigação tática",
+  officialscout: "Observação oficial FPL",
   lastseason: "Época passada",
   elite: "Elite (top da geral)",
   decisions: "Registo de decisões",
@@ -191,6 +192,7 @@ const EXPECTED_EVERY_DAYS: Record<JobName, number> = {
   backtest: 2,
   calibration: 2,
   research: 9,
+  officialscout: 2,
   // Só refaz de 20 em 20 dias; um "em cache" conta como sucesso.
   lastseason: 25,
   elite: 2,
