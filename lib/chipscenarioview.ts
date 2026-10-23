@@ -1,4 +1,4 @@
-import type { ChipKey, ChipScenario, MoveKind } from "./transferplan";
+import type { ChipKey, ChipScenario, MoveKind, WildcardProfile } from "./transferplan";
 import type { ScoredPlayer } from "./recommend";
 
 /**
@@ -30,6 +30,7 @@ export interface ScenarioPlayerView {
 export interface ScenarioView {
   chip: ChipKey;
   label: string;
+  wildcardProfile?: WildcardProfile;
   available: boolean;
   advised: boolean;
   verdict: string;
@@ -53,9 +54,7 @@ export interface ScenarioView {
 
 const r1 = (x: number) => Math.round(x * 10) / 10;
 
-let eliteLookup: (id: number) => number | null = () => null;
-
-function player(p: ScoredPlayer): ScenarioPlayerView {
+function player(p: ScoredPlayer, eliteLookup: (id: number) => number | null): ScenarioPlayerView {
   return {
     id: p.element.id,
     name: p.element.web_name,
@@ -75,7 +74,6 @@ export function toScenarioViews(
   ownedIds: number[] = [],
   eliteOwn: (id: number) => number | null = () => null
 ): ScenarioView[] {
-  eliteLookup = eliteOwn;
   return scenarios.map((s) => {
     const plan = s.plan;
     // Bench Boost e Triple Captain jogam-se sobre o plano normal: as trocas
@@ -84,6 +82,7 @@ export function toScenarioViews(
     return {
       chip: s.chip,
       label: s.label,
+      wildcardProfile: s.wildcardProfile,
       available: s.available,
       advised: s.advised,
       verdict: s.verdict,
@@ -97,8 +96,8 @@ export function toScenarioViews(
       moves:
         ownsSquad && plan
           ? plan.moves.map((m, i) => ({
-              out: player(m.out),
-              in: player(m.in),
+              out: player(m.out, eliteOwn),
+              in: player(m.in, eliteOwn),
               sellM: m.outSellingPriceM,
               kind: s.moveKinds[i] ?? "indiferente",
             }))
@@ -107,8 +106,8 @@ export function toScenarioViews(
       includedIds: s.includedIds,
       includedByDefault: s.includedByDefault ?? [],
       ownedIds,
-      xi: plan ? plan.xi.map(player) : [],
-      bench: plan ? plan.bench.map(player) : [],
+      xi: plan ? plan.xi.map((p) => player(p, eliteOwn)) : [],
+      bench: plan ? plan.bench.map((p) => player(p, eliteOwn)) : [],
       rationale: plan && ownsSquad ? plan.rationale : "",
     };
   });
@@ -199,4 +198,10 @@ const CHIP_KEYS: ChipKey[] = ["wildcard", "freehit", "bboost", "3xc"];
 export function parseChipParam(raw: string | string[] | undefined): ChipKey | null {
   const v = Array.isArray(raw) ? raw[0] : raw;
   return CHIP_KEYS.includes(v as ChipKey) ? (v as ChipKey) : null;
+}
+
+/** URL input is untrusted: unknown profiles become the balanced default. */
+export function parseWildcardProfile(raw: string | string[] | undefined): WildcardProfile {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value === "imediato" || value === "continuidade" ? value : "equilibrado";
 }
