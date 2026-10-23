@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { buildForwardSnapshot, scoreForwardSnapshot } from "../lib/forwardbenchmark";
 import { buildAccuracyPicks } from "../lib/accuracy";
-import { makeElement } from "./fixtures";
+import { makeElement, makeTeam, makeEvent } from "./fixtures";
+import { buildScoutReport } from "../lib/officialscout";
 import type { ScoredPlayer } from "../lib/recommend";
 
 // Pure test: no API, Redis, mutable production state, or hidden current GW.
@@ -67,3 +68,20 @@ assert.equal(oneWeek[0].elementId, p2.element.id, "sort by next GW, not 5-week s
 assert.equal(oneWeek[0].score, 9, "snapshot actual next GW forecast");
 
 console.log("forward prospective benchmark tests passed");
+
+const official = buildScoutReport({
+  events: [makeEvent(8, { is_next: true })],
+  teams: [makeTeam(1, "ARS")],
+  element_types: [], total_players: 1,
+  elements: [makeElement({
+    id: 99, team: 1, selected_by_percent: "45",
+    status: "d", chance_of_playing_next_round: 25,
+    news: "Muscle issue", starts: 2, minutes: 100,
+    transfers_in_event: 0, transfers_out_event: 80000
+  })],
+}, "2026-10-23T16:00:00Z");
+assert.equal(official.event, 8);
+assert.equal(official.source, "official-fpl");
+assert.equal(official.analystResearchCompleted, false);
+assert.ok(official.items.some((item) => item.category === "availability" && item.playerId === 99));
+assert.ok(official.items.every((item) => item.officialUrl.startsWith("https://fantasy.premierleague.com/")));
