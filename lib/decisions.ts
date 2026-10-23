@@ -146,7 +146,10 @@ export function settleOutcome(
         hitCost: advice.hitCost,
         players,
       });
-      if (app.reliable) {
+      if (app.reliable && advice.chip !== "wildcard" && advice.chip !== "freehit") {
+        // A reconstructed WC/FH squad requires a chip-specific plan and the
+        // pre-chip squad value. Do not claim a comparable advantage until its
+        // transfer legality and starting XI were actually snapshotted.
         const hold = advice.holdBaseline && advice.chip === null
           ? simulateLineup({
               xi: advice.holdBaseline.xi,
