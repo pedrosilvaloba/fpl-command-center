@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getBootstrap } from "@/lib/fpl-client";
+import { isStorageConfigured } from "@/lib/kv";
 import {
   loadActiveInsights,
   deleteDynamicInsight,
@@ -61,7 +62,7 @@ export async function GET() {
     insights,
     lastRun,
     daysSinceLastRun,
-    storageWorking: true,
+    storageWorking: isStorageConfigured(),
     hint:
       lastRun === null
         ? "Nenhuma execução alguma vez registada. Se a tarefa semanal já disparou, falhou antes de conseguir escrever — usa /api/insights/push?token=...&payload=... que funciona com um GET simples."
