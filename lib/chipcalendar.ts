@@ -106,7 +106,7 @@ export function planChipCalendar(input: {
       .sort((a, b) => pick(b) - pick(a))[0] ?? null;
 
   if (available("bboost")) {
-    const after = wcEvent !== null ? wcEvent + 1 : null;
+    const after = wcEvent !== null && input.wildcardAdvised ? wcEvent + 1 : null;
     const ev =
       after !== null && within(after) && !taken.has(after)
         ? after

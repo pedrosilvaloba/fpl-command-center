@@ -8776,7 +8776,7 @@ function testConsultantImprovements() {
   near("posse na elite em %", eliteOwn(elite, 1), 100, 1e-9);
   near("capitão na elite em %", eliteCap(elite, 1), 66.7, 0.05);
   const d1 = chooseCaptainWithElite([hal, jp, other], jp, elite, 2);
-  check("modelo prefere por 1 pt (< margem 2): fica o capitão da elite", d1.captain?.element.id === 1 && d1.source === "elite");
+  check("histórico elite da GW anterior não substitui previsão futura dentro da margem", d1.captain?.element.id === 2 && d1.source === "modelo" && /não na próxima jornada/.test(d1.reason));
   const d2 = chooseCaptainWithElite([mk(1, 4), mk(2, 7.5), other], mk(2, 7.5), elite, 2);
   check("modelo prefere por 3,5 pts (> margem): o modelo ganha", d2.captain?.element.id === 2 && d2.source === "modelo");
   const d3 = chooseCaptainWithElite([hal, jp], jp, null, 2);
@@ -8803,7 +8803,7 @@ function testConsultantImprovements() {
   const ev = (c: string) => cal.slots.find((x) => x.chip === c)?.event;
   check("calendário: 3 chips por usar (o Triple Captain já foi)", cal.slots.length === 3 && ev("3xc") === undefined, cal.slots.map((x) => x.chip).join(","));
   check("calendário: posse da elite não obriga ao Wildcard imediato", ev("wildcard") !== 8);
-  check("calendário: Bench Boost na jornada a seguir à reserva de Wildcard", ev("bboost") === (ev("wildcard") ?? 0) + 1);
+  check("calendário: Bench Boost na melhor semana visível, não no Wildcard apenas hipotético", ev("bboost") === 9);
   check("calendário: tudo antes do limite da GW19", cal.slots.every((x) => x.event <= 19 && x.event >= 8));
   check("calendário: semanas distintas", new Set(cal.slots.map((x) => x.event)).size === cal.slots.length);
   const late = planChipCalendar({ currentEvent: 22, chips, projections: [], wildcardAdvised: false, eliteGaps: 0 });

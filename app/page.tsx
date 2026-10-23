@@ -22,7 +22,6 @@ import { getOddsStatus } from "@/lib/oddsapi";
 import { findScheduleAnomalies } from "@/lib/schedule";
 import {
   snapshotIfMissing,
-  recordOutcomesForFinishedEvents,
   getAccuracyHistory,
 } from "@/lib/accuracy";
 import { loadActiveInsights, getLastResearchRun } from "@/lib/managerinsights";
@@ -41,7 +40,6 @@ import {
 import type { LeagueOutlook } from "@/lib/rivals";
 import {
   snapshotStrategies,
-  settleStrategies,
   getLearningState,
   applyCalibration,
 } from "@/lib/strategylearning";
@@ -75,7 +73,7 @@ import TransferPlanPanel from "@/components/TransferPlanPanel";
 import GameweekReviewPanel from "@/components/GameweekReviewPanel";
 import BacktestPanel from "@/components/BacktestPanel";
 import ForwardBenchmarkPanel from "@/components/ForwardBenchmarkPanel";
-import { saveForwardSnapshot, settleForwardSnapshots, getForwardHistory } from "@/lib/forwardbenchmark";
+import { saveForwardSnapshot, getForwardHistory } from "@/lib/forwardbenchmark";
 import DispersionPanel from "@/components/DispersionPanel";
 import LeagueChipsPanel from "@/components/LeagueChipsPanel";
 import CaptainShortlist from "@/components/CaptainShortlist";
@@ -679,12 +677,24 @@ export default async function Home({
   // explicit ?incluir= remains available for user-directed scenarios.
   const ownedIdSet = new Set(squadState.owned.map((o) => o.elementId));
   const eliteMissing = eliteGaps(elite, scored, ownedIdSet);
+  // eslint-disable-next-line react-hooks/purity
+  const plannerStartedAt = performance.now();
   const transferAdvice = planTransfers(scored, squadState, {
     ...transferPlanOpts,
     keepIds,
     includeIds,
     defaultIncludeIds: [],
   });
+  // eslint-disable-next-line react-hooks/purity
+  const plannerDurationMs = Math.round(performance.now() - plannerStartedAt);
+  if (plannerDurationMs > 3000) {
+    console.warn("fpl:slow-transfer-planner", {
+      durationMs: plannerDurationMs,
+      gw: fromEvent,
+      players: scored.length,
+      solutions: transferAdvice.plans.length,
+    });
+  }
 
   // "E se não gastar nada esta semana, para na próxima ter duas e meter os
   // dois jogadores que quero?" — a pergunta que qualquer gestor faz e que o
@@ -740,9 +750,6 @@ export default async function Home({
     // o ecrã mostra os corrigidos faria a camada de aprendizagem medir uma
     // previsão que ninguém usou — e corrigir duas vezes o mesmo desvio.
     upcomingEvent ? snapshotPredictions(scored, upcomingEvent.id) : Promise.resolve(),
-    recordOutcomesForFinishedEvents(finishedEventIds),
-    settleForwardSnapshots(finishedEventIds),
-    settleStrategies(finishedEventIds),
   ]);
   const [accuracyHistory, forwardHistory] = await Promise.all([
     getAccuracyHistory(),
@@ -780,8 +787,8 @@ export default async function Home({
 
   // The one sentence the whole page exists to produce. Kept short enough to
   // read at a glance; the full reasoning lives in the panel below it.
-  // v1.62 — CAPITÃO POR OMISSÃO = O DA ELITE. O modelo só o contraria
-  // quando prevê mais do que o seu próprio erro medido (lib/elite.ts).
+  // A elite anterior é sinal de contexto; não obriga a copiar a capitania
+  // noutra jornada. Quando a diferença é pequena, a incerteza é explícita.
   const captainDecision = chooseCaptainWithElite(
     transferAdvice.recommended?.xi ?? starters,
     transferAdvice.recommended?.captain ?? captain,
@@ -891,6 +898,14 @@ export default async function Home({
         chip: advisedChip,
         captainSource: captainDecision.source,
         predictedXi: advisedPlan?.xiNextPoints ?? xiExpected,
+        holdBaseline: transferAdvice.hold
+          ? {
+              xi: transferAdvice.hold.xi.map((p) => p.element.id),
+              bench: transferAdvice.hold.bench.map((p) => p.element.id),
+              captain: transferAdvice.hold.captain?.element.id ?? null,
+              vice: transferAdvice.hold.viceCaptain?.element.id ?? null,
+            }
+          : undefined,
       },
       upcomingEvent.deadline_time
     );

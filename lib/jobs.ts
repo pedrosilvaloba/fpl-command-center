@@ -18,6 +18,9 @@ import {
 } from "./decisions";
 import { DEFAULT_TEAM_ID } from "./constants";
 import { getRedis } from "./kv";
+import { recordOutcomesForFinishedEvents } from "./accuracy";
+import { settleStrategies } from "./strategylearning";
+import { settleForwardSnapshots } from "./forwardbenchmark";
 import {
   LAST_SEASON_KEY,
   ratesFromHistoryPast,
@@ -630,6 +633,8 @@ export async function runDecisionsJob(
     transfers ??= await getEntryTransfers(teamId).catch(() => []);
     history ??= await getEntryHistory(teamId).catch(() => null);
     const ptsById = new Map(live.elements.map((e) => [e.id, Number(e.stats.total_points) || 0]));
+    const minutesById = new Map(live.elements.map((e) => [e.id, Number(e.stats.minutes)]));
+    const positionById = new Map(bootstrap.elements.map((e) => [e.id, e.element_type]));
     const hist = history?.current?.find((h: { event: number }) => h.event === event) as
       | { points: number; event_transfers_cost: number }
       | undefined;
@@ -641,12 +646,24 @@ export async function runDecisionsJob(
         officialPoints: hist?.points ?? picks.entry_history.points,
         transfersCost: hist?.event_transfers_cost ?? picks.entry_history.event_transfers_cost,
         transfersIn: (transfers ?? []).filter((t) => t.event === event).map((t) => t.element_in),
+        minutesById,
+        positionById,
       },
       (id) => ptsById.get(id) ?? 0
     );
     await redis.set(OUTCOME_KEY(event), outcome);
     settled.push(event);
   }
+  // Tracking is deterministic arithmetic over completed GWs. Schedule it
+  // with the daily cron, not on every visitor's SSR request.
+  const finishedEvents = [...finished].sort((a, b) => a - b);
+  const trackingResults = await Promise.allSettled([
+    recordOutcomesForFinishedEvents(finishedEvents),
+    settleStrategies(finishedEvents),
+    settleForwardSnapshots(finishedEvents),
+  ]);
+  const trackingFailures = trackingResults.filter((r) => r.status === "rejected").length;
+  if (trackingFailures) console.warn("fpl-tracking-partial", { trackingFailures });
   return {
     ok: true,
     result: { settled },

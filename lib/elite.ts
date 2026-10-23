@@ -118,9 +118,10 @@ export interface CaptainDecision {
 }
 
 /**
- * Capitão por omissão = o mais capitaneado pela elite entre os teus
- * titulares. O modelo só o contraria quando prevê mais do que `margin`
- * pontos acima dele para a próxima jornada.
+ * Escolha prospectiva do capitão segundo o modelo disponível para a GW.
+ * O histórico da elite é contexto, NÃO previsão futura. Se a diferença está
+ * dentro da margem, explicita incerteza em vez de copiar capitão anterior.
+ * A superioridade do modelo ainda necessita de validação prospetiva.
  */
 export function chooseCaptainWithElite(
   starters: ScoredPlayer[],
@@ -176,10 +177,10 @@ export function chooseCaptainWithElite(
   }
   return {
     ...base,
-    captain: eliteChoice,
+    captain: modelChoice,
     eliteChoice,
     eliteCapPct,
-    source: "elite",
-    reason: `${eliteChoice.element.web_name}, o capitão de ${eliteCapPct}% da elite. O modelo preferia ${modelChoice.element.web_name} por ${edge.toFixed(1)} pts, menos do que a margem de ${margin.toFixed(1)} a partir da qual a previsão dele vale mais do que o consenso.`,
+    source: "modelo",
+    reason: `Escolha experimental: ${modelChoice.element.web_name} (+${edge.toFixed(1)} pts estimados vs ${eliteChoice.element.web_name}). A elite capitaneou ${eliteChoice.element.web_name} na GW${elite.event}, não na próxima jornada. A diferença está dentro da margem de erro (${margin.toFixed(1)} pts): não é vantagem comprovada. Confirma notícias e minutos antes do deadline.`,
   };
 }
