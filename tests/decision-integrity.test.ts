@@ -24,12 +24,16 @@ const xi = [1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const bench = [2, 13, 14, 15];
 const normal = simulateLineup({ xi, bench, captain: 11, vice: 7, hitCost: 4, players });
 assert.equal(normal.reliable, true);
-assert.deepEqual(normal.subs, [{ inId: 13, outId: 3 }, { inId: 15, outId: 11 }]);
+assert.deepEqual(normal.subs, [{ inId: 13, outId: 3 }, { inId: 14, outId: 11 }], "second defender is first eligible bench player; legal 4-5-1 formation");
 assert.equal(normal.captainUsed, 7);
-const expected = [1, 13, 4, 5, 6, 7, 8, 9, 10, 15, 12]
+const expected = [1, 13, 4, 5, 6, 7, 8, 9, 10, 14, 12]
   .reduce((n, id) => n + (points.get(id) ?? 0), 0) + (points.get(7) ?? 0) - 4;
 assert.equal(normal.points, expected);
 assert.equal(normal.counted.length, 11);
+const noSecondDef = new Map(players);
+noSecondDef.set(14, { ...players.get(14)!, minutes: 0, points: 0 });
+const forwardSub = simulateLineup({ xi, bench, captain: 11, vice: 7, hitCost: 4, players: noSecondDef });
+assert.equal(forwardSub.subs[1].inId, 15, "next eligible bench FWD enters when preceding DEF has no minutes");
 
 const triple = simulateLineup({ xi, bench, captain: 11, vice: 7, chip: "3xc", hitCost: 4, players });
 assert.equal(triple.points, normal.points + 9, "triple captain increases by one extra vice score");
