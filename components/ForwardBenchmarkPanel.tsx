@@ -39,6 +39,31 @@ function OneEvent({ row }: { row: ForwardResult }) {
           ))}</tbody>
         </table>
       </div>
+      {row.fullCohort && (
+        <details className="mt-3 rounded-md border border-border px-3 py-2">
+          <summary className="cursor-pointer text-sm font-semibold text-text">
+            Ver todos os jogadores e risco de minutos
+          </summary>
+          <div className="mt-3 space-y-2">
+            <p className="text-xs text-text-muted">
+              Amostra completa ({row.fullCohort.model.n} jogadores): modelo MAE
+              {" "}{fmt(row.fullCohort.model.mae)}, média pts/jogo
+              {" "}{fmt(row.fullCohort.ppg.mae)}, FPL
+              {" "}{row.fullCohort.fpl.n ? fmt(row.fullCohort.fpl.mae) : "—"}.
+            </p>
+            {(row.availabilityBands ?? []).map((band) => (
+              <div key={band.label} className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 py-1 text-xs">
+                <span>{band.label} · {band.model.n} jogadores</span>
+                <span className="font-mono">MAE modelo {band.model.n ? fmt(band.model.mae) : "—"}</span>
+              </div>
+            ))}
+            <p className="text-xs text-text-muted">
+              Os grupos são definidos ANTES do jogo e incluem quem acabou com zero pontos.
+              Não usar uma amostra de prováveis titulares para declarar precisão em lesões e rotações.
+            </p>
+          </div>
+        </details>
+      )}
       {row.fpl.n !== row.model.n && <p className="mt-2 text-xs text-text-muted">
         Previsão FPL disponível para {row.fpl.n}/{row.model.n} jogadores; os MAE não são diretamente comparáveis sem a mesma amostra.
       </p>}
