@@ -5058,6 +5058,10 @@ function testEachScheduleRunsItsOwnJob() {
   check("as 6h correm só o backtest", morning.backtest && !morning.calibration);
   const later = planFromRequest("0 7 * * *", null);
   check("as 7h correm só a calibração", !later.backtest && later.calibration);
+  check("redundância às 7h para observação e investigação editorial",
+    later.extras.includes("officialscout") && later.extras.includes("research"));
+  check("a investigação pode ser pedida sem correr o backtest",
+    planFromRequest(null, "research").extras.join(",") === "research");
 
   // O fallback tem de ser FAZER TUDO, nunca não fazer nada: se a Vercel
   // deixar de mandar o cabeçalho, ou se alguém editar os horários sem tocar
@@ -8882,7 +8886,7 @@ function testConsultantImprovements() {
   check("o que o gestor inclui substitui as inclusões por omissão", (explicitWins.scenarios.find((s) => s.chip === "wildcard")!.includedByDefault ?? []).length === 0);
 
   // 7. Cron: os extras correm às 6h e podem ser pedidos à mão.
-  check("as 6h também recolhem a época passada, a elite e as decisões", planFromRequest("0 6 * * *", null).extras.join(",") === "officialscout,lastseason,elite,decisions");
+  check("as 6h também recolhem a época passada, a elite e as decisões", planFromRequest("0 6 * * *", null).extras.join(",") === "officialscout,research,lastseason,elite,decisions");
   check("?only=elite corre só a elite", (() => { const p = planFromRequest(null, "elite"); return !p.backtest && !p.calibration && p.extras.join(",") === "elite"; })());
 }
 

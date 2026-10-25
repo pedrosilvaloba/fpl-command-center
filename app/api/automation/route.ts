@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getJobHealth, getJobLog, mergeResearchHealth } from "@/lib/joblog";
 import { getLastResearchRun } from "@/lib/managerinsights";
+import { readExternalResearch } from "@/lib/externalresearch";
 import { isStorageConfigured } from "@/lib/kv";
 
 /**
@@ -16,10 +17,11 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const storage = isStorageConfigured();
-  const [health, log, research] = await Promise.all([
+  const [health, log, research, editorial] = await Promise.all([
     getJobHealth(),
     getJobLog(15),
     getLastResearchRun(),
+    readExternalResearch(),
   ]);
 
   // Reported, never echoed. Whether the secret EXISTS is the thing that
@@ -29,17 +31,20 @@ export async function GET() {
   return NextResponse.json({
     storageConfigured: storage,
     cronSecretConfigured,
-    // The research job writes its own record through a different path
-    // (lib/managerinsights), because it predates the run log and because it
-    // records what it FOUND, not just that it ran. Surfaced alongside so one
-    // request answers "is anything silently dead".
-    research: research
-      ? {
-          at: research.at,
-          daysAgo: Math.floor((Date.now() - new Date(research.at).getTime()) / 86_400_000),
-          acceptedCount: research.acceptedCount,
-          rejectedCount: research.rejectedCount,
-        }
+    // Editorial RSS monitoring is autonomous. The 2026-09-08 note was a
+    // manually delivered qualitative observation, not a current agent run.
+    research: {
+      mode: "editorial-feeds",
+      status: !editorial ? "not-run" :
+        (Date.now() - Date.parse(editorial.at) <= 48 * 3_600_000 ? "fresh" : "stale"),
+      at: editorial?.at ?? null,
+      sourcesChecked: editorial?.sourcesChecked.length ?? 0,
+      sourcesFailed: editorial?.sourcesFailed ?? [],
+      findings: editorial?.findings.length ?? 0,
+      affectsModel: false,
+    },
+    legacyManualExpertResearch: research
+      ? { at: research.at, acceptedCount: research.acceptedCount, rejectedCount: research.rejectedCount }
       : null,
     jobs: mergeResearchHealth(health, research),
     log,

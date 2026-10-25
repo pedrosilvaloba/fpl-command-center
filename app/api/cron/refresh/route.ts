@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runOfficialScout } from "@/lib/officialscout";
+import { runExternalResearch } from "@/lib/externalresearch";
 import { checkCronAuth } from "@/lib/apitoken";
 import {
   runBacktestJob,
@@ -83,9 +84,9 @@ const CALIBRATION_SCHEDULE = "0 7 * * *";
 
 /** Trabalhos leves que correm DEPOIS dos principais, com o tempo que sobrar.
  * Não contam como "uma tarefa por horário": são manutenção de dados. */
-export type CronExtra = "lastseason" | "elite" | "decisions" | "officialscout";
+export type CronExtra = "lastseason" | "elite" | "decisions" | "officialscout" | "research";
 export type CronPlan = { backtest: boolean; calibration: boolean; extras: CronExtra[] };
-const ALL_EXTRAS: CronExtra[] = ["officialscout", "lastseason", "elite", "decisions"];
+const ALL_EXTRAS: CronExtra[] = ["officialscout", "research", "lastseason", "elite", "decisions"];
 
 /**
  * What this invocation should do.
@@ -110,7 +111,7 @@ export function planFromRequest(
   // A época passada e a elite vêm ANTES do backtest das 6h: o backtest usa
   // a época passada, e a elite tem de estar fresca para a página da manhã.
   if (s === BACKTEST_SCHEDULE) return { backtest: true, calibration: false, extras: ALL_EXTRAS };
-  if (s === CALIBRATION_SCHEDULE) return { backtest: false, calibration: true, extras: ["elite"] };
+  if (s === CALIBRATION_SCHEDULE) return { backtest: false, calibration: true, extras: ["officialscout", "research", "elite"] };
   return { backtest: true, calibration: true, extras: ALL_EXTRAS };
 }
 
@@ -142,6 +143,8 @@ export async function GET(req: NextRequest) {
       const out =
         extra === "officialscout"
           ? await runOfficialScout()
+          : extra === "research"
+          ? await runExternalResearch()
           : extra === "lastseason"
           ? await runLastSeasonJob({ deadlineMs: Math.min(deadline - 60_000, Date.now() + 150_000) })
           : extra === "elite"
