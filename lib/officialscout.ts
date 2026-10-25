@@ -85,6 +85,14 @@ export async function runOfficialScout(): Promise<ScoutJobOutcome> {
   const redis = getRedis();
   if (!redis) return { ok: false, retryable: false, productive: false, error: "Redis não configurado", summary: "Sem armazenamento", detail: {} };
   try {
+    const existing = await readOfficialScout();
+    if (existing && existing.checkedPlayers > 0 && Date.now() - Date.parse(existing.at) < 6 * 60 * 60 * 1000) {
+      return {
+        ok: true, productive: true,
+        summary: "Observação oficial atualizada e em cache",
+        detail: { cached: true, checkedPlayers: existing.checkedPlayers, event: existing.event, findings: existing.items.length },
+      };
+    }
     const bootstrap = await getBootstrap();
     const report = buildScoutReport(bootstrap);
     if (!report.checkedPlayers) return { ok: false, retryable: true, productive: false, error: "API FPL sem jogadores", summary: "API FPL devolveu zero jogadores", detail: {} };
