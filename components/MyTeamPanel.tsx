@@ -124,7 +124,10 @@ export default function MyTeamPanel({
   useEffect(() => {
     const explicit = new URLSearchParams(window.location.search).has("team");
     if (explicit) {
-      try { window.localStorage.setItem(STORAGE_KEY, String(activeTeamId)); } catch {}
+      try {
+        window.localStorage.setItem(STORAGE_KEY, String(activeTeamId));
+        document.cookie = "fpl_team_id=" + encodeURIComponent(activeTeamId) + "; Path=/; Max-Age=31536000; SameSite=Lax";
+      } catch {}
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setTeamId(String(activeTeamId));
       return;
@@ -132,6 +135,12 @@ export default function MyTeamPanel({
     // Old browser preference only changes the authoritative server state
     // by navigating to a URL the planner, simulator and league all share.
     try {
+      // The server already used this cookie; a previous localStorage value
+      // must never silently override it on the next visit.
+      if (document.cookie.split("; ").some((x) => x.startsWith("fpl_team_id="))) {
+        window.localStorage.setItem(STORAGE_KEY, String(activeTeamId));
+        return;
+      }
       const saved = window.localStorage.getItem(STORAGE_KEY);
       if (saved && /^[1-9]\\d{0,8}$/.test(saved) && Number(saved) !== activeTeamId) {
         const p = new URLSearchParams(window.location.search);
@@ -222,6 +231,7 @@ export default function MyTeamPanel({
     }
     try {
       window.localStorage.setItem(STORAGE_KEY, id);
+      document.cookie = "fpl_team_id=" + encodeURIComponent(id) + "; Path=/; Max-Age=31536000; SameSite=Lax";
     } catch {
       // ignore — still set in-memory below so it works for this visit
     }
@@ -234,6 +244,7 @@ export default function MyTeamPanel({
   function forget() {
     try {
       window.localStorage.removeItem(STORAGE_KEY);
+      document.cookie = "fpl_team_id=" + DEFAULT_TEAM_ID + "; Path=/; Max-Age=31536000; SameSite=Lax";
     } catch {
       // ignore
     }
