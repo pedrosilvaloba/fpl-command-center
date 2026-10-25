@@ -1305,6 +1305,14 @@ export default async function Home({
             <div className="mb-6 border-b border-border pb-5">
               <SubHeading>Transferências — comparar e desafiar</SubHeading>
               <DecisionLabPanel alternatives={toDecisionAlternatives(transferAdvice.plans, transferAdvice.recommended)} />
+              <div className="mt-4">
+                <SubHeading>E se esperasse e acumulasse mais uma FT?</SubHeading>
+                <DeferralPanel plan={deferral} />
+                <p className="mt-2 text-xs text-text-muted">
+                  Projeção condicional feita com a informação de hoje. Ainda não é um otimizador
+                  completo de sequências de transferências em várias jornadas.
+                </p>
+              </div>
             </div>
             <ChipScenarioPanel
               scenarios={toScenarioViews(
