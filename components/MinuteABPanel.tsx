@@ -1,4 +1,4 @@
-import type { MinuteABHistory } from "@/lib/minutebenchmark";
+import { judgeMinuteExperiment, type MinuteABHistory } from "@/lib/minutebenchmark";
 const num=(n:number)=>n.toFixed(2);
 export default function MinuteABPanel({history}:{history:MinuteABHistory}){
   if(!history.configured)return <p className="text-sm text-text-muted">
@@ -13,6 +13,7 @@ export default function MinuteABPanel({history}:{history:MinuteABHistory}){
     const n=common.reduce((s,r)=>s+r[mode].n,0);
     return n>0?common.reduce((s,r)=>s+r[mode][key]*r[mode].n,0)/n:0;
   };
+  const verdict=judgeMinuteExperiment(common);
   const base=weighted("minutesMAE","base");
   const recent=weighted("minutesMAE","recent");
   return <div className="space-y-3">
@@ -35,10 +36,20 @@ export default function MinuteABPanel({history}:{history:MinuteABHistory}){
         <p className="text-lg font-semibold font-mono">{common.length}</p>
       </div>
     </div>
-    {common.length<8&&<p className="text-xs text-warn">
-      Evidência insuficiente para substituir o modelo base: são necessárias pelo menos oito jornadas
-      prospetivas, além de melhoria consistente e verificações de rotação/titularidade.
-    </p>}
+        <div className="rounded-lg border border-border p-3">
+      <p className="text-sm font-semibold">
+        Veredito: {verdict.status==="insufficient"?"A recolher evidência":
+          verdict.status==="improved"?"Melhoria de minutos verificada":
+          verdict.status==="worse"?"Variante pior": "Sem vantagem demonstrada"}
+      </p>
+      <p className="mt-1 text-xs text-text-muted">{verdict.rationale}</p>
+      <p className="mt-1 text-xs text-text-muted">
+        Diferença média por jornada (MAE base menos recente): {verdict.meanGainMinutes.toFixed(2)} minutos.
+        {verdict.confidenceLow!==null&&verdict.confidenceHigh!==null&&
+          <> Intervalo indicativo de 95%: {verdict.confidenceLow.toFixed(2)}
+          {" a "}{verdict.confidenceHigh.toFixed(2)}.</>}
+      </p>
+    </div>}
     <div className="overflow-x-auto">
       <table className="min-w-[460px] w-full text-left text-xs">
         <thead><tr className="text-text-muted">
