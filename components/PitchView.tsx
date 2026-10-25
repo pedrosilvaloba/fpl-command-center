@@ -1,3 +1,5 @@
+"use client";
+import { useState } from "react";
 import type { ScoredPlayer } from "@/lib/recommend";
 import ClubKit from "./ClubKit";
 
@@ -26,8 +28,12 @@ function PlayerChip({
   player,
   badge,
   metric,
+  onSelect,
+  selected,
 }: {
   player: ScoredPlayer;
+  onSelect: () => void;
+  selected: boolean;
   badge?: "C" | "V" | null;
   metric: "points" | "price";
 }) {
@@ -38,7 +44,9 @@ function PlayerChip({
   const doubt = player.element.status !== "a";
 
   return (
-    <div className="relative flex w-[60px] flex-col items-center gap-0.5 sm:w-[76px]">
+    <button type="button" onClick={onSelect} aria-expanded={selected}
+      aria-label={`Analisar ${player.element.web_name}: ${player.expectedPointsNext.toFixed(1)} pontos esperados`}
+      className={`relative flex w-[60px] flex-col items-center gap-0.5 rounded-md outline-offset-2 focus-visible:outline-2 focus-visible:outline-accent sm:w-[76px] ${selected ? "ring-2 ring-accent" : ""}`}>
       {badge && (
         <span
           className={`absolute -top-1 right-1 z-10 flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${
@@ -73,7 +81,7 @@ function PlayerChip({
       <span className="w-full truncate rounded-[3px] bg-[#12071a]/92 px-1 py-px text-center font-mono text-[11px] font-medium leading-tight text-[var(--brand-green)]">
         {value}
       </span>
-    </div>
+    </button>
   );
 }
 
@@ -96,6 +104,9 @@ export default function PitchView({
   /** Which number to print under each shirt. */
   metric?: "points" | "price";
 }) {
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const selectedPlayer = [...starters, ...bench].find((p) => p.element.id === selectedId) ?? null;
+  const toggle = (id: number) => setSelectedId((old) => old === id ? null : id);
   const rows = ROW_ORDER.map((row) => ({
     ...row,
     players: starters.filter((p) => p.element.element_type === row.type),
@@ -149,6 +160,8 @@ export default function PitchView({
                   player={p}
                   badge={badgeFor(p)}
                   metric={metric}
+                  selected={selectedId === p.element.id}
+                  onSelect={() => toggle(p.element.id)}
                 />
               ))}
             </div>
@@ -164,7 +177,9 @@ export default function PitchView({
           <div className="flex flex-wrap items-start justify-center gap-x-2 gap-y-2.5 sm:gap-x-4">
             {bench.map((p, i) => (
               <div key={p.element.id} className="flex flex-col items-center gap-1">
-                <PlayerChip player={p} metric={metric} />
+                <PlayerChip player={p} metric={metric}
+                  selected={selectedId === p.element.id}
+                  onSelect={() => toggle(p.element.id)} />
                 {showBenchOrder && (
                   <span className="font-mono text-[10px] leading-none text-text-muted">
                     {p.element.element_type === 1 ? "GR" : String(i)}
@@ -173,6 +188,34 @@ export default function PitchView({
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {selectedPlayer && (
+        <div className="rounded-lg border border-accent/50 bg-surface-2 p-4" aria-live="polite">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="font-display text-base font-semibold">{selectedPlayer.element.web_name}</p>
+              <p className="text-xs text-text-muted">{selectedPlayer.team.short_name} · {selectedPlayer.positionShort}</p>
+            </div>
+            <button type="button" onClick={() => setSelectedId(null)}
+              className="rounded-md border border-border px-2 py-1 text-sm" aria-label="Fechar análise do jogador">Fechar</button>
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+            <div><p className="text-xs text-text-muted">Pontos próx. GW</p>
+              <p className="font-mono font-semibold">{selectedPlayer.expectedPointsNext.toFixed(1)}</p></div>
+            <div><p className="text-xs text-text-muted">Minutos previstos</p>
+              <p className="font-mono font-semibold">{selectedPlayer.expectedMinutesNext?.toFixed(0) ?? "—"}</p></div>
+            <div><p className="text-xs text-text-muted">Prob. participar</p>
+              <p className="font-mono font-semibold">{Math.round(selectedPlayer.pPlay * 100)}%</p></div>
+          </div>
+          {selectedPlayer.element.news && <p className="mt-3 text-xs text-warn">{selectedPlayer.element.news}</p>}
+          {(selectedPlayer.reasons ?? []).length > 0 && (
+            <ul className="mt-3 list-disc space-y-1 pl-4 text-xs leading-relaxed text-text-muted">
+              {selectedPlayer.reasons.slice(0, 4).map((reason, i) => <li key={i}>{reason}</li>)}
+            </ul>
+          )}
+          <p className="mt-3 text-xs text-text-muted">Estimativas do modelo, não garantias. Para testar alterações, usa Simular.</p>
         </div>
       )}
 
