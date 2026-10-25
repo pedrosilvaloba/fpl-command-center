@@ -6,7 +6,8 @@ import type {
   FplEntryHistoryEntry,
   FplLeagueStandings,
 } from "./types";
-import { loadSnapshot, saveSnapshot } from "./snapshotcache";
+import { loadSnapshot, saveSnapshot, encodeSnapshot, decodeSnapshot } from "./snapshotcache";
+import { getRedis } from "./kv";
 
 // The official Fantasy Premier League API. It is public, unauthenticated
 // for reads, and completely unofficial/undocumented — the Premier League
@@ -147,6 +148,8 @@ async function fplFetch<T>(
     /** Guardar e reutilizar uma cópia deste caminho quando a API falhar.
      * Ligado só nos caminhos sem os quais não há página. */
     resilient?: boolean;
+    /** Avoid Next's 2MB response cache limit for bootstrap-static. */
+    skipNextDataCache?: boolean;
   }
 ): Promise<T> {
   let lastError = "";
@@ -154,7 +157,9 @@ async function fplFetch<T>(
     try {
       const res = await fetch(`${FPL_BASE}${path}`, {
         headers: DEFAULT_HEADERS,
-        next: { revalidate: revalidateSeconds },
+        ...(opts?.skipNextDataCache
+          ? { cache: "no-store" as const }
+          : { next: { revalidate: revalidateSeconds } }),
       });
       if (res.ok) {
         const data = (await res.json()) as T;
@@ -199,10 +204,31 @@ async function fplFetch<T>(
 
 /** Master data dump: all players, teams, gameweeks, positions. Changes
  * slowly outside matchdays, so cache for 5 minutes. */
-export function getBootstrap() {
-  return fplFetch<FplBootstrap>("/bootstrap-static/", 300, {
-    resilient: true,
+const BOOTSTRAP_LIVE_KEY = "fpl:bootstrap:live-cache:v1";
+/** Five-minute Redis cache in compressed form. Next's data cache rejects
+ * the 2.38 MB FPL bootstrap response outright, flooding logs and causing
+ * repeated upstream requests. Independent snapshots remain the 30h fallback
+ * on FPL 403/outage and are marked stale by fplFetch. */
+export async function getBootstrap(): Promise<FplBootstrap> {
+  const redis = getRedis();
+  if (redis) {
+    try {
+      const cached = await redis.get<string>(BOOTSTRAP_LIVE_KEY);
+      if (typeof cached === "string" && cached.length) {
+        return decodeSnapshot<FplBootstrap>(cached);
+      }
+    } catch { /* cache failure must not break live data */ }
+  }
+  const data = await fplFetch<FplBootstrap>("/bootstrap-static/", 0, {
+    resilient: true, skipNextDataCache: true,
   });
+  if (redis && !getFplDataHealth().paths.some(p=>p.path==="/bootstrap-static/" && p.snapshotAt!==null)) {
+    try {
+      const packed=encodeSnapshot(data);
+      if (packed.length < 600_000) await redis.set(BOOTSTRAP_LIVE_KEY,packed,{ex:300});
+    } catch { /* best effort */ }
+  }
+  return data;
 }
 
 /** All fixtures, optionally filtered. Cache for 5 minutes. */
