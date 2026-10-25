@@ -888,7 +888,7 @@ export default async function Home({
       (s) => s.advised && (s.chip === "wildcard" || s.chip === "freehit")
     )?.chip ??
     null;
-  if (upcomingEvent && squadState.available) {
+  if (upcomingEvent && squadState.available && teamId === Number(DEFAULT_TEAM_ID)) {
     await recordAdvice(
       {
         event: upcomingEvent.id,
@@ -905,6 +905,7 @@ export default async function Home({
         chip: advisedChip,
         captainSource: captainDecision.source,
         predictedXi: advisedPlan?.xiNextPoints ?? xiExpected,
+        teamId,
         holdBaseline: transferAdvice.hold
           ? {
               xi: transferAdvice.hold.xi.map((p) => p.element.id),
@@ -917,7 +918,11 @@ export default async function Home({
       upcomingEvent.deadline_time
     );
   }
-  const decisionHistory = await getDecisionHistory();
+  // Historic single-owner records belong only to the default team;
+  // never present them as the selected public Team ID's performance.
+  const decisionHistory = teamId === Number(DEFAULT_TEAM_ID)
+    ? await getDecisionHistory()
+    : { configured: false, rows: [], totalDiff: 0, settled: 0 };
   // v1.62 — A PÁGINA PESAVA 4,4 MB. Quase tudo era isto: os ~560 jogadores
   // completos (elemento da FPL inteiro, razões, risco, decomposição) eram
   // enviados para o browser porque o Shadow Team é um componente de
