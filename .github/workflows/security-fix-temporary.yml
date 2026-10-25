@@ -1,0 +1,31 @@
+name: Temporary safe dependency remediation
+on:
+  push:
+    branches: [feature/command-center-major-upgrade-20261025]
+    paths: [.github/workflows/security-fix-temporary.yml]
+permissions:
+  contents: write
+jobs:
+  remediate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit
+      - run: npm audit fix --ignore-scripts --no-fund
+      - name: Verify critical/high audit cleared
+        run: npm audit --audit-level=high
+      - name: Commit minimal semver-compatible fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          if ! git diff --cached --quiet; then
+            git commit -m "fix(security): remediate compatible high-severity npm advisories"
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
