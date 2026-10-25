@@ -3,6 +3,7 @@ import { buildForwardSnapshot, scoreForwardSnapshot } from "../lib/forwardbenchm
 import { buildAccuracyPicks } from "../lib/accuracy";
 import { makeElement, makeTeam, makeEvent } from "./fixtures";
 import { buildScoutReport } from "../lib/officialscout";
+import { parseEditorialFeed, buildEditorialReport } from "../lib/externalresearch";
 import type { ScoredPlayer } from "../lib/recommend";
 
 // Pure test: no API, Redis, mutable production state, or hidden current GW.
@@ -90,3 +91,28 @@ assert.equal(official.source, "official-fpl");
 assert.equal(official.analystResearchCompleted, false);
 assert.ok(official.items.some((item) => item.category === "availability" && item.playerId === 99));
 assert.ok(official.items.every((item) => item.officialUrl.startsWith("https://fantasy.premierleague.com/")));
+
+const rssNow = Date.parse("2026-10-25T12:00:00Z");
+const xml = `<?xml version="1.0"?><rss version="2.0"><channel>
+<item><title>FPL team news: player injury &amp; rotations</title>
+<link>https://www.fantasyfootballscout.co.uk/2026/10/24/fpl-team-news/</link>
+<pubDate>Sat, 24 Oct 2026 11:00:00 GMT</pubDate></item>
+<item><title>Blocked malicious link</title>
+<link>https://evil.example/football</link>
+<pubDate>Sat, 24 Oct 2026 11:00:00 GMT</pubDate></item>
+<item><title>Expired article</title>
+<link>https://www.fantasyfootballscout.co.uk/2026/07/02/old/</link>
+<pubDate>Thu, 02 Jul 2026 11:00:00 GMT</pubDate></item>
+</channel></rss>`;
+const articles = parseEditorialFeed(xml, "Fantasy Football Scout", "fantasyfootballscout.co.uk", rssNow);
+assert.equal(articles.length, 1, "Only fresh, HTTPS, allowlisted source links are accepted");
+assert.equal(articles[0].subject, "team-news");
+assert.equal(articles[0].title, "FPL team news: player injury & rotations");
+const editorial = buildEditorialReport([
+  { source: "Fantasy Football Scout", findings: articles },
+  { source: "BBC Football", findings: [], error: "HTTP 503" },
+], "2026-10-25T12:00:00Z");
+assert.equal(editorial.findings.length, 1);
+assert.equal(editorial.sourcesChecked.length, 1);
+assert.equal(editorial.sourcesFailed.length, 1);
+assert.equal(editorial.mode, "editorial-feeds");
