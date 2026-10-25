@@ -18,6 +18,7 @@ const UPDATE_AFTER_HOURS = 6;
 const FEEDS = [
   { name: "Fantasy Football Scout", url: "https://www.fantasyfootballscout.co.uk/feed/", domain: "fantasyfootballscout.co.uk" },
   { name: "BBC Football", url: "https://feeds.bbci.co.uk/sport/football/rss.xml", domain: "bbc.co.uk" },
+  { name: "The Guardian Football", url: "https://www.theguardian.com/football/rss", domain: "theguardian.com" },
 ] as const;
 
 export interface EditorialFinding {
