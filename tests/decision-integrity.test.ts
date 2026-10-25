@@ -3,6 +3,7 @@ import { simulateLineup, type SimulatedPlayer } from "../lib/lineupsettlement";
 import { settleOutcome, type AdviceRecord } from "../lib/decisions";
 import { parseAppView, parseTeamId, viewHref } from "../lib/appcontext";
 import { planSensitivity, toDecisionAlternatives } from "../lib/decisionrobustness";
+import { scenarioHref } from "../lib/chipscenarioview";
 import type { TransferPlan } from "../lib/transferplan";
 
 const pos: Record<number, 1 | 2 | 3 | 4> = {
@@ -109,3 +110,13 @@ const variants = toDecisionAlternatives([noTransfer, hypothetical, hypothetical]
 assert.equal(variants.length, 2, "duplicate solver paths should not clutter UX");
 assert.equal(variants[1].recommended, true);
 assert.equal(variants[1].transfers.length, 2);
+
+const scenario = scenarioHref("?team=321&view=simular&foo=bar", "wildcard", [11, 12], [13], "continuidade");
+const params = new URL(scenario, "https://example.test/").searchParams;
+assert.equal(params.get("team"), "321", "Wildcard actions must preserve authoritative team");
+assert.equal(params.get("view"), "simular", "Wildcard actions must stay on simulator screen");
+assert.equal(params.get("manter"), "11,12");
+assert.equal(params.get("incluir"), "13");
+assert.equal(params.get("perfil"), "continuidade");
+const cleared = new URL(scenarioHref("?team=321&manter=11", "wildcard", [], [], "equilibrado"), "https://example.test/");
+assert.equal(cleared.searchParams.has("manter"), false);
