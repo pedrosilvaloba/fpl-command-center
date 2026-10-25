@@ -28,11 +28,18 @@ export default function MultiPeriodPanel({ report, teamId, horizon }: {
           <p className="font-mono text-base font-semibold">{report.plannedPoints.toFixed(1)}</p>
         </div>
         <div className="rounded-lg bg-surface-2 p-3">
-          <p className="text-[11px] text-text-muted">Ganho projetado</p>
+          <p className="text-[11px] text-text-muted">Ganho teórico · não validado</p>
           <p className={`font-mono text-base font-semibold ${report.gainVsHold < 0?"text-warn":"text-text"}`}>
             {report.gainVsHold>=0?"+":""}{report.gainVsHold.toFixed(1)}
           </p>
         </div>
+      </div>
+      <div className="rounded-lg border border-warn/40 bg-warn/5 p-3 text-sm">
+        Se os reforços renderem 20% menos do que o previsto enquanto estiverem no plantel,
+        a diferença projetada desce para
+        {" "}<strong>{report.stressGainVsHold>=0?"+":""}{report.stressGainVsHold.toFixed(1)} pts</strong>.
+        É um teste hipotético, não um intervalo de confiança. Um plano com muitas trocas pode
+        estar a selecionar os erros mais otimistas do próprio modelo.
       </div>
       <ol className="space-y-2">
         {report.steps.map(step=><li key={step.event} className="rounded-lg border border-border p-3">
