@@ -84,6 +84,7 @@ import ChipScenarioPanel from "@/components/ChipScenarioPanel";
 import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, parseWildcardProfile } from "@/lib/chipscenarioview";
 import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
 import { planMultipleGameweeks } from "@/lib/multiperiod";
+import { readRecentMinutes } from "@/lib/recentminutes";
 import MultiPeriodPanel from "@/components/MultiPeriodPanel";
 import TeamPreferenceSync from "@/components/TeamPreferenceSync";
 import { cookies } from "next/headers";
@@ -340,6 +341,7 @@ export default async function Home({
   const includeIds = parseKeepParam(sp.incluir);
   const wildcardProfile = parseWildcardProfile(sp.perfil);
   const requestedHorizon = Math.min(8, Math.max(3, Number(Array.isArray(sp.horizonte) ? sp.horizonte[0] : sp.horizonte) || 5));
+  const experimentalRecentMinutes = view === "simular" && sp.minutos === "recentes";
   const initialChip =
     parseChipParam(sp.chip) ?? (keepIds.length + includeIds.length > 0 ? "wildcard" : null);
   const [bootstrap, fixtures, oddsResult] = await Promise.all([
@@ -481,11 +483,12 @@ export default async function Home({
   // ambas recolhidas pelo cron e lidas do Redis. Sem elas a página funciona
   // exatamente como antes.
   const eliteRedis = getRedis();
-  const [lastSeasonTable, elite] = await Promise.all([
+  const [lastSeasonTable, elite, recentMinutes] = await Promise.all([
     loadLastSeasonTable(),
     eliteRedis
       ? eliteRedis.get(ELITE_KEY).then(normalizeElite).catch(() => null)
       : Promise.resolve(null),
+    readRecentMinutes(),
   ]);
   const rawScored = buildScoredPlayers(
     bootstrap,
@@ -495,7 +498,8 @@ export default async function Home({
     oddsMatches,
     activeInsights,
     undefined,
-    lastSeasonTable
+    lastSeasonTable,
+    experimentalRecentMinutes ? recentMinutes : null
   );
   const learning = await getLearningState();
   const levelled = applyCalibration(rawScored, learning.calibration);
@@ -714,7 +718,8 @@ export default async function Home({
             event,
             players: applyDispersionCorrection(
               applyCalibration(buildScoredPlayers(
-                bootstrap, fixtures, event, 1, oddsMatches, activeInsights, undefined, lastSeasonTable
+                bootstrap, fixtures, event, 1, oddsMatches, activeInsights, undefined, lastSeasonTable,
+                experimentalRecentMinutes ? recentMinutes : null
               ), learning.calibration), dispersionCorrection).applied,
           })),
       ]
@@ -756,12 +761,12 @@ export default async function Home({
     (e) => !e.finished && new Date(e.deadline_time).getTime() > nowMs
   );
   await Promise.all([
-    upcomingEvent ? snapshotIfMissing(scored, upcomingEvent.id) : Promise.resolve(),
-    upcomingEvent && teamId === Number(DEFAULT_TEAM_ID)
+    upcomingEvent && !experimentalRecentMinutes ? snapshotIfMissing(scored, upcomingEvent.id) : Promise.resolve(),
+    upcomingEvent && !experimentalRecentMinutes && teamId === Number(DEFAULT_TEAM_ID)
       ? saveForwardSnapshot(scored, bootstrap.elements, upcomingEvent.id, upcomingEvent.deadline_time,
           squadState.available ? squadState.owned.map((p) => p.elementId) : [])
       : Promise.resolve(),
-    upcomingEvent ? snapshotStrategies(rawScored, upcomingEvent.id) : Promise.resolve(),
+    upcomingEvent && !experimentalRecentMinutes ? snapshotStrategies(rawScored, upcomingEvent.id) : Promise.resolve(),
     // Per-player predictions for the gameweek review. Written BEFORE the
     // deadline because reconstructing them afterwards is not a test the
     // model could ever fail.
@@ -769,7 +774,7 @@ export default async function Home({
     // Pedro viu e sobre os quais decidiu. Guardar os números crus enquanto
     // o ecrã mostra os corrigidos faria a camada de aprendizagem medir uma
     // previsão que ninguém usou — e corrigir duas vezes o mesmo desvio.
-    upcomingEvent ? snapshotPredictions(scored, upcomingEvent.id) : Promise.resolve(),
+    upcomingEvent && !experimentalRecentMinutes ? snapshotPredictions(scored, upcomingEvent.id) : Promise.resolve(),
   ]);
   const [accuracyHistory, forwardHistory] = await Promise.all([
     getAccuracyHistory(),
@@ -901,7 +906,7 @@ export default async function Home({
       (s) => s.advised && (s.chip === "wildcard" || s.chip === "freehit")
     )?.chip ??
     null;
-  if (upcomingEvent && squadState.available && teamId === Number(DEFAULT_TEAM_ID)) {
+  if (upcomingEvent && !experimentalRecentMinutes && squadState.available && teamId === Number(DEFAULT_TEAM_ID)) {
     await recordAdvice(
       {
         event: upcomingEvent.id,
@@ -1295,6 +1300,23 @@ export default async function Home({
             <div className="mb-6 border-b border-border pb-5">
               <SubHeading>Transferências — comparar e desafiar</SubHeading>
               <DecisionLabPanel alternatives={toDecisionAlternatives(transferAdvice.plans, transferAdvice.recommended)} />
+              <div className="mt-4 rounded-lg border border-border bg-surface-2 p-3">
+                <p className="text-sm font-semibold">Previsão de minutos: testar recência</p>
+                <p className="mt-1 text-xs text-text-muted">
+                  Cenário experimental que pondera os últimos jogos com o histórico da época.
+                  A versão principal mantém o modelo validado até termos resultados prospetivos.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                  <a className={`rounded border px-3 py-2 ${!experimentalRecentMinutes?"border-accent text-accent":"border-border"}`}
+                     href={viewHref(teamId,"simular",{horizonte:String(requestedHorizon),minutos:"base"})}>Minutos base</a>
+                  <a className={`rounded border px-3 py-2 ${experimentalRecentMinutes?"border-accent text-accent":"border-border"}`}
+                     href={viewHref(teamId,"simular",{horizonte:String(requestedHorizon),minutos:"recentes"})}>
+                    Minutos recentes · {recentMinutes?.events.length ?? 0} GW
+                  </a>
+                </div>
+                {experimentalRecentMinutes && (!recentMinutes || recentMinutes.events.length<4) &&
+                  <p className="mt-2 text-xs text-warn">Sem histórico recente suficiente: as previsões mantêm a versão base.</p>}
+              </div>
               <div id="plano-multiplo" className="mt-6 border-t border-border pt-5">
                 {multiPeriod && <MultiPeriodPanel report={multiPeriod} teamId={teamId}
                   horizon={requestedHorizon} />}
