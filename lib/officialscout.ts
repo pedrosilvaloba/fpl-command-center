@@ -1,5 +1,6 @@
 import { getBootstrap } from "./fpl-client";
 import { getRedis } from "./kv";
+import { refreshRecentMinutes } from "./recentminutes";
 import type { FplBootstrap } from "./types";
 
 /** Deterministic official-FPL fact collection. Not external expert research,
@@ -97,10 +98,11 @@ export async function runOfficialScout(): Promise<ScoutJobOutcome> {
     const report = buildScoutReport(bootstrap);
     if (!report.checkedPlayers) return { ok: false, retryable: true, productive: false, error: "API FPL sem jogadores", summary: "API FPL devolveu zero jogadores", detail: {} };
     await redis.set(SCOUT_KEY, report);
+    const minuteHistory = await refreshRecentMinutes(bootstrap);
     return {
       ok: true, productive: true,
       summary: `Fontes oficiais verificadas: ${report.checkedPlayers} jogadores; ${report.items.length} sinais da GW${report.event}`,
-      detail: { checkedPlayers: report.checkedPlayers, findings: report.items.length, event: report.event },
+      detail: { checkedPlayers: report.checkedPlayers, findings: report.items.length, event: report.event, recentMinutes: minuteHistory },
     };
   } catch (error) {
     return { ok: false, retryable: true, productive: false, summary: "Falha a recolher dados oficiais", error: String(error), detail: {} };

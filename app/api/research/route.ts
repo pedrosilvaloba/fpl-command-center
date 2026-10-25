@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { readExternalResearch, runExternalResearch } from "@/lib/externalresearch";
 import { readOfficialScout, runOfficialScout } from "@/lib/officialscout";
 import { getRedis } from "@/lib/kv";
+import { readRecentMinutes, refreshRecentMinutes } from "@/lib/recentminutes";
 import { startJobRun, finishJobRun } from "@/lib/joblog";
 
 /** Read-only, public facts and provenance for operational smoke tests.
@@ -46,12 +47,29 @@ export async function GET() {
       // Cron remains primary. A failed fallback never breaks monitoring.
     }
   }
+  let recentMinutes = await readRecentMinutes();
+  if (redis && (!recentMinutes || Date.now() - Date.parse(recentMinutes.at) > 18 * 3_600_000)) {
+    try {
+      const lock=await redis.set("fpl:minutes:readthrough-lock:v1", "1", { nx:true,ex:900 });
+      if(lock==="OK") {
+        await refreshRecentMinutes();
+        recentMinutes=await readRecentMinutes();
+      }
+    } catch { /* No private action or uncontrolled retry */ }
+  }
   const now = Date.now();
   const fresh = (at: string | undefined, hours: number) =>
     !!at && Number.isFinite(Date.parse(at)) &&
     now - Date.parse(at) >= 0 && now - Date.parse(at) <= hours * 3_600_000;
   return NextResponse.json({
     autoRecovered,
+    recentMinutes: {
+      status: !recentMinutes ? "not-run" : fresh(recentMinutes.at,24) ? "fresh" : "stale",
+      lastRun: recentMinutes?.at ?? null,
+      gameweeks: recentMinutes?.events ?? [],
+      players: recentMinutes ? Object.keys(recentMinutes.players).length : 0,
+      experimentalOnly: true,
+    },
     external: {
       status: !external ? "not-run" : fresh(external.at, 48) ? "fresh" : "stale",
       lastRun: external?.at ?? null,
