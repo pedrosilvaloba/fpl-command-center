@@ -137,7 +137,7 @@ export const maxDuration = 60;
  * que as duas não podem divergir.
  */
 const NAV: { tier: string; items: [string, string][] }[] = [
-  { tier: "Decidir", items: [["fazer", "O Que Fazer"], ["shadow", "Shadow Team"]] },
+  { tier: "Decidir", items: [["fazer", "Hoje"], ["laboratorio", "Cenários"], ["shadow", "Shadow Team"]] },
   {
     tier: "Perceber",
     items: [["revisao", "Revisão"], ["aprendizagem", "Aprendizagem"], ["liga", "A Liga"]],
