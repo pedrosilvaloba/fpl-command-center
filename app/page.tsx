@@ -83,6 +83,8 @@ import DeferralPanel from "@/components/DeferralPanel";
 import ChipScenarioPanel from "@/components/ChipScenarioPanel";
 import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, parseWildcardProfile } from "@/lib/chipscenarioview";
 import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
+import { planMultipleGameweeks } from "@/lib/multiperiod";
+import MultiPeriodPanel from "@/components/MultiPeriodPanel";
 import TeamPreferenceSync from "@/components/TeamPreferenceSync";
 import { cookies } from "next/headers";
 import DecisionLabPanel from "@/components/DecisionLabPanel";
@@ -337,6 +339,7 @@ export default async function Home({
   const keepIds = parseKeepParam(sp.manter);
   const includeIds = parseKeepParam(sp.incluir);
   const wildcardProfile = parseWildcardProfile(sp.perfil);
+  const requestedHorizon = Math.min(8, Math.max(3, Number(Array.isArray(sp.horizonte) ? sp.horizonte[0] : sp.horizonte) || 5));
   const initialChip =
     parseChipParam(sp.chip) ?? (keepIds.length + includeIds.length > 0 ? "wildcard" : null);
   const [bootstrap, fixtures, oddsResult] = await Promise.all([
@@ -700,6 +703,27 @@ export default async function Home({
     transferAdvice,
     transferPlanOpts
   );
+  // Search across sequential gameweeks ONLY in the simulator. Each week's
+  // independently recomputed model uses today's information and the actual
+  // fixture week (not a flat five-week average).
+  const periodForecasts = view === "simular" && squadState.available
+    ? [
+        { event: fromEvent, players: scored },
+        ...Array.from({ length: Math.max(0, Math.min(requestedHorizon, 39 - fromEvent) - 1) },
+          (_, k) => fromEvent + k + 1).map(event => ({
+            event,
+            players: applyDispersionCorrection(
+              applyCalibration(buildScoredPlayers(
+                bootstrap, fixtures, event, 1, oddsMatches, activeInsights, undefined, lastSeasonTable
+              ), learning.calibration), dispersionCorrection).applied,
+          })),
+      ]
+    : [];
+  const multiPeriod = periodForecasts.length > 0
+    ? planMultipleGameweeks(squadState, periodForecasts, {
+        horizon: periodForecasts.length, beamWidth: 10,
+      })
+    : null;
 
   // ---- how the last/current gameweek actually went ---------------------
   const reviewEvent = lastPublishedEvent;
@@ -1271,6 +1295,10 @@ export default async function Home({
             <div className="mb-6 border-b border-border pb-5">
               <SubHeading>Transferências — comparar e desafiar</SubHeading>
               <DecisionLabPanel alternatives={toDecisionAlternatives(transferAdvice.plans, transferAdvice.recommended)} />
+              <div id="plano-multiplo" className="mt-6 border-t border-border pt-5">
+                {multiPeriod && <MultiPeriodPanel report={multiPeriod} teamId={teamId}
+                  horizon={requestedHorizon} />}
+              </div>
               <div className="mt-4">
                 <SubHeading>E se esperasse e acumulasse mais uma FT?</SubHeading>
                 <DeferralPanel plan={deferral} />
