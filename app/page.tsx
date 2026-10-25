@@ -82,6 +82,7 @@ import DeferralPanel from "@/components/DeferralPanel";
 import ChipScenarioPanel from "@/components/ChipScenarioPanel";
 import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, parseWildcardProfile } from "@/lib/chipscenarioview";
 import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
+import { cookies } from "next/headers";
 import DecisionLabPanel from "@/components/DecisionLabPanel";
 import { toDecisionAlternatives } from "@/lib/decisionrobustness";
 import ElitePanel from "@/components/ElitePanel";
@@ -326,7 +327,10 @@ export default async function Home({
   // Cenários de chip: `?chip=wildcard&manter=123,456` — jogadores que o
   // gestor fixou. Só mexe nos cenários; o resto da página não muda.
   const sp = await searchParams;
-  const teamId = parseTeamId(sp.team);
+  // Prefer an explicit shareable team URL; otherwise restore the browser's
+  // non-sensitive Team ID cookie consistently across *all* server modules.
+  const savedTeam = (await cookies()).get("fpl_team_id")?.value;
+  const teamId = parseTeamId(sp.team ?? savedTeam);
   const view = parseAppView(sp.view);
   const keepIds = parseKeepParam(sp.manter);
   const includeIds = parseKeepParam(sp.incluir);
