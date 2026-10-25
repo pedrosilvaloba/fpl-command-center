@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { buildMinuteSnapshot, gradeMinuteSnapshot } from "../lib/minutebenchmark";
+import { buildMinuteSnapshot, gradeMinuteSnapshot, judgeMinuteExperiment } from "../lib/minutebenchmark";
 import { makeElement } from "./fixtures";
 import type { ScoredPlayer } from "../lib/recommend";
 import { deriveRecentMinutes } from "../lib/recentminutes";
@@ -44,3 +44,24 @@ const n1=gradeMinuteSnapshot(snapshot,actual);
 const n2=gradeMinuteSnapshot(snapshot,actual);
 assert.deepEqual(n1.base,n2.base,"Metric reproducibility must not depend on current date");
 console.log("minutes paired benchmark tests passed");
+
+assert.equal(judgeMinuteExperiment([result]).status,"insufficient");
+const historical = Array.from({length:12},(_,i)=>({
+  ...result,event:10+i,
+  base:{...result.base,minutesMAE:20+(i%3)*.1,appearanceBrier:.18},
+  recent:{...result.recent,minutesMAE:17+(i%3)*.1,appearanceBrier:.15},
+}));
+const winning=judgeMinuteExperiment(historical);
+assert.equal(winning.events,12);
+assert.equal(winning.status,"improved");
+assert.ok(winning.confidenceLow!==null && winning.confidenceLow>0);
+const losing=judgeMinuteExperiment(historical.map(r=>({
+  ...r,base:{...r.base,minutesMAE:14},
+  recent:{...r.recent,minutesMAE:20},
+})));
+assert.equal(losing.status,"worse");
+const brierBad=judgeMinuteExperiment(historical.map(r=>({
+  ...r,recent:{...r.recent,appearanceBrier:.27},
+})));
+assert.equal(brierBad.status,"not-better");
+console.log("minutes evidence gates passed");
