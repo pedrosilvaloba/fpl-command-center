@@ -81,6 +81,11 @@ import CaptainShortlist from "@/components/CaptainShortlist";
 import DeferralPanel from "@/components/DeferralPanel";
 import ChipScenarioPanel from "@/components/ChipScenarioPanel";
 import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, parseWildcardProfile } from "@/lib/chipscenarioview";
+import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
+import TeamPreferenceSync from "@/components/TeamPreferenceSync";
+import { cookies } from "next/headers";
+import DecisionLabPanel from "@/components/DecisionLabPanel";
+import { toDecisionAlternatives } from "@/lib/decisionrobustness";
 import ElitePanel from "@/components/ElitePanel";
 import type { ScoredPlayer } from "@/lib/recommend";
 import DecisionLogPanel from "@/components/DecisionLogPanel";
@@ -136,7 +141,7 @@ export const maxDuration = 60;
  * que as duas não podem divergir.
  */
 const NAV: { tier: string; items: [string, string][] }[] = [
-  { tier: "Decidir", items: [["fazer", "O Que Fazer"], ["shadow", "Shadow Team"]] },
+  { tier: "Decidir", items: [["fazer", "Hoje"], ["laboratorio", "Cenários"], ["shadow", "Shadow Team"]] },
   {
     tier: "Perceber",
     items: [["revisao", "Revisão"], ["aprendizagem", "Aprendizagem"], ["liga", "A Liga"]],
@@ -323,6 +328,11 @@ export default async function Home({
   // Cenários de chip: `?chip=wildcard&manter=123,456` — jogadores que o
   // gestor fixou. Só mexe nos cenários; o resto da página não muda.
   const sp = await searchParams;
+  // Prefer an explicit shareable team URL; otherwise restore the browser's
+  // non-sensitive Team ID cookie consistently across *all* server modules.
+  const savedTeam = (await cookies()).get("fpl_team_id")?.value;
+  const teamId = parseTeamId(sp.team ?? savedTeam);
+  const view = parseAppView(sp.view);
   const keepIds = parseKeepParam(sp.manter);
   const includeIds = parseKeepParam(sp.incluir);
   const wildcardProfile = parseWildcardProfile(sp.perfil);
@@ -566,7 +576,7 @@ export default async function Home({
     leagueError =
       "Não foi possível carregar esta liga — se for uma liga privada pode precisar de sessão autenticada.";
   }
-  const myTeamIdNum = Number(DEFAULT_TEAM_ID);
+  const myTeamIdNum = teamId;
   const myLeagueRank =
     leagueResults.find((r) => r.entry === myTeamIdNum)?.rank ?? null;
 
@@ -744,7 +754,10 @@ export default async function Home({
   );
   await Promise.all([
     upcomingEvent ? snapshotIfMissing(scored, upcomingEvent.id) : Promise.resolve(),
-    upcomingEvent ? saveForwardSnapshot(scored, bootstrap.elements, upcomingEvent.id, upcomingEvent.deadline_time) : Promise.resolve(),
+    upcomingEvent && teamId === Number(DEFAULT_TEAM_ID)
+      ? saveForwardSnapshot(scored, bootstrap.elements, upcomingEvent.id, upcomingEvent.deadline_time,
+          squadState.available ? squadState.owned.map((p) => p.elementId) : [])
+      : Promise.resolve(),
     upcomingEvent ? snapshotStrategies(rawScored, upcomingEvent.id) : Promise.resolve(),
     // Per-player predictions for the gameweek review. Written BEFORE the
     // deadline because reconstructing them afterwards is not a test the
@@ -885,7 +898,7 @@ export default async function Home({
       (s) => s.advised && (s.chip === "wildcard" || s.chip === "freehit")
     )?.chip ??
     null;
-  if (upcomingEvent && squadState.available) {
+  if (upcomingEvent && squadState.available && teamId === Number(DEFAULT_TEAM_ID)) {
     await recordAdvice(
       {
         event: upcomingEvent.id,
@@ -902,6 +915,7 @@ export default async function Home({
         chip: advisedChip,
         captainSource: captainDecision.source,
         predictedXi: advisedPlan?.xiNextPoints ?? xiExpected,
+        teamId,
         holdBaseline: transferAdvice.hold
           ? {
               xi: transferAdvice.hold.xi.map((p) => p.element.id),
@@ -914,7 +928,11 @@ export default async function Home({
       upcomingEvent.deadline_time
     );
   }
-  const decisionHistory = await getDecisionHistory();
+  // Historic single-owner records belong only to the default team;
+  // never present them as the selected public Team ID's performance.
+  const decisionHistory = teamId === Number(DEFAULT_TEAM_ID)
+    ? await getDecisionHistory()
+    : { configured: false, rows: [], totalDiff: 0, settled: 0 };
   // v1.62 — A PÁGINA PESAVA 4,4 MB. Quase tudo era isto: os ~560 jogadores
   // completos (elemento da FPL inteiro, razões, risco, decomposição) eram
   // enviados para o browser porque o Shadow Team é um componente de
@@ -942,6 +960,7 @@ export default async function Home({
 
   return (
     <div className="min-h-full bg-bg text-text">
+      <TeamPreferenceSync activeTeamId={teamId} explicit={sp.team !== undefined} />
       {/* ================= top bar =================
           One compact row plus the navigation. The previous header was 370px
           tall — a third of a laptop viewport — of which 150px was four
@@ -957,6 +976,9 @@ export default async function Home({
               <h1 className="truncate font-display text-lg font-bold tracking-tight md:text-xl">
                 {nextEvent?.name ?? "Gameweek"}
               </h1>
+              <span className="hidden truncate text-[11px] text-white/45 md:inline" title="Equipa usada por todas as recomendações">
+                Team #{teamId}
+              </span>
             </div>
             {nextEvent?.deadline_time && (
               <div className="flex shrink-0 items-center gap-3">
@@ -977,18 +999,21 @@ export default async function Home({
             )}
           </div>
 
-          <nav className="pill-scroller -mx-1 px-1 pb-2">
-            {NAV.map((group) => (
-              <span key={group.tier} className="flex items-center gap-1.5">
-                <span className="eyebrow shrink-0 text-text-muted opacity-70">
-                  {group.tier}
-                </span>
-                {group.items.map(([href, label]) => (
-                  <a key={href} href={`#${href}`} className="pill">
-                    {label}
-                  </a>
-                ))}
-              </span>
+          <nav aria-label="Áreas da aplicação" className="grid grid-cols-4 gap-1.5 pb-2">
+            {([
+              ["hoje", "Hoje"], ["simular", "Simular"],
+              ["analisar", "Analisar"], ["sistema", "Sistema"],
+            ] as const).map(([id, label]) => (
+              <a
+                key={id}
+                href={viewHref(teamId, id)}
+                aria-current={view === id ? "page" : undefined}
+                className={`rounded-lg px-2 py-2.5 text-center text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+                  view === id ? "bg-accent text-accent-contrast" : "bg-white/5 text-white/70 hover:bg-white/10"
+                }`}
+              >
+                {label}
+              </a>
             ))}
           </nav>
         </div>
@@ -999,6 +1024,7 @@ export default async function Home({
         {/* Antes de tudo o resto: se os dados não são de agora, isso é a
             primeira coisa a saber, não uma nota de rodapé no fim. */}
         <StaleDataBanner health={getFplDataHealth()} now={nowMs} />
+        {view === "hoje" && (<>
         <TierHeading label="Decidir" note="o que fazer antes do deadline" />
         {/* ================= 1. o que fazer ================= */}
         <Section
@@ -1007,6 +1033,15 @@ export default async function Home({
           title="O Que Fazer Antes do Deadline"
           primary
         >
+          <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-surface-2 px-3 py-2 text-xs text-text-muted">
+            <span>Equipa <strong className="text-text">#{teamId}</strong></span>
+            <span>·</span>
+            <span>FPL: {getFplDataHealth().degraded ? "dados de reserva" : "feed disponível"}</span>
+            <span>·</span>
+            <span>Odds: {oddsActive ? "disponíveis" : "sem mercado"}</span>
+            <span>·</span>
+            <span>Projeção: experimental, sem vantagem comprovada</span>
+          </div>
           {/* The headline answer, then the handful of facts that qualify it —
               as inline pairs, not as bordered tiles. */}
           <div className="mb-4 border-b border-border pb-4">
@@ -1015,7 +1050,7 @@ export default async function Home({
             </p>
             {squadState.available && squadState.chips.some((chip) => chip.name === "wildcard" && chip.remaining > 0) && (
               <a
-                href={`/?chip=wildcard&perfil=${wildcardProfile}#cenarios`}
+                href={viewHref(teamId, "simular", { chip: "wildcard", perfil: wildcardProfile }) + "#cenarios"}
                 className="mt-2 inline-block text-[13px] font-semibold text-accent underline underline-offset-2"
               >
                 Quero explorar alternativas de Wildcard, mesmo que o modelo aconselhe guardar →
@@ -1159,19 +1194,10 @@ export default async function Home({
             </div>
           )}
 
-          <div className="mt-6 border-t border-border pt-5">
-            <SubHeading>E se eu usasse um chip esta semana?</SubHeading>
-            <ChipScenarioPanel
-              scenarios={toScenarioViews(
-                transferAdvice.scenarios,
-                squadState.owned.map((o) => o.elementId),
-                eliteLookup
-              )}
-              initialChip={initialChip}
-              wildcardProfile={wildcardProfile}
-              candidates={scenarioCandidates}
-            />
-          </div>
+          <a className="mt-4 inline-block rounded-lg border border-accent px-4 py-3 text-sm font-semibold text-accent"
+             href={viewHref(teamId, "simular", { chip: "wildcard", perfil: wildcardProfile }) + "#cenarios"}>
+            Abrir laboratório de cenários — Wildcard, Free Hit e transferências
+          </a>
         </Section>
 
         {/* ================= alerts =================
@@ -1272,6 +1298,35 @@ export default async function Home({
         )}
 
         {/* ================= 6. shadow team ================= */}
+
+        </>)}
+        {view === "simular" && (<>
+          <TierHeading label="Simular" note="compara alternativas sem executar transferências" />
+          <Section id="laboratorio" title="Laboratório de decisões"
+            eyebrow="Explorar cenários" intro="O conselho principal não limita as tuas opções. Todos os cenários usam o plantel ativo e o orçamento estimado, sem alterar a FPL.">
+            <div className="mb-6 border-b border-border pb-5">
+              <SubHeading>Transferências — comparar e desafiar</SubHeading>
+              <DecisionLabPanel alternatives={toDecisionAlternatives(transferAdvice.plans, transferAdvice.recommended)} />
+              <div className="mt-4">
+                <SubHeading>E se esperasse e acumulasse mais uma FT?</SubHeading>
+                <DeferralPanel plan={deferral} />
+                <p className="mt-2 text-xs text-text-muted">
+                  Projeção condicional feita com a informação de hoje. Ainda não é um otimizador
+                  completo de sequências de transferências em várias jornadas.
+                </p>
+              </div>
+            </div>
+            <ChipScenarioPanel
+              scenarios={toScenarioViews(
+                transferAdvice.scenarios,
+                squadState.owned.map((o) => o.elementId),
+                eliteLookup
+              )}
+              initialChip={initialChip ?? "wildcard"}
+              wildcardProfile={wildcardProfile}
+              candidates={scenarioCandidates}
+            />
+          </Section>
         <Section
           id="shadow"
           title="Shadow Team"
@@ -1283,7 +1338,9 @@ export default async function Home({
           />
         </Section>
 
-        <TierHeading label="Perceber" note="como correu, e o que o modelo aprendeu com isso" />
+        </>)}
+        {view === "analisar" && (<>
+          <TierHeading label="Perceber" note="como correu, e o que o modelo aprendeu com isso" />
         {/* ================= 2. revisão da jornada ================= */}
         <Section
           id="revisao"
@@ -2063,14 +2120,16 @@ export default async function Home({
             vermelho lá em cima a mandar olhar para aqui. Pôr a canalização à
             frente do jogo foi exatamente a crítica que ele fez, e tinha
             razão. */}
-        <TierHeading label="Ferramentas e sistema" note="ligações e diagnóstico — só interessa quando algo falha" />
+        </>)}
+        {view === "sistema" && (<>
+          <TierHeading label="Ferramentas e sistema" note="ligações e diagnóstico — só interessa quando algo falha" />
         {/* ================= 5. a minha equipa ================= */}
         <Section
           id="minha-equipa"
           title="A Minha Equipa na FPL"
           eyebrow="Ligado ao teu Team ID"
         >
-          <MyTeamPanel scored={shadowPlayers} eventId={picksEvent} isPreseason={isPreseason} />
+          <MyTeamPanel scored={shadowPlayers} eventId={picksEvent} isPreseason={isPreseason} activeTeamId={teamId} />
         </Section>
 
         <Section id="sistema" title="Saúde do sistema">
@@ -2079,6 +2138,7 @@ export default async function Home({
             cronSecretConfigured={(process.env.CRON_SECRET ?? "").trim().length > 0}
           />
         </Section>
+        </>)}
       </main>
 
       <footer className="mx-auto max-w-6xl px-4 py-8 text-xs text-text-muted md:px-6">

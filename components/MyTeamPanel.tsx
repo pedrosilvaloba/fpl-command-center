@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { ScoredPlayer, TransferSuggestion } from "@/lib/recommend";
 import { suggestTransfers } from "@/lib/recommend";
 import { DEFAULT_TEAM_ID } from "@/lib/constants";
@@ -102,15 +103,18 @@ export default function MyTeamPanel({
   scored,
   eventId,
   isPreseason = false,
+  activeTeamId,
 }: {
   scored: ScoredPlayer[];
   eventId: number;
+  activeTeamId: number;
   /** True before the season's first deadline. FPL cannot serve a saved
    * squad for ANY gameweek at that point, so a failed picks fetch is the
    * expected state rather than a fault to blame on the user. */
   isPreseason?: boolean;
 }) {
-  const [teamId, setTeamId] = useState<string | null>(null);
+  const router = useRouter();
+  const [teamId, setTeamId] = useState<string | null>(String(activeTeamId));
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -118,21 +122,33 @@ export default function MyTeamPanel({
   const [picks, setPicks] = useState<PicksResponse | null>(null);
 
   useEffect(() => {
-    // Reading localStorage on mount to sync in a saved Team ID from a
-    // previous visit — an external-system read, not derived render state,
-    // so this legitimately belongs in an effect despite the lint rule
-    // below being tuned for the (much more common) anti-pattern of
-    // deriving state from props/state that could just be computed inline.
-    // Falls back to DEFAULT_TEAM_ID (this manager's own ID, baked into
-    // this personal deployment) rather than showing an empty form.
-    try {
-      const saved = window.localStorage.getItem(STORAGE_KEY);
+    const explicit = new URLSearchParams(window.location.search).has("team");
+    if (explicit) {
+      try {
+        window.localStorage.setItem(STORAGE_KEY, String(activeTeamId));
+        document.cookie = "fpl_team_id=" + encodeURIComponent(activeTeamId) + "; Path=/; Max-Age=31536000; SameSite=Lax";
+      } catch {}
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setTeamId(saved ?? DEFAULT_TEAM_ID);
-    } catch {
-      setTeamId(DEFAULT_TEAM_ID);
+      setTeamId(String(activeTeamId));
+      return;
     }
-  }, []);
+    // Old browser preference only changes the authoritative server state
+    // by navigating to a URL the planner, simulator and league all share.
+    try {
+      // The server already used this cookie; a previous localStorage value
+      // must never silently override it on the next visit.
+      if (document.cookie.split("; ").some((x) => x.startsWith("fpl_team_id="))) {
+        window.localStorage.setItem(STORAGE_KEY, String(activeTeamId));
+        return;
+      }
+      const saved = window.localStorage.getItem(STORAGE_KEY);
+      if (saved && /^[1-9]\\d{0,8}$/.test(saved) && Number(saved) !== activeTeamId) {
+        const p = new URLSearchParams(window.location.search);
+        p.set("team", saved);
+        router.replace("/?" + p.toString(), { scroll: false });
+      }
+    } catch {}
+  }, [activeTeamId, router]);
 
   useEffect(() => {
     if (!teamId) return;
@@ -215,22 +231,30 @@ export default function MyTeamPanel({
     }
     try {
       window.localStorage.setItem(STORAGE_KEY, id);
+      document.cookie = "fpl_team_id=" + encodeURIComponent(id) + "; Path=/; Max-Age=31536000; SameSite=Lax";
     } catch {
       // ignore — still set in-memory below so it works for this visit
     }
     setTeamId(id);
+    const params = new URLSearchParams(window.location.search);
+    params.set("team", id);
+    router.replace("/?" + params.toString(), { scroll: false });
   }
 
   function forget() {
     try {
       window.localStorage.removeItem(STORAGE_KEY);
+      document.cookie = "fpl_team_id=" + DEFAULT_TEAM_ID + "; Path=/; Max-Age=31536000; SameSite=Lax";
     } catch {
       // ignore
     }
-    setTeamId(null);
+    setTeamId(DEFAULT_TEAM_ID);
     setEntry(null);
     setPicks(null);
     setInput("");
+    const params = new URLSearchParams(window.location.search);
+    params.set("team", DEFAULT_TEAM_ID);
+    router.replace("/?" + params.toString(), { scroll: false });
   }
 
   if (!teamId) {
@@ -271,6 +295,10 @@ export default function MyTeamPanel({
 
   return (
     <div className="flex flex-col gap-5">
+      <p className="text-xs text-text-muted">
+        Equipa ativa em toda a aplicação: <strong className="text-text">#{activeTeamId}</strong>.
+        A equipa escolhida aqui determina também o planeador, os chips e a simulação da liga.
+      </p>
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           {entry && (

@@ -40,6 +40,10 @@ export interface AdviceRecord {
   chip: string | null;
   captainSource: string;
   predictedXi: number;
+  /** Automatically captured prediction, NOT a confirmed user instruction. */
+  captureSource?: "automatic";
+  teamId?: number;
+  modelVersion?: string;
   /** Baseline: do not transfer, but choose the strongest XI/captain from
    * the existing squad. Recorded BEFORE the deadline, not reconstructed. */
   holdBaseline?: {
@@ -211,8 +215,17 @@ export async function recordAdvice(rec: AdviceRecord, deadlineIso: string | null
   if (!redis || !deadlineIso) return;
   if (Date.now() >= Date.parse(deadlineIso)) return;
   try {
-    await redis.set(ADVICE_KEY(rec.event), rec);
-    await redis.sadd(DECISION_INDEX_KEY, String(rec.event));
+    // One immutable pre-deadline forecast per event. Old versions used SET
+    // unconditionally: any public visit could change the apparent advice
+    // AFTER someone had looked at it. Store a first-seen forecast instead.
+    // It is not a record of a user's explicit FPL action.
+    const stored = {
+      ...rec,
+      captureSource: "automatic" as const,
+      modelVersion: rec.modelVersion ?? "2026-10-25-decision-v2",
+    };
+    const wrote = await redis.set(ADVICE_KEY(rec.event), stored, { nx: true });
+    if (wrote === "OK") await redis.sadd(DECISION_INDEX_KEY, String(rec.event));
   } catch {
     /* o registo é acessório; uma falha nunca deve partir a página */
   }

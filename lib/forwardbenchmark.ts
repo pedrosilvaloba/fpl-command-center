@@ -36,6 +36,8 @@ export interface ForwardSnapshot {
   capturedAt: string;
   deadlineIso: string;
   players: ForwardPlayer[];
+  /** A manager can captain only their own players. Empty/absent = unavailable. */
+  ownedIds?: number[];
 }
 
 export interface ForwardMetric {
@@ -65,6 +67,9 @@ export interface ForwardResult {
     fpl: ForwardCaptain | null;
   };
   notes: string[];
+  /** Complete preselected universe, including risky/non-playing players. */
+  fullCohort?: { model: ForwardMetric; ppg: ForwardMetric; fpl: ForwardMetric };
+  availabilityBands?: { label: string; model: ForwardMetric; ppg: ForwardMetric; fpl: ForwardMetric }[];
 }
 
 export interface ForwardHistory {
@@ -84,7 +89,8 @@ export function buildForwardSnapshot(
   elements: FplElement[],
   event: number,
   deadlineIso: string,
-  now = Date.now()
+  now = Date.now(),
+  ownedIds: number[] = []
 ): ForwardSnapshot | null {
   const deadline = Date.parse(deadlineIso);
   if (!Number.isFinite(deadline) || now >= deadline || !Number.isInteger(event) || event < 1) return null;
@@ -111,7 +117,7 @@ export function buildForwardSnapshot(
   }
   if (!players.length) return null;
   return {
-    version: 1, event, capturedAt: new Date(now).toISOString(), deadlineIso, players,
+    version: 1, event, capturedAt: new Date(now).toISOString(), deadlineIso, players, ownedIds,
   };
 }
 
@@ -167,19 +173,40 @@ export function scoreForwardSnapshot(
     .map((p) => ({ predicted: p[k] as number, actual: points.get(p.id)! }));
 
   const captain = (k: "model" | "ppg" | "fpl"): ForwardCaptain | null => {
+    const owned = new Set(snapshot.ownedIds ?? []);
     const possible = eligible.filter((p) =>
-      p.playProbability >= 0.8 && p.expectedMinutes >= 60 && p[k] !== null
+      owned.has(p.id) && p.playProbability >= 0.8 &&
+      p.expectedMinutes >= 60 && p[k] !== null
     );
     possible.sort((a, b) => (b[k] as number) - (a[k] as number) || a.id - b.id);
     const chosen = possible[0];
     return chosen ? { id: chosen.id, name: chosen.name, points: points.get(chosen.id)! } : null;
   };
 
+  const bandMetric = (group: ForwardPlayer[], k: "model" | "ppg" | "fpl") =>
+    metric(group.filter((p) => p[k] !== null && points.has(p.id))
+      .map((p) => ({ predicted: p[k] as number, actual: points.get(p.id)! })));
+  const all = snapshot.players.filter((p) => points.has(p.id));
+  const fullCohort = {
+    model: bandMetric(all, "model"), ppg: bandMetric(all, "ppg"), fpl: bandMetric(all, "fpl"),
+  };
+  const availabilityBands = [
+    { label: "Risco elevado (<50%)", players: all.filter((p) => p.playProbability < .5) },
+    { label: "Risco médio (50–79%)", players: all.filter((p) => p.playProbability >= .5 && p.playProbability < .8) },
+    { label: "Provável (≥80%)", players: all.filter((p) => p.playProbability >= .8) },
+  ].map((b) => ({
+    label: b.label,
+    model: bandMetric(b.players, "model"),
+    ppg: bandMetric(b.players, "ppg"),
+    fpl: bandMetric(b.players, "fpl"),
+  }));
   return {
     event: snapshot.event,
     capturedAt: snapshot.capturedAt,
     settledAt,
     eligible: eligible.length,
+    fullCohort,
+    availabilityBands,
     model: metric(rows("model")),
     ppg: metric(rows("ppg")),
     fpl: metric(rows("fpl")),
@@ -188,7 +215,8 @@ export function scoreForwardSnapshot(
       "Previsões e referências arquivadas antes do deadline; sem dados futuros.",
       "Coorte fixa: probabilidade de jogar >=70%, >=45 minutos esperados; zeros reais incluídos.",
       "Amostra filtrada antes dos jogos, não pelos jogadores que pontuaram.",
-      "A comparação de capitania não inclui chips nem o orçamento do plantel e não prova vantagem de transferências.",
+      "Os candidatos a capitão pertencem ao plantel que estava arquivado; sem plantel não existe benchmark de capitão.",
+      "A comparação de capitania não inclui chips nem prova vantagem de transferências.",
     ],
   };
 }
@@ -197,12 +225,13 @@ export async function saveForwardSnapshot(
   scored: ScoredPlayer[],
   elements: FplElement[],
   event: number,
-  deadlineIso: string
+  deadlineIso: string,
+  ownedIds: number[] = []
 ): Promise<void> {
   const redis = getRedis();
   if (!redis) return;
   const now = Date.now();
-  const snapshot = buildForwardSnapshot(scored, elements, event, deadlineIso, now);
+  const snapshot = buildForwardSnapshot(scored, elements, event, deadlineIso, now, ownedIds);
   if (!snapshot) return;
   try {
     const existing = await redis.get<ForwardSnapshot>(snapshotKey(event));
