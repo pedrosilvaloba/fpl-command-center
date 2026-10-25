@@ -1,0 +1,30 @@
+name: Temporary dependency audit
+on:
+  push:
+    branches: [feature/command-center-major-upgrade-20261025]
+    paths:
+      - .github/workflows/security-audit-temporary.yml
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit
+      - name: List vulnerability names and compatible fixes, not credentials
+        run: |
+          npm audit --json > /tmp/audit.json || true
+          node - <<'NODE'
+          const fs = require('fs');
+          const a = JSON.parse(fs.readFileSync('/tmp/audit.json','utf8'));
+          for (const [name,v] of Object.entries(a.vulnerabilities||{})) {
+            console.log(JSON.stringify({name,severity:v.severity,range:v.range,
+              fixAvailable:v.fixAvailable,via:v.via.map(x=>typeof x==='string'?x:{title:x.title,url:x.url,range:x.range})}));
+          }
+          NODE
