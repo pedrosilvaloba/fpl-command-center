@@ -12,7 +12,7 @@ export function multiPeriodCacheKey(
   state:SquadState, forecasts:PeriodForecast[], horizon:number, beamWidth:number
 ):string{
   const h=createHash("sha256");
-  h.update("multi:v2:"+horizon+":"+beamWidth+";");
+  h.update("multi:v3:"+horizon+":"+beamWidth+";rev:"+(process.env.VERCEL_GIT_COMMIT_SHA?.slice(0,12)??"local")+";");
   h.update("bank:"+state.bankM+";ft:"+state.freeTransfers+";");
   state.owned.slice().sort((a,b)=>a.elementId-b.elementId).forEach(o=>
     h.update([o.elementId,o.sellingPriceM].join(":")+";")
