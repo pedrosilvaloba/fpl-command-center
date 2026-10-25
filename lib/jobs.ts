@@ -21,6 +21,7 @@ import { getRedis } from "./kv";
 import { recordOutcomesForFinishedEvents } from "./accuracy";
 import { settleStrategies } from "./strategylearning";
 import { settleForwardSnapshots } from "./forwardbenchmark";
+import { settleMinuteBenchmarks } from "./minutebenchmark";
 import {
   LAST_SEASON_KEY,
   ratesFromHistoryPast,
@@ -661,6 +662,7 @@ export async function runDecisionsJob(
     recordOutcomesForFinishedEvents(finishedEvents),
     settleStrategies(finishedEvents),
     settleForwardSnapshots(finishedEvents),
+    settleMinuteBenchmarks(finishedEvents),
   ]);
   const trackingFailures = trackingResults.filter((r) => r.status === "rejected").length;
   if (trackingFailures) console.warn("fpl-tracking-partial", { trackingFailures });
