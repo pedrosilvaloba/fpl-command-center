@@ -52,6 +52,7 @@ import ChipPlanPanel from "@/components/ChipPlanPanel";
 import AutomationPanel from "@/components/AutomationPanel";
 import { getJobHealth, mergeResearchHealth } from "@/lib/joblog";
 import { readOfficialScout } from "@/lib/officialscout";
+import { readExternalResearch } from "@/lib/externalresearch";
 import { BACKTEST_CACHE_KEY } from "@/lib/jobs";
 import { getRedis } from "@/lib/kv";
 import { normalizeBacktestResult } from "@/lib/backtest";
@@ -360,40 +361,17 @@ export default async function Home({
   const oddsProblem = oddsResult.status === "ok" ? null : oddsResult.message;
   const storageConfigured = isStorageConfigured();
   const lastResearchRun = await getLastResearchRun();
-  const officialScout = await readOfficialScout();
-  // The research layer runs weekly. Anything past nine days means a run was
-  // missed, not that the schedule is merely between passes.
-  const researchAgeDays = lastResearchRun
-    // eslint-disable-next-line react-hooks/purity
-    ? Math.floor((Date.now() - new Date(lastResearchRun.at).getTime()) / 86_400_000)
-    : null;
-  // ═══ v1.59 — O ALARME MEDIA A COISA ERRADA ═══
-  //
-  // Media há quantos dias a tarefa CORREU. A tarefa de sexta correu a 4 de
-  // setembro, foi marcada como bem-sucedida, e entregou ZERO notas. O
-  // alarme leu "correu há 4 dias" e calou-se, enquanto as notas mais
-  // recentes eram de 21 de agosto — três jornadas antes.
-  //
-  // Uma tarefa que corre todas as semanas e não entrega nada parece
-  // saudável para sempre. É a mesma falha que esta app já corrigiu duas
-  // vezes noutros sítios: perda indistinguível de vazio, desta vez um nível
-  // acima — não na submissão, mas na saúde da submissão.
-  //
-  // A medida certa é EM JORNADAS, e é sobre a ENTREGA: para que jornada foi
-  // escrita a nota mais recente? Se a resposta for três jornadas atrás, a
-  // camada está parada, tenha a tarefa corrido ontem ou não.
-  const newestNoteEvent = allInsights.reduce<number | null>((best, n) => {
-    const e = n.writtenForEvent;
-    return typeof e === "number" && (best === null || e > best) ? e : best;
-  }, null);
-  const researchGapEvents =
-    newestNoteEvent === null ? null : fromEvent - newestNoteEvent;
-  const researchStale =
-    storageConfigured &&
-    (researchAgeDays === null ||
-      researchAgeDays > 9 ||
-      researchGapEvents === null ||
-      researchGapEvents >= 2);
+  const [officialScout, externalResearch] = await Promise.all([
+    readOfficialScout(), readExternalResearch(),
+  ]);
+  // Two separate products: RSS research is automated, while legacy expert
+  // notes are historical observations. Never call a fresh RSS headline a
+  // fresh analyst conclusion.
+  const researchStale = storageConfigured &&
+    (!externalResearch ||
+      !Number.isFinite(Date.parse(externalResearch.at)) ||
+      Date.now() - Date.parse(externalResearch.at) > 48 * 60 * 60 * 1000 ||
+      externalResearch.sourcesChecked.length === 0);
 
   // Health of every unattended job, not just the research one. The backtest
   // and the calibration sweep now run on Vercel's own scheduler inside this
@@ -1205,6 +1183,9 @@ export default async function Home({
             knowing; it is not worth putting between a manager and the reason
             he opened the page. */}
         {(oddsProblem ||
+          researchStale ||
+          brokenJobs.length > 0 ||
+          emptyJobs.length > 0 ||
           !storageConfigured ||
           neutralNextEvent > 0 ||
           neutralLater > 0 ||
@@ -1216,29 +1197,11 @@ export default async function Home({
                 ela o modelo apoia-se numa leitura bastante mais fraca.
               </AlertStrip>
             )}
-            {/* THE RESEARCH LAYER, LOUDLY.
-                A tactical layer that stops running is invisible: the notes it
-                left behind stay on screen, still look current, and keep moving
-                the model until they expire two weeks later. That silence is
-                exactly what made the owner distrust the layer. It now says so
-                itself, at the top, in the same place as a missing data source
-                — because that is what it is. */}
             {researchStale && (
-              <AlertStrip
-                tone="danger"
-                title={
-                  !lastResearchRun
-                    ? "Investigação tática nunca correu."
-                    : researchGapEvents === null
-                      ? `A investigação correu há ${researchAgeDays} dias mas NÃO HÁ nenhuma nota entregue.`
-                      : researchGapEvents >= 2
-                        ? `A investigação corre, mas não entrega: a nota mais recente foi escrita para a GW${newestNoteEvent} e estamos na GW${fromEvent}.`
-                        : `Investigação tática parada há ${researchAgeDays} dias.`
-                }
-              >
-                {activeInsights.length > 0
-                  ? `Há ${activeInsights.length} nota${activeInsights.length === 1 ? "" : "s"} ativa${activeInsights.length === 1 ? "" : "s"} a mexer no modelo, mas nenhuma é recente. As tarefas semanais correm à quinta e à sexta — se isto persistir, falharam.`
-                  : "Nenhuma nota ativa e nenhuma execução recente. A camada qualitativa do modelo está inerte."}
+              <AlertStrip tone="warn" title="Investigação editorial automática sem recolha recente.">
+                A monitorização independente dos títulos da Fantasy Football Scout e BBC
+                ainda não concluiu uma recolha válida nas últimas 48 horas.
+                O modelo não aplica ajustes qualitativos inventados enquanto faltarem fontes.
               </AlertStrip>
             )}
             {/* The computational jobs, separately — the research strip above
@@ -1523,6 +1486,43 @@ export default async function Home({
           </div>
 
           <div className="mt-6 border-t border-border pt-5">
+            <SubHeading>Investigação editorial externa — fontes verificáveis</SubHeading>
+            {!externalResearch ? (
+              <p className="mb-5 text-sm text-text-muted">
+                A primeira recolha programada ainda não foi registada.
+                Este serviço é independente de sessões externas do Claude e não precisa de pagamentos por IA.
+              </p>
+            ) : (
+              <div className="mb-6 space-y-2">
+                <p className="text-xs text-text-muted">
+                  Última recolha: {new Date(externalResearch.at).toLocaleString("pt-PT", {
+                    timeZone: "Europe/Lisbon", dateStyle: "short", timeStyle: "short",
+                  })}
+                  {" · "}{externalResearch.sourcesChecked.length} fonte(s) consultada(s)
+                  {" · "}{externalResearch.findings.length} artigo(s) relevantes
+                </p>
+                {externalResearch.sourcesFailed.length > 0 && (
+                  <p className="text-xs text-warn">
+                    Fontes indisponíveis: {externalResearch.sourcesFailed.map((x) => x.source).join(", ")}.
+                    Não são consideradas como verificadas.
+                  </p>
+                )}
+                {externalResearch.findings.slice(0, 12).map((item) => (
+                  <p key={item.url} className="text-[13px] leading-relaxed">
+                    <a href={item.url} target="_blank" rel="noopener noreferrer"
+                       className="font-medium text-text underline underline-offset-2">{item.title}</a>
+                    <span className="ml-2 text-xs text-text-muted">
+                      {item.source} · {new Date(item.publishedAt).toLocaleDateString("pt-PT")}
+                    </span>
+                  </p>
+                ))}
+                <p className="text-xs text-text-muted">
+                  Artigos e títulos provenientes dos feeds RSS. Isto não é uma avaliação
+                  automatizada de jogadores nem certificação das conclusões de um especialista.
+                  Não aplica multiplicadores às previsões do modelo.
+                </p>
+              </div>
+            )}
             <SubHeading>Observação automática — dados oficiais da FPL</SubHeading>
             {!officialScout ? (
               <p className="text-sm text-text-muted">Ainda não foi registada uma recolha automática. A tarefa diária é independente da investigação qualitativa externa.</p>
@@ -1534,10 +1534,10 @@ export default async function Home({
                     <strong className="text-text">{item.name} ({item.club})</strong> — {item.detail} <a href={item.officialUrl} target="_blank" rel="noopener noreferrer" className="underline">FPL</a>
                   </p>
                 ))}
-                <p className="text-xs text-warn">Esta recolha é factual; não corresponde a pesquisa de especialistas nem altera automaticamente os pontos esperados. A investigação tática externa mantém o seu estado independente.</p>
+                <p className="text-xs text-warn">Esta recolha é factual e não altera automaticamente os pontos esperados. A investigação editorial externa encontra-se acima, com proveniência independente.</p>
               </div>
             )}
-            <SubHeading>Notas táticas ativas</SubHeading>
+            <SubHeading>Notas qualitativas antigas — ainda aplicáveis após triagem</SubHeading>
             {!storageConfigured ? (
               <p className="text-sm text-danger">
                 Sem Upstash Redis não existe onde guardar o que a investigação
