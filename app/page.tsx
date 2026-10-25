@@ -370,6 +370,7 @@ export default async function Home({
   const researchStale = storageConfigured &&
     (!externalResearch ||
       !Number.isFinite(Date.parse(externalResearch.at)) ||
+      // eslint-disable-next-line react-hooks/purity
       Date.now() - Date.parse(externalResearch.at) > 48 * 60 * 60 * 1000 ||
       externalResearch.sourcesChecked.length === 0);
 
