@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { ChipKey, MoveKind, WildcardProfile } from "@/lib/transferplan";
 import {
   parseChipQuestion,
+  scenarioHref,
   type IncludeCandidate,
   type ScenarioPlayerView,
   type ScenarioView,
@@ -289,15 +290,9 @@ export default function ChipScenarioPanel({
   const nameOf = (id: number) => candidates.find((c) => c.id === id)?.name ?? `#${id}`;
 
   const go = (nextKept: number[], nextIncluded: number[], profile: WildcardProfile = wildcardProfile) => {
-    const params = new URLSearchParams();
-    params.set("chip", active ?? "wildcard");
-    params.set("perfil", profile);
-    if (nextKept.length > 0) params.set("manter", nextKept.join(","));
-    // Sempre explícito: "nenhum" desliga as inclusões por omissão (o núcleo
-    // da elite) — sem isto, tirar o último incluído voltava a pô-los.
-    params.set("incluir", nextIncluded.length > 0 ? nextIncluded.join(",") : "nenhum");
+    const href = scenarioHref(window.location.search, active ?? "wildcard", nextKept, nextIncluded, profile);
     startTransition(() => {
-      router.replace(`/?${params.toString()}#cenarios`, { scroll: false });
+      router.replace(href, { scroll: false });
     });
   };
   const addInclude = () => {
@@ -372,7 +367,7 @@ export default function ChipScenarioPanel({
             disabled={pending}
             onClick={() =>
               startTransition(() =>
-                router.replace(`/?chip=${active ?? "wildcard"}&perfil=${wildcardProfile}&incluir=nenhum#cenarios`, { scroll: false })
+                router.replace(scenarioHref(window.location.search, active ?? "wildcard", [], [], wildcardProfile), { scroll: false })
               )
             }
             className="text-[12px] text-text-muted underline hover:text-text"
