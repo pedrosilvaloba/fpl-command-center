@@ -762,13 +762,14 @@ export default async function Home({
   const upcomingEvent = bootstrap.events.find(
     (e) => !e.finished && new Date(e.deadline_time).getTime() > nowMs
   );
+  const mayCaptureBenchmarks = process.env.VERCEL_ENV === "production";
   await Promise.all([
-    upcomingEvent && !experimentalRecentMinutes ? snapshotIfMissing(scored, upcomingEvent.id) : Promise.resolve(),
-    upcomingEvent && !experimentalRecentMinutes && teamId === Number(DEFAULT_TEAM_ID)
+    upcomingEvent && mayCaptureBenchmarks && !experimentalRecentMinutes ? snapshotIfMissing(scored, upcomingEvent.id) : Promise.resolve(),
+    upcomingEvent && mayCaptureBenchmarks && !experimentalRecentMinutes && teamId === Number(DEFAULT_TEAM_ID)
       ? saveForwardSnapshot(scored, bootstrap.elements, upcomingEvent.id, upcomingEvent.deadline_time,
           squadState.available ? squadState.owned.map((p) => p.elementId) : [])
       : Promise.resolve(),
-    upcomingEvent && !experimentalRecentMinutes ? snapshotStrategies(rawScored, upcomingEvent.id) : Promise.resolve(),
+    upcomingEvent && mayCaptureBenchmarks && !experimentalRecentMinutes ? snapshotStrategies(rawScored, upcomingEvent.id) : Promise.resolve(),
     // Per-player predictions for the gameweek review. Written BEFORE the
     // deadline because reconstructing them afterwards is not a test the
     // model could ever fail.
@@ -776,7 +777,7 @@ export default async function Home({
     // Pedro viu e sobre os quais decidiu. Guardar os números crus enquanto
     // o ecrã mostra os corrigidos faria a camada de aprendizagem medir uma
     // previsão que ninguém usou — e corrigir duas vezes o mesmo desvio.
-    upcomingEvent && !experimentalRecentMinutes ? snapshotPredictions(scored, upcomingEvent.id) : Promise.resolve(),
+    upcomingEvent && mayCaptureBenchmarks && !experimentalRecentMinutes ? snapshotPredictions(scored, upcomingEvent.id) : Promise.resolve(),
   ]);
   const [accuracyHistory, forwardHistory] = await Promise.all([
     getAccuracyHistory(),
@@ -908,7 +909,7 @@ export default async function Home({
       (s) => s.advised && (s.chip === "wildcard" || s.chip === "freehit")
     )?.chip ??
     null;
-  if (upcomingEvent && !experimentalRecentMinutes && squadState.available && teamId === Number(DEFAULT_TEAM_ID)) {
+  if (upcomingEvent && mayCaptureBenchmarks && !experimentalRecentMinutes && squadState.available && teamId === Number(DEFAULT_TEAM_ID)) {
     await recordAdvice(
       {
         event: upcomingEvent.id,
