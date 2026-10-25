@@ -49,7 +49,7 @@ export default function MinuteABPanel({history}:{history:MinuteABHistory}){
           <> Intervalo indicativo de 95%: {verdict.confidenceLow.toFixed(2)}
           {" a "}{verdict.confidenceHigh.toFixed(2)}.</>}
       </p>
-    </div>}
+    </div>
     <div className="overflow-x-auto">
       <table className="min-w-[460px] w-full text-left text-xs">
         <thead><tr className="text-text-muted">
