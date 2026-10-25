@@ -82,7 +82,39 @@ export default function ForwardBenchmarkPanel({ history }: { history: ForwardHis
     {history.pending.length > 0 && <span> Aguardam resultados: GW{history.pending.join(", GW")}.</span>}
   </div>;
 
+  const rows = history.rows.filter(r=>
+    r.captain.model && r.captain.ppg && r.captain.fpl &&
+    r.model.n >= 10 && r.ppg.n >= 10 && r.fpl.n >= 10
+  );
+  const sum=(key:"model"|"ppg"|"fpl")=>
+    rows.reduce((v,r)=>v+(r.captain[key]?.points??0),0);
+  const delta=(reference:"ppg"|"fpl")=>rows.map(r=>
+    (r.captain.model?.points??0)-(r.captain[reference]?.points??0)
+  );
+  const total=(values:number[])=>values.reduce((a,b)=>a+b,0);
   return <div className="space-y-3">
+    <div className="rounded-lg border border-border p-3 space-y-2">
+      <h4 className="font-semibold text-sm">Capitania: comparação em condições equivalentes</h4>
+      {rows.length ? <>
+        <div className="grid grid-cols-3 gap-2">
+          <div><p className="text-xs text-text-muted">Modelo próprio</p><p className="font-mono text-lg font-semibold">{sum("model")}</p></div>
+          <div><p className="text-xs text-text-muted">Capitão por PPG</p><p className="font-mono text-lg font-semibold">{sum("ppg")}</p></div>
+          <div><p className="text-xs text-text-muted">Capitão por FPL</p><p className="font-mono text-lg font-semibold">{sum("fpl")}</p></div>
+        </div>
+        <p className="text-xs text-text-muted">
+          {rows.length} jornadas com os três capitães elegíveis arquivados antes do deadline.
+          Diferença modelo − PPG: {total(delta("ppg"))>=0?"+":""}{total(delta("ppg"))} pontos
+          {" · "}modelo − FPL: {total(delta("fpl"))>=0?"+":""}{total(delta("fpl"))} pontos.
+          São pontos-base do capitão, sem multiplicador, chips nem mudança de plantel.
+        </p>
+        {rows.length<10&&<p className="text-xs text-warn">
+          Ainda não existe amostra de jornadas suficiente para declarar vantagem de capitania.
+        </p>}
+      </>:<p className="text-sm text-text-muted">
+        Ainda não existem jornadas com um plantel pré-deadline e os três métodos comparáveis.
+        Não é possível concluir que o capitão do modelo tenha tido melhor desempenho.
+      </p>}
+    </div>
     <p className="text-xs leading-relaxed text-text-muted">
       Dados guardados antes dos jogos; jogadores incluídos pela probabilidade e minutos esperados ANTES da jornada.
       MAE mais baixo e Spearman mais alto são preferíveis. São métricas de previsões,
