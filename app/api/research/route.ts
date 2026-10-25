@@ -16,7 +16,7 @@ export async function GET() {
   // repeat traffic if a cron stops or a visitor refreshes repeatedly.
   // Does not take user-controlled URLs or notes and never alters FPL advice.
   const redis = getRedis();
-  let autoRecovered: string[] = [];
+  const autoRecovered: string[] = [];
   if (redis && (stale(external?.at) || stale(official?.at))) {
     try {
       const acquired = await redis.set("fpl:research:readthrough-lock:v1", "1", { nx: true, ex: 900 });
