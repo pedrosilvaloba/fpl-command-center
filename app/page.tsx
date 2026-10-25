@@ -82,6 +82,7 @@ import DeferralPanel from "@/components/DeferralPanel";
 import ChipScenarioPanel from "@/components/ChipScenarioPanel";
 import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, parseWildcardProfile } from "@/lib/chipscenarioview";
 import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
+import TeamPreferenceSync from "@/components/TeamPreferenceSync";
 import { cookies } from "next/headers";
 import DecisionLabPanel from "@/components/DecisionLabPanel";
 import { toDecisionAlternatives } from "@/lib/decisionrobustness";
@@ -959,6 +960,7 @@ export default async function Home({
 
   return (
     <div className="min-h-full bg-bg text-text">
+      <TeamPreferenceSync activeTeamId={teamId} explicit={sp.team !== undefined} />
       {/* ================= top bar =================
           One compact row plus the navigation. The previous header was 370px
           tall — a third of a laptop viewport — of which 150px was four
