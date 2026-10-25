@@ -83,16 +83,22 @@ export function planMultipleGameweeks(
     free: Math.min(5,Math.max(0,state.freeTransfers)), total:0,
     steps:[], ownedSellT:initialSell,
   };
+  const weekScoreCache = new Map<string,{points:number;xi:number[];captain:number|null}>();
   const scoreWeek = (node: Node, k: number) => {
+    const scoreKey = String(k) + ":" + node.ids.slice().sort((a,b)=>a-b).join(",");
+    const previous = weekScoreCache.get(scoreKey);
+    if(previous) return previous;
     const byId = maps[k];
     const squad = node.ids.map(id => byId.get(id) ?? maps[0].get(id)!)
       .map(p => p && byId.has(p.element.id) ? p : ({...p, score:0, expectedPointsNext:0} as ScoredPlayer));
     const xi = pickBestXI(squad.map(p => ({...p,score:p.expectedPointsNext})));
     const captain = [...xi].sort((a,b) => b.expectedPointsNext-a.expectedPointsNext)[0] ?? null;
-    return {
+    const value = {
       points: xi.reduce((s,p) => s + p.expectedPointsNext,0)+(captain?.expectedPointsNext??0),
       xi:xi.map(p=>p.element.id), captain:captain?.element.id??null,
     };
+    weekScoreCache.set(scoreKey,value);
+    return value;
   };
   const baseScores = weeks.map((w,i) => scoreWeek(initial,i).points);
   const baselinePoints = round1(baseScores.reduce((a,b)=>a+b,0));
