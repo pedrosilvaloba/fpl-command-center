@@ -85,6 +85,8 @@ import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, par
 import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
 import { planMultipleGameweeks } from "@/lib/multiperiod";
 import { readRecentMinutes } from "@/lib/recentminutes";
+import { captureMinuteBenchmark, getMinuteABHistory } from "@/lib/minutebenchmark";
+import MinuteABPanel from "@/components/MinuteABPanel";
 import MultiPeriodPanel from "@/components/MultiPeriodPanel";
 import AdviserPanel from "@/components/AdviserPanel";
 import DecisionConfirmationPanel from "@/components/DecisionConfirmationPanel";
@@ -769,6 +771,9 @@ export default async function Home({
       ? saveForwardSnapshot(scored, bootstrap.elements, upcomingEvent.id, upcomingEvent.deadline_time,
           squadState.available ? squadState.owned.map((p) => p.elementId) : [])
       : Promise.resolve(),
+    upcomingEvent && mayCaptureBenchmarks && !experimentalRecentMinutes && teamId === Number(DEFAULT_TEAM_ID)
+      ? captureMinuteBenchmark(scored, recentMinutes, upcomingEvent.id, upcomingEvent.deadline_time)
+      : Promise.resolve(),
     upcomingEvent && mayCaptureBenchmarks && !experimentalRecentMinutes ? snapshotStrategies(rawScored, upcomingEvent.id) : Promise.resolve(),
     // Per-player predictions for the gameweek review. Written BEFORE the
     // deadline because reconstructing them afterwards is not a test the
@@ -779,9 +784,10 @@ export default async function Home({
     // previsão que ninguém usou — e corrigir duas vezes o mesmo desvio.
     upcomingEvent && mayCaptureBenchmarks && !experimentalRecentMinutes ? snapshotPredictions(scored, upcomingEvent.id) : Promise.resolve(),
   ]);
-  const [accuracyHistory, forwardHistory] = await Promise.all([
+  const [accuracyHistory, forwardHistory, minuteABHistory] = await Promise.all([
     getAccuracyHistory(),
     getForwardHistory(),
+    getMinuteABHistory(),
   ]);
   // O backtest corria todas as noites e o resultado morria no Redis: nada
   // na app o lia. A pergunta "posso confiar neste modelo?" tinha resposta
@@ -1433,6 +1439,10 @@ export default async function Home({
           <div className="mt-6 border-t border-border pt-5">
             <SubHeading>Benchmark prospetivo — modelo vs. FPL vs. média</SubHeading>
             <ForwardBenchmarkPanel history={forwardHistory} />
+            <div className="mt-5 border-t border-border pt-4">
+              <SubHeading>Experiência A/B — minutos da época vs. minutos recentes</SubHeading>
+              <MinuteABPanel history={minuteABHistory} />
+            </div>
           </div>
 
           <div className="mt-6 border-t border-border pt-5">
