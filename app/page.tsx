@@ -82,6 +82,8 @@ import DeferralPanel from "@/components/DeferralPanel";
 import ChipScenarioPanel from "@/components/ChipScenarioPanel";
 import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, parseWildcardProfile } from "@/lib/chipscenarioview";
 import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
+import DecisionLabPanel from "@/components/DecisionLabPanel";
+import { toDecisionAlternatives } from "@/lib/decisionrobustness";
 import ElitePanel from "@/components/ElitePanel";
 import type { ScoredPlayer } from "@/lib/recommend";
 import DecisionLogPanel from "@/components/DecisionLogPanel";
@@ -1281,6 +1283,10 @@ export default async function Home({
           <TierHeading label="Simular" note="compara alternativas sem executar transferências" />
           <Section id="laboratorio" title="Laboratório de decisões"
             eyebrow="Explorar cenários" intro="O conselho principal não limita as tuas opções. Todos os cenários usam o plantel ativo e o orçamento estimado, sem alterar a FPL.">
+            <div className="mb-6 border-b border-border pb-5">
+              <SubHeading>Transferências — comparar e desafiar</SubHeading>
+              <DecisionLabPanel alternatives={toDecisionAlternatives(transferAdvice.plans, transferAdvice.recommended)} />
+            </div>
             <ChipScenarioPanel
               scenarios={toScenarioViews(
                 transferAdvice.scenarios,
