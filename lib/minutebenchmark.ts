@@ -190,3 +190,40 @@ export async function getMinuteABHistory():Promise<MinuteABHistory>{
     };
   }catch{return{configured:true,results:[],pending:[]};}
 }
+
+export interface MinuteABVerdict {
+  status:"insufficient"|"improved"|"not-better"|"worse";
+  events:number;
+  meanGainMinutes:number;
+  confidenceLow:number|null;
+  confidenceHigh:number|null;
+  meanGainBrier:number;
+  rationale:string;
+}
+/** Conservative, event-level paired evaluation. Observations within one GW
+ * share injuries/fixtures and are not independent replicates. Avoid making
+ * 600 player rows appear like hundreds of independent gameweeks. */
+export function judgeMinuteExperiment(results:MinuteABResult[]):MinuteABVerdict {
+  const sample=results.filter(r=>r.base.n>=10 && r.recent.n>=10);
+  const minutes=sample.map(r=>r.base.minutesMAE-r.recent.minutesMAE);
+  const briers=sample.map(r=>r.base.appearanceBrier-r.recent.appearanceBrier);
+  const avg=(v:number[])=>v.length?v.reduce((s,x)=>s+x,0)/v.length:0;
+  const mean=avg(minutes),brier=avg(briers);
+  const variance=minutes.length>1
+    ? minutes.reduce((s,x)=>s+(x-mean)**2,0)/(minutes.length-1):0;
+  const stderr=minutes.length>1?Math.sqrt(variance/minutes.length):null;
+  const low=stderr===null?null:mean-1.96*stderr;
+  const high=stderr===null?null:mean+1.96*stderr;
+  const n=sample.length;
+  const status:MinuteABVerdict["status"]=n<12?"insufficient":
+    high!==null && high<0?"worse":
+    low!==null && low>0 && brier>0?"improved":"not-better";
+  const rationale=n<12?
+    "É necessário observar pelo menos 12 jornadas prospetivas distintas para avaliar estabilidade.":
+    status==="improved"?
+      "Os minutos recentes superaram o modelo base em MAE e Brier de participação, com intervalo da média por jornada acima de zero. Rever também o efeito em pontos e transferências antes de promover.":
+      status==="worse"?
+        "Os minutos recentes aumentaram o erro médio em comparação emparelhada.":
+        "Não existe evidência suficientemente clara de ganho estável; manter o modelo base.";
+  return{status,events:n,meanGainMinutes:mean,confidenceLow:low,confidenceHigh:high,meanGainBrier:brier,rationale};
+}
