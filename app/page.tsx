@@ -83,7 +83,7 @@ import DeferralPanel from "@/components/DeferralPanel";
 import ChipScenarioPanel from "@/components/ChipScenarioPanel";
 import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, parseWildcardProfile } from "@/lib/chipscenarioview";
 import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
-import { planMultipleGameweeks } from "@/lib/multiperiod";
+import { cachedMultiPeriod } from "@/lib/multiperiodcache";
 import { readRecentMinutes } from "@/lib/recentminutes";
 import { captureMinuteBenchmark, getMinuteABHistory } from "@/lib/minutebenchmark";
 import MinuteABPanel from "@/components/MinuteABPanel";
@@ -729,7 +729,7 @@ export default async function Home({
       ]
     : [];
   const multiPeriod = periodForecasts.length > 0
-    ? planMultipleGameweeks(squadState, periodForecasts, {
+    ? await cachedMultiPeriod(squadState, periodForecasts, {
         horizon: periodForecasts.length, beamWidth: 10,
       })
     : null;
