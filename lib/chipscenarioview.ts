@@ -205,3 +205,22 @@ export function parseWildcardProfile(raw: string | string[] | undefined): Wildca
   const value = Array.isArray(raw) ? raw[0] : raw;
   return value === "imediato" || value === "continuidade" ? value : "equilibrado";
 }
+
+/** Preserve authoritative Team ID and simulator screen while a client-side
+ * Wildcard interaction changes the selected profile or forced players. */
+export function scenarioHref(
+  search: string,
+  chip: ChipKey,
+  kept: number[],
+  included: number[],
+  profile: "equilibrado" | "imediato" | "continuidade"
+): string {
+  const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+  params.set("view", "simular");
+  params.set("chip", chip);
+  params.set("perfil", profile);
+  if (kept.length) params.set("manter", kept.join(","));
+  else params.delete("manter");
+  params.set("incluir", included.length ? included.join(",") : "nenhum");
+  return "/?" + params.toString() + "#cenarios";
+}
