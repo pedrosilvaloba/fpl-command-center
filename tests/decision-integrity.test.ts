@@ -6,6 +6,7 @@ import { planSensitivity, toDecisionAlternatives } from "../lib/decisionrobustne
 import { scenarioHref } from "../lib/chipscenarioview";
 import type { TransferPlan } from "../lib/transferplan";
 import { planMultipleGameweeks } from "../lib/multiperiod";
+import { answerAdviser, type AdviserContext } from "../lib/adviser";
 import { makeElement, makeTeam } from "./fixtures";
 import type { ScoredPlayer } from "../lib/recommend";
 import { EMPTY_SQUAD_STATE } from "../lib/squadstate";
@@ -163,3 +164,19 @@ assert.equal(failed.available,false);
 const unsequenced = planMultipleGameweeks(multiState,[weeks[0],weeks[2]]);
 assert.equal(unsequenced.available,false);
 console.log("multiperiod planning tests passed");
+
+const adviceContext:AdviserContext={
+  event:9,teamName:"Synthetic",
+  recommendation:"Guardar FT",recommendedMoveNames:[],gainVsHold:0,requiredEdge:2,
+  captain:"Haaland",captainEp:7.2,
+  wildcardAvailable:true,wildcardAdvised:false,wildcardGain:3,wildcardRequired:20,
+  waiting:"Aguardar para fazer duas trocas",horizon:3,multiGain:5,
+  multiMoves:[{event:9,description:"Não transferir"},{event:10,description:"Trocar um médio"}],
+  riskPlayers:["Jogador A"]
+};
+assert.ok(answerAdviser("Porquê este capitão?",adviceContext).answer.includes("Haaland"));
+assert.ok(answerAdviser("E se jogar wildcard?",adviceContext).answer.includes("guardá-lo"));
+assert.ok(answerAdviser("Que jogadas fazes nas próximas jornadas?",adviceContext).evidence.includes("GW10"));
+assert.ok(answerAdviser("Quem tem risco de minutos?",adviceContext).answer.includes("Jogador A"));
+assert.ok(answerAdviser("Notícia completamente fora da lista de perguntas?",adviceContext).subject.includes("fora"));
+console.log("contextual consultant tests passed");
