@@ -78,6 +78,9 @@ export interface ScoredPlayer {
    * contingency is (1 - pPlay of the captain).
    */
   pPlay: number;
+  /** Pre-deadline starter and 60-minute probabilities (unverified until GW settles). */
+  pStart?: number;
+  pPlay60?: number;
   /**
    * Minutos esperados na próxima jornada, já descontada a disponibilidade
    * publicada pela FPL.
@@ -624,6 +627,8 @@ export function buildScoredPlayers(
       projectedOwnershipPct: momentum.get(el.id)?.projectedOwnershipPct ?? ownershipPct,
       ownershipTrendPct: momentum.get(el.id)?.trendPct ?? 0,
       pPlay: Math.round(Math.min(1, Math.max(0, mins.pAppear * availability)) * 1000) / 1000,
+      pStart: Math.round(Math.min(1, Math.max(0, mins.pStart * availability)) * 1000) / 1000,
+      pPlay60: Math.round(Math.min(1, Math.max(0, mins.pPlay60 * availability)) * 1000) / 1000,
       expectedMinutesNext:
         Math.round(Math.max(0, mins.expectedMinutes * availability) * 10) / 10,
       breakdown: modelWindowPoints,

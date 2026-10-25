@@ -7,7 +7,7 @@
     "build": "npm run test && next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx tests/regression.test.ts && tsx tests/forwardbenchmark.test.ts && tsx tests/decision-integrity.test.ts",
+    "test": "tsx tests/regression.test.ts && tsx tests/forwardbenchmark.test.ts && tsx tests/decision-integrity.test.ts && tsx tests/minutebenchmark.test.ts",
     "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",
     "verify": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json && eslint && npm run test && tsx tests/perf.test.ts",
     "perf": "tsx tests/perf.test.ts",

@@ -6,6 +6,7 @@ import { planSensitivity, toDecisionAlternatives } from "../lib/decisionrobustne
 import { scenarioHref } from "../lib/chipscenarioview";
 import type { TransferPlan } from "../lib/transferplan";
 import { planMultipleGameweeks } from "../lib/multiperiod";
+import { multiPeriodCacheKey } from "../lib/multiperiodcache";
 import { answerAdviser, type AdviserContext } from "../lib/adviser";
 import { makeElement, makeTeam } from "./fixtures";
 import type { ScoredPlayer } from "../lib/recommend";
@@ -163,6 +164,16 @@ const failed = planMultipleGameweeks({...multiState,available:false},weeks);
 assert.equal(failed.available,false);
 const unsequenced = planMultipleGameweeks(multiState,[weeks[0],weeks[2]]);
 assert.equal(unsequenced.available,false);
+const keyBefore=multiPeriodCacheKey(multiState,weeks,3,10);
+const changedWeeks=weeks.map((w,i)=>i!==0?w:{...w,players:w.players.map(p=>
+  p.element.id===500?{...p,expectedPointsNext:p.expectedPointsNext+1}:p)});
+const keyAfter=multiPeriodCacheKey(multiState,changedWeeks,3,10);
+assert.notEqual(keyBefore,keyAfter,"A changed player projection must invalidate the cached plan");
+assert.notEqual(keyBefore,multiPeriodCacheKey({...multiState,bankM:.1},weeks,3,10),
+  "Budget changes must invalidate all cached plans");
+assert.notEqual(keyBefore,multiPeriodCacheKey(multiState,weeks,5,10),
+  "The planning horizon must be reflected in cache identity");
+console.log("multiperiod cache invalidation tests passed");
 console.log("multiperiod planning tests passed");
 
 const adviceContext:AdviserContext={
