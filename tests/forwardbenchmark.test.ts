@@ -22,7 +22,7 @@ const scored = elements.map((p, i) => ({
   pPlay: i === 0 ? 0.15 : 0.95,
   expectedMinutesNext: i === 0 ? 15 : 85,
 } as ScoredPlayer));
-const snapshot = buildForwardSnapshot(scored, elements, 8, deadline, before);
+const snapshot = buildForwardSnapshot(scored, elements, 8, deadline, before, elements.map((p) => p.id));
 assert.ok(snapshot);
 assert.equal(snapshot.event, 8);
 assert.equal(snapshot.players.length, 20);
@@ -36,6 +36,11 @@ assert.equal(result.eligible, 19, "select only on a priori play probabilities; p
 assert.equal(result.model.n, 19);
 assert.equal(result.ppg.n, 19);
 assert.equal(result.fpl.n, 19);
+assert.equal(result.fullCohort?.model.n, 20, "Include risky players and actual zeros in full universe");
+assert.equal(result.availabilityBands?.reduce((n, b) => n + b.model.n, 0), 20);
+const withoutSquad = buildForwardSnapshot(scored, elements, 8, deadline, before)!;
+assert.equal(scoreForwardSnapshot(withoutSquad, points).captain.model, null, "Do not pick impossible captain from global pool");
+assert.ok(result.captain.model && snapshot.ownedIds?.includes(result.captain.model.id));
 assert.ok(Number.isFinite(result.model.mae));
 assert.ok(Number.isFinite(result.model.spearman));
 assert.equal(result.captain.model?.name.startsWith("P"), true);
