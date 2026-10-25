@@ -81,6 +81,7 @@ import CaptainShortlist from "@/components/CaptainShortlist";
 import DeferralPanel from "@/components/DeferralPanel";
 import ChipScenarioPanel from "@/components/ChipScenarioPanel";
 import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, parseWildcardProfile } from "@/lib/chipscenarioview";
+import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
 import ElitePanel from "@/components/ElitePanel";
 import type { ScoredPlayer } from "@/lib/recommend";
 import DecisionLogPanel from "@/components/DecisionLogPanel";
@@ -323,6 +324,8 @@ export default async function Home({
   // Cenários de chip: `?chip=wildcard&manter=123,456` — jogadores que o
   // gestor fixou. Só mexe nos cenários; o resto da página não muda.
   const sp = await searchParams;
+  const teamId = parseTeamId(sp.team);
+  const view = parseAppView(sp.view);
   const keepIds = parseKeepParam(sp.manter);
   const includeIds = parseKeepParam(sp.incluir);
   const wildcardProfile = parseWildcardProfile(sp.perfil);
@@ -566,7 +569,7 @@ export default async function Home({
     leagueError =
       "Não foi possível carregar esta liga — se for uma liga privada pode precisar de sessão autenticada.";
   }
-  const myTeamIdNum = Number(DEFAULT_TEAM_ID);
+  const myTeamIdNum = teamId;
   const myLeagueRank =
     leagueResults.find((r) => r.entry === myTeamIdNum)?.rank ?? null;
 
@@ -977,18 +980,21 @@ export default async function Home({
             )}
           </div>
 
-          <nav className="pill-scroller -mx-1 px-1 pb-2">
-            {NAV.map((group) => (
-              <span key={group.tier} className="flex items-center gap-1.5">
-                <span className="eyebrow shrink-0 text-text-muted opacity-70">
-                  {group.tier}
-                </span>
-                {group.items.map(([href, label]) => (
-                  <a key={href} href={`#${href}`} className="pill">
-                    {label}
-                  </a>
-                ))}
-              </span>
+          <nav aria-label="Áreas da aplicação" className="grid grid-cols-4 gap-1.5 pb-2">
+            {([
+              ["hoje", "Hoje"], ["simular", "Simular"],
+              ["analisar", "Analisar"], ["sistema", "Sistema"],
+            ] as const).map(([id, label]) => (
+              <a
+                key={id}
+                href={viewHref(teamId, id)}
+                aria-current={view === id ? "page" : undefined}
+                className={`rounded-lg px-2 py-2.5 text-center text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+                  view === id ? "bg-accent text-accent-contrast" : "bg-white/5 text-white/70 hover:bg-white/10"
+                }`}
+              >
+                {label}
+              </a>
             ))}
           </nav>
         </div>
@@ -999,6 +1005,7 @@ export default async function Home({
         {/* Antes de tudo o resto: se os dados não são de agora, isso é a
             primeira coisa a saber, não uma nota de rodapé no fim. */}
         <StaleDataBanner health={getFplDataHealth()} now={nowMs} />
+        {view === "hoje" && (<>
         <TierHeading label="Decidir" note="o que fazer antes do deadline" />
         {/* ================= 1. o que fazer ================= */}
         <Section
@@ -1015,7 +1022,7 @@ export default async function Home({
             </p>
             {squadState.available && squadState.chips.some((chip) => chip.name === "wildcard" && chip.remaining > 0) && (
               <a
-                href={`/?chip=wildcard&perfil=${wildcardProfile}#cenarios`}
+                href={viewHref(teamId, "simular", { chip: "wildcard", perfil: wildcardProfile }) + "#cenarios"}
                 className="mt-2 inline-block text-[13px] font-semibold text-accent underline underline-offset-2"
               >
                 Quero explorar alternativas de Wildcard, mesmo que o modelo aconselhe guardar →
@@ -1159,19 +1166,10 @@ export default async function Home({
             </div>
           )}
 
-          <div className="mt-6 border-t border-border pt-5">
-            <SubHeading>E se eu usasse um chip esta semana?</SubHeading>
-            <ChipScenarioPanel
-              scenarios={toScenarioViews(
-                transferAdvice.scenarios,
-                squadState.owned.map((o) => o.elementId),
-                eliteLookup
-              )}
-              initialChip={initialChip}
-              wildcardProfile={wildcardProfile}
-              candidates={scenarioCandidates}
-            />
-          </div>
+          <a className="mt-4 inline-block rounded-lg border border-accent px-4 py-3 text-sm font-semibold text-accent"
+             href={viewHref(teamId, "simular", { chip: "wildcard", perfil: wildcardProfile }) + "#cenarios"}>
+            Abrir laboratório de cenários — Wildcard, Free Hit e transferências
+          </a>
         </Section>
 
         {/* ================= alerts =================
@@ -1272,6 +1270,23 @@ export default async function Home({
         )}
 
         {/* ================= 6. shadow team ================= */}
+
+        </>)}
+        {view === "simular" && (<>
+          <TierHeading label="Simular" note="compara alternativas sem executar transferências" />
+          <Section id="laboratorio" title="Laboratório de decisões"
+            eyebrow="Explorar cenários" intro="O conselho principal não limita as tuas opções. Todos os cenários usam o plantel ativo e o orçamento estimado, sem alterar a FPL.">
+            <ChipScenarioPanel
+              scenarios={toScenarioViews(
+                transferAdvice.scenarios,
+                squadState.owned.map((o) => o.elementId),
+                eliteLookup
+              )}
+              initialChip={initialChip ?? "wildcard"}
+              wildcardProfile={wildcardProfile}
+              candidates={scenarioCandidates}
+            />
+          </Section>
         <Section
           id="shadow"
           title="Shadow Team"
@@ -1283,7 +1298,9 @@ export default async function Home({
           />
         </Section>
 
-        <TierHeading label="Perceber" note="como correu, e o que o modelo aprendeu com isso" />
+        </>)}
+        {view === "analisar" && (<>
+          <TierHeading label="Perceber" note="como correu, e o que o modelo aprendeu com isso" />
         {/* ================= 2. revisão da jornada ================= */}
         <Section
           id="revisao"
@@ -2063,14 +2080,16 @@ export default async function Home({
             vermelho lá em cima a mandar olhar para aqui. Pôr a canalização à
             frente do jogo foi exatamente a crítica que ele fez, e tinha
             razão. */}
-        <TierHeading label="Ferramentas e sistema" note="ligações e diagnóstico — só interessa quando algo falha" />
+        </>)}
+        {view === "sistema" && (<>
+          <TierHeading label="Ferramentas e sistema" note="ligações e diagnóstico — só interessa quando algo falha" />
         {/* ================= 5. a minha equipa ================= */}
         <Section
           id="minha-equipa"
           title="A Minha Equipa na FPL"
           eyebrow="Ligado ao teu Team ID"
         >
-          <MyTeamPanel scored={shadowPlayers} eventId={picksEvent} isPreseason={isPreseason} />
+          <MyTeamPanel scored={shadowPlayers} eventId={picksEvent} isPreseason={isPreseason} activeTeamId={teamId} />
         </Section>
 
         <Section id="sistema" title="Saúde do sistema">
@@ -2079,6 +2098,7 @@ export default async function Home({
             cronSecretConfigured={(process.env.CRON_SECRET ?? "").trim().length > 0}
           />
         </Section>
+        </>)}
       </main>
 
       <footer className="mx-auto max-w-6xl px-4 py-8 text-xs text-text-muted md:px-6">
