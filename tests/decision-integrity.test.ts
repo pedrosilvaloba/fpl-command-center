@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { simulateLineup, type SimulatedPlayer } from "../lib/lineupsettlement";
 import { settleOutcome, type AdviceRecord } from "../lib/decisions";
+import { parseAppView, parseTeamId, viewHref } from "../lib/appcontext";
+import { planSensitivity, toDecisionAlternatives } from "../lib/decisionrobustness";
+import type { TransferPlan } from "../lib/transferplan";
 
 const pos: Record<number, 1 | 2 | 3 | 4> = {
   1: 1, 2: 1,
@@ -74,3 +77,35 @@ assert.equal(compare.settlement?.holdPoints, normal.points + 4);
 assert.equal(compare.settlement?.gainVsHold, -4, "hit cost must reduce realised gain vs holding");
 assert.ok(compare.settlement?.officialDelta !== undefined);
 console.log("decision integrity tests passed");
+
+assert.equal(parseTeamId("2107193"), 2107193);
+assert.equal(parseTeamId(["321", "123"]), 321);
+assert.equal(parseTeamId("1%20or%201"), 2107193);
+assert.equal(parseTeamId(""), 2107193);
+assert.equal(parseTeamId("99999999999999999"), 2107193);
+assert.equal(parseAppView("simular"), "simular");
+assert.equal(parseAppView("unknown"), "hoje");
+assert.equal(viewHref(321, "simular", { chip: "wildcard" }), "/?team=321&view=simular&chip=wildcard");
+
+const dummyMove = (id: number, incoming: number) => ({
+  out: { element: { id, web_name: "Out" }, expectedPoints: 12 },
+  in: { element: { id: id + 100, web_name: "In" }, expectedPoints: incoming },
+});
+const hypothetical = {
+  key: "gratuitas", label: "Duas trocas", netGainVsHold: 5,
+  requiredEdge: 3, confidence: .6, hitCost: 0,
+  moves: [dummyMove(12, 20), dummyMove(13, 15)],
+} as unknown as TransferPlan;
+const noTransfer = {
+  key: "manter", label: "Manter", netGainVsHold: 0,
+  requiredEdge: 0, confidence: 1, hitCost: 0, moves: [],
+} as unknown as TransferPlan;
+assert.equal(planSensitivity(hypothetical, 20).stressedGain, -2,
+  "5 points of edge disappear with 7 points lost on incoming forecasts");
+assert.equal(planSensitivity(hypothetical, 20).reversesDecision, true);
+assert.equal(planSensitivity(hypothetical, -5).downsidePct, 0);
+assert.equal(planSensitivity(hypothetical, 80).downsidePct, 50);
+const variants = toDecisionAlternatives([noTransfer, hypothetical, hypothetical], hypothetical);
+assert.equal(variants.length, 2, "duplicate solver paths should not clutter UX");
+assert.equal(variants[1].recommended, true);
+assert.equal(variants[1].transfers.length, 2);
