@@ -970,6 +970,9 @@ export default async function Home({
               <h1 className="truncate font-display text-lg font-bold tracking-tight md:text-xl">
                 {nextEvent?.name ?? "Gameweek"}
               </h1>
+              <span className="hidden truncate text-[11px] text-white/45 md:inline" title="Equipa usada por todas as recomendações">
+                Team #{teamId}
+              </span>
             </div>
             {nextEvent?.deadline_time && (
               <div className="flex shrink-0 items-center gap-3">
@@ -1024,6 +1027,15 @@ export default async function Home({
           title="O Que Fazer Antes do Deadline"
           primary
         >
+          <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-surface-2 px-3 py-2 text-xs text-text-muted">
+            <span>Equipa <strong className="text-text">#{teamId}</strong></span>
+            <span>·</span>
+            <span>FPL: {getFplDataHealth().degraded ? "dados de reserva" : "feed disponível"}</span>
+            <span>·</span>
+            <span>Odds: {oddsActive ? "disponíveis" : "sem mercado"}</span>
+            <span>·</span>
+            <span>Projeção: experimental, sem vantagem comprovada</span>
+          </div>
           {/* The headline answer, then the handful of facts that qualify it —
               as inline pairs, not as bordered tiles. */}
           <div className="mb-4 border-b border-border pb-4">
