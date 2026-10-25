@@ -28,6 +28,7 @@ import {
 import type { ManagerInsight } from "./managerinsights";
 import type { ModelParams } from "./modelparams";
 import { computeMomentum, momentumReason } from "./momentum";
+import { recentMinutesVariant, type RecentMinutesSnapshot } from "./recentminutes";
 
 export interface ScoredPlayer {
   element: FplElement;
@@ -244,7 +245,9 @@ export function buildScoredPlayers(
   modelParams?: Partial<ModelParams>,
   /** Taxas da época passada (lib/lastseason.ts). Ausente = só o prior
    * por preço, exatamente como antes. */
-  lastSeason?: import("./lastseason").LastSeasonTable
+  lastSeason?: import("./lastseason").LastSeasonTable,
+  /** Optional experimental minutes recency mode, disabled by default. */
+  recentMinutes?: RecentMinutesSnapshot | null
 ): ScoredPlayer[] {
   // O prior de encolhimento, estimado uma vez a partir deste bootstrap.
   // Ver lib/rateprior.ts: o alvo do encolhimento era ZERO, o que afirma
@@ -335,12 +338,15 @@ export function buildScoredPlayers(
     const reasons: string[] = [];
 
     // ---- expected points -------------------------------------------------
-    const mins = computeMinutesModel(
+    const seasonMinutes = computeMinutesModel(
       el,
       teamFinishedFixtures.get(team.id) ?? 0,
       isPreseason,
       modelParams
     );
+    const mins = recentMinutes && recentMinutes.events.length >= 4
+      ? recentMinutesVariant(seasonMinutes, recentMinutes.players[String(el.id)])
+      : seasonMinutes;
     const rates = computePlayerRates(el, modelParams, ratePriors);
     const minutesPlayed = Number.isFinite(el.minutes) ? el.minutes : 0;
 
