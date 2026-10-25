@@ -7,7 +7,8 @@ import { scenarioHref } from "../lib/chipscenarioview";
 import type { TransferPlan } from "../lib/transferplan";
 import { planMultipleGameweeks } from "../lib/multiperiod";
 import { multiPeriodCacheKey } from "../lib/multiperiodcache";
-import { answerAdviser, type AdviserContext } from "../lib/adviser";
+import { answerAdviser, buildChatGPTContext, type AdviserContext } from "../lib/adviser";
+import { buildJournal, parseJournal, type LocalDecision } from "../lib/localjournal";
 import { makeElement, makeTeam } from "./fixtures";
 import type { ScoredPlayer } from "../lib/recommend";
 import { EMPTY_SQUAD_STATE } from "../lib/squadstate";
@@ -191,3 +192,21 @@ assert.ok(answerAdviser("Que jogadas fazes nas próximas jornadas?",adviceContex
 assert.ok(answerAdviser("Quem tem risco de minutos?",adviceContext).answer.includes("Jogador A"));
 assert.ok(answerAdviser("Notícia completamente fora da lista de perguntas?",adviceContext).subject.includes("fora"));
 console.log("contextual consultant tests passed");
+
+const exportedPrompt=buildChatGPTContext(adviceContext);
+assert.ok(exportedPrompt.includes("Contexto JSON"));
+assert.ok(exportedPrompt.includes("Haaland"));
+assert.ok(exportedPrompt.includes("não fiáveis"));
+assert.ok(exportedPrompt.length<10000,"Do not copy megabytes of app state into an external chat");
+const selfReport:LocalDecision={
+  event:9,teamId:321,at:"2026-10-25T17:00:00.000Z",
+  action:"followed",note:"Sem chip",
+  captain:"Test",transfers:["A → B"],source:"self-reported-local",
+};
+const journal=buildJournal(321,[selfReport,{...selfReport,teamId:999},null]);
+assert.equal(journal.entries.length,1);
+assert.equal(parseJournal(JSON.stringify(journal),321).entries[0].event,9);
+assert.throws(()=>parseJournal(JSON.stringify(journal),999),/outra equipa/);
+assert.throws(()=>parseJournal("not json",321));
+assert.throws(()=>parseJournal(JSON.stringify({...journal,entries:[{...selfReport,event:48}]}),321));
+console.log("portable local journal and ChatGPT handoff tests passed");
