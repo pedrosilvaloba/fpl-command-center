@@ -221,6 +221,11 @@ export function scoreForwardSnapshot(
   };
 }
 
+export function hasCompleteOwnedSquad(ids: number[]): boolean {
+  return ids.length === 15 && new Set(ids).size === 15 &&
+    ids.every(id => Number.isSafeInteger(id) && id > 0);
+}
+
 export async function saveForwardSnapshot(
   scored: ScoredPlayer[],
   elements: FplElement[],
@@ -236,7 +241,7 @@ export async function saveForwardSnapshot(
   try {
     // Refuse to contaminate prospective evidence with a partial team:
     // no legal owner captain benchmark is possible without all 15 picks.
-    if (snapshot.ownedIds?.length !== 15 || new Set(snapshot.ownedIds).size !== 15) return;
+    if (!hasCompleteOwnedSquad(snapshot.ownedIds ?? [])) return;
     if (Date.now() >= Date.parse(deadlineIso)) return;
     const wrote = await redis.set(snapshotKey(event), snapshot, { nx: true });
     if (wrote === "OK") await redis.sadd(INDEX_KEY, String(event));
