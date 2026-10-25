@@ -86,6 +86,7 @@ import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
 import { planMultipleGameweeks } from "@/lib/multiperiod";
 import { readRecentMinutes } from "@/lib/recentminutes";
 import MultiPeriodPanel from "@/components/MultiPeriodPanel";
+import AdviserPanel from "@/components/AdviserPanel";
 import TeamPreferenceSync from "@/components/TeamPreferenceSync";
 import { cookies } from "next/headers";
 import DecisionLabPanel from "@/components/DecisionLabPanel";
@@ -1297,6 +1298,31 @@ export default async function Home({
           <TierHeading label="Simular" note="compara alternativas sem executar transferências" />
           <Section id="laboratorio" title="Laboratório de decisões"
             eyebrow="Explorar cenários" intro="O conselho principal não limita as tuas opções. Todos os cenários usam o plantel ativo e o orçamento estimado, sem alterar a FPL.">
+            <div className="mb-6 border-b border-border pb-5">
+              <AdviserPanel context={{
+                event:fromEvent,
+                teamName:squadState.entryName ?? "Equipa "+teamId,
+                recommendation:decisionHeadline,
+                recommendedMoveNames:(transferAdvice.recommended?.moves??[])
+                  .map(m=>m.out.element.web_name+" → "+m.in.element.web_name),
+                gainVsHold:transferAdvice.recommended?.netGainVsHold??0,
+                requiredEdge:transferAdvice.recommended?.requiredEdge??0,
+                captain:decisionCaptain?.element.web_name??null,
+                captainEp:decisionCaptain?.expectedPointsNext??null,
+                wildcardAvailable:transferAdvice.wildcard?.available??false,
+                wildcardAdvised:transferAdvice.wildcard?.advise??false,
+                wildcardGain:transferAdvice.wildcard?.gain??null,
+                wildcardRequired:transferAdvice.wildcard?.requiredGain??null,
+                waiting:deferral?.headline??null,
+                horizon:multiPeriod?.horizon??requestedHorizon,
+                multiGain:multiPeriod?.available?multiPeriod.gainVsHold:null,
+                multiMoves:multiPeriod?.steps.map(step=>({
+                  event:step.event,
+                  description:step.moves.map(m=>m.outName+" → "+m.inName).join("; ")||"Não transferir",
+                }))??[],
+                riskPlayers:ownedScored.filter(p=>p.pPlay<.7).map(p=>p.element.web_name),
+              }} />
+            </div>
             <div className="mb-6 border-b border-border pb-5">
               <SubHeading>Transferências — comparar e desafiar</SubHeading>
               <DecisionLabPanel alternatives={toDecisionAlternatives(transferAdvice.plans, transferAdvice.recommended)} />
