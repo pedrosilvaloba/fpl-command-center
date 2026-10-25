@@ -5,6 +5,10 @@ import { parseAppView, parseTeamId, viewHref } from "../lib/appcontext";
 import { planSensitivity, toDecisionAlternatives } from "../lib/decisionrobustness";
 import { scenarioHref } from "../lib/chipscenarioview";
 import type { TransferPlan } from "../lib/transferplan";
+import { planMultipleGameweeks } from "../lib/multiperiod";
+import { makeElement, makeTeam } from "./fixtures";
+import type { ScoredPlayer } from "../lib/recommend";
+import { EMPTY_SQUAD_STATE } from "../lib/squadstate";
 
 const pos: Record<number, 1 | 2 | 3 | 4> = {
   1: 1, 2: 1,
@@ -120,3 +124,42 @@ assert.equal(params.get("incluir"), "13");
 assert.equal(params.get("perfil"), "continuidade");
 const cleared = new URL(scenarioHref("?team=321&manter=11", "wildcard", [], [], "equilibrado"), "https://example.test/");
 assert.equal(cleared.searchParams.has("manter"), false);
+
+const legalPositions = [1,1,2,2,2,2,2,3,3,3,3,3,4,4,4];
+const weeklyPool = legalPositions.map((pos,i) => {
+  const id=i+200;
+  return {
+    element: makeElement({id,web_name:"Base"+id,team:(i%8)+1,element_type:pos,now_cost:50,minutes:700,starts:7}),
+    team:makeTeam((i%8)+1),
+    priceM:5,expectedPointsNext:pos===4?2:3,expectedPoints:15,
+  } as ScoredPlayer);
+});
+weeklyPool.push({
+  element:makeElement({id:500,web_name:"Upgrade",team:12,element_type:4,now_cost:50}),
+  team:makeTeam(12),priceM:5,expectedPoints:35,expectedPointsNext:7,
+} as ScoredPlayer);
+const multiState = {
+  ...EMPTY_SQUAD_STATE, available:true, reason:null, bankM:0, totalBudgetM:75,
+  freeTransfers:1, owned:weeklyPool.slice(0,15).map(p=>({
+    elementId:p.element.id,priceM:5,sellingPriceM:5,
+    wasStarter:true,wasCaptain:false,wasViceCaptain:false,
+  })),
+};
+const weeks = [9,10,11].map(event=>({event,players:weeklyPool}));
+const path = planMultipleGameweeks(multiState,weeks,{horizon:3,beamWidth:10});
+assert.equal(path.available,true);
+assert.equal(path.steps.length,3);
+assert.ok(path.evaluated>3);
+assert.ok(path.plannedPoints>=path.baselinePoints);
+assert.ok(path.steps.flatMap(step=>step.moves).some(move=>move.into===500),
+  "strong forward should enter a legal multiperiod plan");
+for(const week of path.steps) {
+  assert.ok(week.bankAfterM>=0);
+  assert.ok(week.hitCost>=0 && week.hitCost%4===0);
+  assert.ok(week.freeAfter<=5);
+}
+const failed = planMultipleGameweeks({...multiState,available:false},weeks);
+assert.equal(failed.available,false);
+const unsequenced = planMultipleGameweeks(multiState,[weeks[0],weeks[2]]);
+assert.equal(unsequenced.available,false);
+console.log("multiperiod planning tests passed");
