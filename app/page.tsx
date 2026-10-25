@@ -87,6 +87,7 @@ import { planMultipleGameweeks } from "@/lib/multiperiod";
 import { readRecentMinutes } from "@/lib/recentminutes";
 import MultiPeriodPanel from "@/components/MultiPeriodPanel";
 import AdviserPanel from "@/components/AdviserPanel";
+import DecisionConfirmationPanel from "@/components/DecisionConfirmationPanel";
 import TeamPreferenceSync from "@/components/TeamPreferenceSync";
 import { cookies } from "next/headers";
 import DecisionLabPanel from "@/components/DecisionLabPanel";
@@ -1183,6 +1184,12 @@ export default async function Home({
               />
             }
           />
+
+          <DecisionConfirmationPanel event={fromEvent} teamId={teamId}
+            captain={decisionCaptain?.element.web_name ?? null}
+            moves={(transferAdvice.recommended?.moves ?? []).map(
+              m => m.out.element.web_name + " → " + m.in.element.web_name
+            )} />
 
           {/* "E se eu usasse o chip X esta semana?" — o cenário de cada chip
               é sempre calculado, mesmo quando o modelo não o aconselha. */}
