@@ -15,7 +15,7 @@ export interface JournalFile {
 export function isDecision(value:unknown,teamId:number):value is LocalDecision{
   if(!value || typeof value!=="object")return false;
   const r=value as Partial<LocalDecision>;
-  return Number.isInteger(r.event)&&r.event!>=1&&r.event!<=38 &&
+  return typeof r.event==="number"&&Number.isInteger(r.event)&&r.event>=1&&r.event<=38 &&
     r.teamId===teamId &&
     r.source==="self-reported-local" &&
     ["followed","different","no-action"].includes(r.action??"") &&
