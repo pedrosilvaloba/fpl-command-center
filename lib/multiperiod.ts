@@ -22,6 +22,8 @@ export interface MultiPeriodReport {
   baselinePoints: number;
   plannedPoints: number;
   gainVsHold: number;
+  /** Purely hypothetical downside if acquired players underperform by 20%. */
+  stressGainVsHold: number;
   steps: PeriodStep[];
   evaluated: number;
   beamWidth: number;
@@ -60,7 +62,7 @@ export function planMultipleGameweeks(
   const width = Math.min(20, Math.max(3, Math.floor(opts.beamWidth ?? 10)));
   const unavailable = (reason: string): MultiPeriodReport => ({
     available:false, reason, horizon, baselinePoints:0, plannedPoints:0,
-    gainVsHold:0, steps:[], evaluated:0, beamWidth:width, method:"bounded-beam-search",
+    gainVsHold:0, stressGainVsHold:0, steps:[], evaluated:0, beamWidth:width, method:"bounded-beam-search",
   });
   if (!state.available || state.owned.length !== 15) return unavailable("Sem os 15 jogadores da equipa real.");
   const weeks = forecasts.slice(0,horizon);
@@ -203,10 +205,20 @@ export function planMultipleGameweeks(
     if(!beam.length)return unavailable("O planeador não encontrou uma sequência legal.");
   }
   const best=beam.slice().sort((a,b)=>b.total-a.total)[0];
+  // Hypothetical forecast downside test for acquired assets, not calibrated
+  // uncertainty or a reason to force a transfer. An asset is at risk only
+  // while still present in the chosen path.
+  const acquired=new Set<number>();
+  let acquiredExposure=0;
+  best.steps.forEach((step,k)=>{
+    step.moves.forEach(m=>{ acquired.delete(m.out);acquired.add(m.into); });
+    for(const id of acquired) acquiredExposure+=maps[k].get(id)?.expectedPointsNext??0;
+  });
+  const stressGainVsHold=round1(best.total-baselinePoints-acquiredExposure*.20);
   return {
     available:true,reason:null,horizon:weeks.length,
     baselinePoints,plannedPoints:round1(best.total),
-    gainVsHold:round1(best.total-baselinePoints),
+    gainVsHold:round1(best.total-baselinePoints),stressGainVsHold,
     steps:best.steps,evaluated,beamWidth:width,method:"bounded-beam-search",
   };
 }
