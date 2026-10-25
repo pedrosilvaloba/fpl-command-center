@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { buildForwardSnapshot, scoreForwardSnapshot } from "../lib/forwardbenchmark";
+import { buildForwardSnapshot, scoreForwardSnapshot, hasCompleteOwnedSquad } from "../lib/forwardbenchmark";
 import { buildAccuracyPicks } from "../lib/accuracy";
 import { makeElement, makeTeam, makeEvent } from "./fixtures";
 import { buildScoutReport } from "../lib/officialscout";
@@ -139,3 +139,9 @@ const withoutStartFlags = recentMinutesVariant(baseMinutes,{
 });
 assert.equal(withoutStartFlags.pStart,baseMinutes.pStart,"Never fabricate starts from missing stats");
 console.log("recent minutes shadow tests passed");
+
+assert.equal(hasCompleteOwnedSquad(Array.from({length:15},(_,i)=>i+1)),true);
+assert.equal(hasCompleteOwnedSquad(Array.from({length:14},(_,i)=>i+1)),false);
+assert.equal(hasCompleteOwnedSquad(Array.from({length:15},(_,i)=>i===14?1:i+1)),false);
+assert.equal(hasCompleteOwnedSquad(Array.from({length:15},(_,i)=>i===14?-1:i+1)),false);
+console.log("immutable owner-cohort guards passed");

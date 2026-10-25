@@ -17,7 +17,7 @@ import { getRedis } from "./kv";
 const snapshotKey = (gw: number) => "fpl:forward:snapshot:" + gw;
 const resultKey = (gw: number) => "fpl:forward:result:" + gw;
 const INDEX_KEY = "fpl:forward:index:v1";
-const MIN_REFRESH_MS = 20 * 60 * 1000;
+// Predeadline experiment is immutable. A second page visit must never replace evidence.
 
 export interface ForwardPlayer {
   id: number;
@@ -221,6 +221,11 @@ export function scoreForwardSnapshot(
   };
 }
 
+export function hasCompleteOwnedSquad(ids: number[]): boolean {
+  return ids.length === 15 && new Set(ids).size === 15 &&
+    ids.every(id => Number.isSafeInteger(id) && id > 0);
+}
+
 export async function saveForwardSnapshot(
   scored: ScoredPlayer[],
   elements: FplElement[],
@@ -234,14 +239,12 @@ export async function saveForwardSnapshot(
   const snapshot = buildForwardSnapshot(scored, elements, event, deadlineIso, now, ownedIds);
   if (!snapshot) return;
   try {
-    const existing = await redis.get<ForwardSnapshot>(snapshotKey(event));
-    const last = existing ? Date.parse(existing.capturedAt) : 0;
-    if (Number.isFinite(last) && now - last < MIN_REFRESH_MS) return;
-    // Re-check deadline after Redis network operations: a slow write must not
-    // turn a pre-deadline benchmark into a hindsight benchmark.
+    // Refuse to contaminate prospective evidence with a partial team:
+    // no legal owner captain benchmark is possible without all 15 picks.
+    if (!hasCompleteOwnedSquad(snapshot.ownedIds ?? [])) return;
     if (Date.now() >= Date.parse(deadlineIso)) return;
-    await redis.set(snapshotKey(event), snapshot);
-    await redis.sadd(INDEX_KEY, String(event));
+    const wrote = await redis.set(snapshotKey(event), snapshot, { nx: true });
+    if (wrote === "OK") await redis.sadd(INDEX_KEY, String(event));
   } catch {
     // A tracking failure must not take down the decision page.
   }
