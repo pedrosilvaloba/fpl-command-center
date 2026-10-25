@@ -3,6 +3,7 @@ import { buildForwardSnapshot, scoreForwardSnapshot } from "../lib/forwardbenchm
 import { buildAccuracyPicks } from "../lib/accuracy";
 import { makeElement, makeTeam, makeEvent } from "./fixtures";
 import { buildScoutReport } from "../lib/officialscout";
+import { deriveRecentMinutes, recentMinutesVariant } from "../lib/recentminutes";
 import { parseEditorialFeed, buildEditorialReport } from "../lib/externalresearch";
 import type { ScoredPlayer } from "../lib/recommend";
 
@@ -116,3 +117,25 @@ assert.equal(editorial.findings.length, 1);
 assert.equal(editorial.sourcesChecked.length, 1);
 assert.equal(editorial.sourcesFailed.length, 1);
 assert.equal(editorial.mode, "editorial-feeds");
+
+const recentHistory = deriveRecentMinutes([
+  { event: 4, elements: [{ id: 8, stats: { minutes: 0, starts: 0 } }] },
+  { event: 5, elements: [{ id: 8, stats: { minutes: 5, starts: 0 } }] },
+  { event: 6, elements: [{ id: 8, stats: { minutes: 85, starts: 1 } }] },
+  { event: 7, elements: [{ id: 8, stats: { minutes: 90, starts: 1 } }] },
+  { event: 8, elements: [{ id: 8, stats: { minutes: 90, starts: 1 } }] },
+]);
+assert.deepEqual(recentHistory.events,[4,5,6,7,8]);
+const baseMinutes = {pStart:0.4,pAppear:0.55,pPlay60:0.3,expectedMinutes:35,avgMinutesPerStart:75,reasons:[]};
+const enhanced = recentMinutesVariant(baseMinutes,recentHistory.players["8"]);
+assert.ok(enhanced.pStart>baseMinutes.pStart && enhanced.pStart<1);
+assert.ok(enhanced.pAppear>baseMinutes.pAppear);
+assert.ok(enhanced.expectedMinutes>35 && enhanced.expectedMinutes<90);
+assert.ok(enhanced.pPlay60<=enhanced.pAppear);
+assert.deepEqual(recentMinutesVariant(baseMinutes,{minutes:[90,90],starts:[1,1]}),baseMinutes,
+  "Sparse snapshots cannot change a baseline");
+const withoutStartFlags = recentMinutesVariant(baseMinutes,{
+  minutes:[85,85,85,85],starts:[null,null,null,null]
+});
+assert.equal(withoutStartFlags.pStart,baseMinutes.pStart,"Never fabricate starts from missing stats");
+console.log("recent minutes shadow tests passed");
