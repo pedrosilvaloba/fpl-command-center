@@ -749,7 +749,10 @@ export default async function Home({
   );
   await Promise.all([
     upcomingEvent ? snapshotIfMissing(scored, upcomingEvent.id) : Promise.resolve(),
-    upcomingEvent ? saveForwardSnapshot(scored, bootstrap.elements, upcomingEvent.id, upcomingEvent.deadline_time) : Promise.resolve(),
+    upcomingEvent && teamId === Number(DEFAULT_TEAM_ID)
+      ? saveForwardSnapshot(scored, bootstrap.elements, upcomingEvent.id, upcomingEvent.deadline_time,
+          squadState.available ? squadState.owned.map((p) => p.elementId) : [])
+      : Promise.resolve(),
     upcomingEvent ? snapshotStrategies(rawScored, upcomingEvent.id) : Promise.resolve(),
     // Per-player predictions for the gameweek review. Written BEFORE the
     // deadline because reconstructing them afterwards is not a test the
