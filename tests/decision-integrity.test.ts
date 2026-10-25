@@ -132,7 +132,7 @@ const weeklyPool = legalPositions.map((pos,i) => {
     element: makeElement({id,web_name:"Base"+id,team:(i%8)+1,element_type:pos,now_cost:50,minutes:700,starts:7}),
     team:makeTeam((i%8)+1),
     priceM:5,expectedPointsNext:pos===4?2:3,expectedPoints:15,
-  } as ScoredPlayer);
+  } as ScoredPlayer;
 });
 weeklyPool.push({
   element:makeElement({id:500,web_name:"Upgrade",team:12,element_type:4,now_cost:50}),
