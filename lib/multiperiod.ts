@@ -101,15 +101,14 @@ export function planMultipleGameweeks(
   for(let k=0;k<weeks.length;k++){
     const map = maps[k];
     const candidates = new Map<number,ScoredPlayer[]>();
+    const remainingValue = new Map<number,number>();
+    for(let t=k;t<weeks.length;t++) {
+      for(const [id,p] of maps[t])
+        remainingValue.set(id,(remainingValue.get(id)??0)+p.expectedPointsNext);
+    }
     for(const pos of [1,2,3,4]) {
       const pool = weeks[k].players.filter(p=>p.element.element_type===pos && p.element.status!=="u");
-      const weighted = pool.slice().sort((a,b)=>{
-        const v=(p:ScoredPlayer) => weeks.slice(k).reduce((s,w)=>{
-          const x=w.players.find(t=>t.element.id===p.element.id);
-          return s+(x?.expectedPointsNext??0);
-        },0);
-        return v(b)-v(a);
-      }).slice(0,7);
+      const weighted = pool.slice().sort((a,b)=>(remainingValue.get(b.element.id)??0)-(remainingValue.get(a.element.id)??0)).slice(0,7);
       const cheap = pool.slice().sort((a,b)=>a.priceM-b.priceM).slice(0,3);
       candidates.set(pos,[...new Map([...weighted,...cheap].map(p=>[p.element.id,p])).values()]);
     }
@@ -155,10 +154,8 @@ export function planMultipleGameweeks(
           const n=validMove(node,out,incoming);
           if(!n)continue;
           const v=scoreWeek(n,k).points-scoreWeek(node,k).points;
-          const future=weeks.slice(k+1).reduce((sum,w)=>{
-            const by=new Map(w.players.map(p=>[p.element.id,p]));
-            return sum+(by.get(incoming.element.id)?.expectedPointsNext??0)-(by.get(out)?.expectedPointsNext??0);
-          },0);
+          const future=(remainingValue.get(incoming.element.id)??0)-(remainingValue.get(out)??0)
+            -(map.get(incoming.element.id)?.expectedPointsNext??0)+(map.get(out)?.expectedPointsNext??0);
           single.push({n,m:{out,into:incoming.element.id,outName:old.element.web_name,
             inName:incoming.element.web_name,costM:round1((priceT(incoming)-(node.ownedSellT.get(out)??priceT(old)))/10)},
             score:v+future});
