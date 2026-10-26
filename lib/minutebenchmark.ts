@@ -15,6 +15,7 @@ export interface MinutePrediction {
   recent:{minutes:number;appearance:number;start:number|null;over60:number|null};
   hasRecent:boolean;
   roleTrend?: "reduced"|"increased"|"stable"|"insufficient";
+  availabilityContext?: "available"|"doubtful"|"unavailable"|"unknown";
 }
 export interface MinuteSnapshot {
   version:1;
@@ -42,6 +43,7 @@ export interface MinuteABResult {
   base:MinuteScore;
   recent:MinuteScore;
   roleTrendBands?: {trend:"reduced"|"increased"|"stable";base:MinuteScore;recent:MinuteScore}[];
+  availabilityBands?: {context:"available"|"doubtful"|"unavailable"|"unknown";base:MinuteScore;recent:MinuteScore}[];
   note:string;
 }
 export interface MinuteABHistory{
@@ -103,8 +105,19 @@ export function buildMinuteSnapshot(
       start:base.start===null?null:clamp(candidate.pStart),
       over60:base.over60===null?null:clamp(candidate.pPlay60),
     };
+    const status=p.element.status;
+    const chance=p.element.chance_of_playing_next_round;
+    // Availability is a separate predeadline signal, not evidence that the
+    // manager dropped a player. FPL null chance means "not specified".
+    const availabilityContext=status==="i"||status==="s"||status==="u"||status==="n"
+      ? "unavailable" as const
+      : status==="d"||(typeof chance==="number"&&chance<100)
+        ? "doubtful" as const
+        : status==="a" ? "available" as const : "unknown" as const;
     players.push({id:p.element.id,name:p.element.web_name,base,recent:alt,hasRecent,
-      roleTrend:hasRecent?detectMinutesRoleTrend(past):"insufficient"});
+      availabilityContext,
+      roleTrend:hasRecent && availabilityContext==="available"
+        ?detectMinutesRoleTrend(past):"insufficient"});
   }
   if(!players.length)return null;
   return {
@@ -154,6 +167,10 @@ export function gradeMinuteSnapshot(
     roleTrendBands:(["reduced","increased","stable"] as const).map(trend=>{
       const group=cohort.filter(p=>p.roleTrend===trend);
       return {trend,base:score("base",group),recent:score("recent",group)};
+    }),
+    availabilityBands:(["available","doubtful","unavailable","unknown"] as const).map(context=>{
+      const group=cohort.filter(p=>(p.availabilityContext??"unknown")===context);
+      return {context,base:score("base",group),recent:score("recent",group)};
     }),
     note:"A/B emparelhado de previsões congeladas antes do deadline. O modelo recente só poderá ser promovido após várias jornadas com ganhos estáveis fora da amostra.",
   };
