@@ -690,8 +690,8 @@ export default async function Home({
     wildcardProfile,
   });
   // eslint-disable-next-line react-hooks/purity
-  const policyShadow = compareTransferPolicies(transferAdvice.plans, transferAdvice.recommended);
   const plannerDurationMs = Math.round(performance.now() - plannerStartedAt);
+  const policyShadow = compareTransferPolicies(transferAdvice.plans, transferAdvice.recommended);
   if (plannerDurationMs > 3000) {
     console.warn("fpl:slow-transfer-planner", {
       durationMs: plannerDurationMs,
