@@ -91,7 +91,7 @@ import { makeFrozenPair, captureFrozenMinutesPair } from "@/lib/minutesdecisiono
 import MinuteABPanel from "@/components/MinuteABPanel";
 import MultiPeriodPanel from "@/components/MultiPeriodPanel";
 import FirstWeekStrategiesPanel from "@/components/FirstWeekStrategiesPanel";
-import { compareFirstWeekStrategies } from "@/lib/firstweekstrategies";
+import { cachedFirstWeekStrategies } from "@/lib/firstweekstrategies";
 import AdviserPanel from "@/components/AdviserPanel";
 import DecisionConfirmationPanel from "@/components/DecisionConfirmationPanel";
 import TeamPreferenceSync from "@/components/TeamPreferenceSync";
@@ -769,7 +769,7 @@ export default async function Home({
   // simulation visits, and never perform them on the homepage.
   const firstWeekComparison = view==="simular" && sp.comparar==="1" &&
     periodForecasts.length>0 && squadState.available
-    ? compareFirstWeekStrategies(squadState,periodForecasts,{
+    ? await cachedFirstWeekStrategies(squadState,periodForecasts,{
         horizon:periodForecasts.length,beamWidth:10
       })
     : null;
