@@ -1,5 +1,5 @@
 import type { ScoredPlayer } from "./recommend";
-import { pickBestXI } from "./recommend";
+import { pickBestXI, pickCaptain } from "./recommend";
 import type { SquadState } from "./squadstate";
 
 export interface PeriodForecast { event: number; players: ScoredPlayer[] }
@@ -94,9 +94,9 @@ export function planMultipleGameweeks(
     const squad = node.ids.map(id => byId.get(id) ?? maps[0].get(id)!)
       .map(p => p && byId.has(p.element.id) ? p : ({...p, score:0, expectedPointsNext:0} as ScoredPlayer));
     const xi = pickBestXI(squad.map(p => ({...p,score:p.expectedPointsNext})));
-    const captain = [...xi].sort((a,b) => b.expectedPointsNext-a.expectedPointsNext)[0] ?? null;
+    const { captain, viceCaptain } = pickCaptain(xi);
     const value = {
-      points: xi.reduce((s,p) => s + p.expectedPointsNext,0)+(captain?.expectedPointsNext??0),
+      points: xi.reduce((s,p) => s + p.expectedPointsNext,0)+(captain?.expectedPointsNext??0)+(viceCaptain ? Math.max(0.02,1-(captain?.pPlay??1))*viceCaptain.expectedPointsNext : 0),
       xi:xi.map(p=>p.element.id), captain:captain?.element.id??null,
     };
     weekScoreCache.set(scoreKey,value);
