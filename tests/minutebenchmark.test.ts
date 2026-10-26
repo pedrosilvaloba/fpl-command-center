@@ -67,7 +67,7 @@ assert.equal(missingGrade.recent.startsN,0);
 const zeros=new Map(elements.map(e=>[e.id,{minutes:0,starts:0}] as const));
 const blank=gradeMinuteSnapshot(snapshot,zeros);
 assert.equal(blank.recentEligible,20,"Actual zero-minute players must not be discarded");
-const corrupt=new Map(actual);
+const corrupt=new Map<number,{minutes:number;starts:number|null}>(actual);
 corrupt.set(2,{minutes:-20,starts:1});
 corrupt.set(3,{minutes:Number.NaN,starts:1});
 corrupt.set(4,{minutes:80,starts:2});
