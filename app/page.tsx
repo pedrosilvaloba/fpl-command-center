@@ -1567,7 +1567,7 @@ export default async function Home({
                     </tr>
                   </thead>
                   <tbody>
-                    {accuracyHistory.results.map((r) => (
+                    {accuracyHistory.results.slice(sp.historico==="1"?0:-8).map((r) => (
                       <tr key={r.event} className="border-t border-border">
                         <td className="py-2 pr-3">GW{r.event}</td>
                         <td className="py-2 pr-3 text-right font-mono tabular">
@@ -1646,6 +1646,11 @@ export default async function Home({
                 </p>
               </div>
             )}
+            {accuracyHistory.results.length>8 && <p className="mt-3 text-xs text-text-muted">
+              {sp.historico==="1"
+                ? <a className="text-accent underline" href={`/?team=${teamId}&view=analisar#aprendizagem`}>Mostrar apenas oito jornadas</a>
+                : <a className="text-accent underline" href={`/?team=${teamId}&view=analisar&historico=1#aprendizagem`}>Ver histórico completo ({accuracyHistory.results.length} jornadas)</a>}
+            </p>}
           </div>
 
           <div className="mt-6 border-t border-border pt-5">
