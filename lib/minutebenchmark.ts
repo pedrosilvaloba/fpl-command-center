@@ -1,6 +1,6 @@
 import type { ScoredPlayer } from "./recommend";
 import type { MinutesModel } from "./expectedpoints";
-import { recentMinutesVariant, detectMinutesRoleTrend, type RecentMinutesSnapshot } from "./recentminutes";
+import { recentMinutesVariant, detectMinutesRoleTrend, detectReturnPattern, type RecentMinutesSnapshot } from "./recentminutes";
 import { getRedis } from "./kv";
 import { getEventLive } from "./fpl-client";
 
@@ -15,6 +15,7 @@ export interface MinutePrediction {
   recent:{minutes:number;appearance:number;start:number|null;over60:number|null};
   hasRecent:boolean;
   roleTrend?: "reduced"|"increased"|"stable"|"insufficient";
+  returnPattern?: "cameos"|"starting-return"|"none"|"insufficient";
   availabilityContext?: "available"|"doubtful"|"unavailable"|"unknown";
 }
 export interface MinuteSnapshot {
@@ -43,6 +44,7 @@ export interface MinuteABResult {
   base:MinuteScore;
   recent:MinuteScore;
   roleTrendBands?: {trend:"reduced"|"increased"|"stable";base:MinuteScore;recent:MinuteScore}[];
+  returnPatternBands?: {pattern:"cameos"|"starting-return";base:MinuteScore;recent:MinuteScore}[];
   availabilityBands?: {context:"available"|"doubtful"|"unavailable"|"unknown";base:MinuteScore;recent:MinuteScore}[];
   note:string;
 }
@@ -116,6 +118,8 @@ export function buildMinuteSnapshot(
         : status==="a" ? "available" as const : "unknown" as const;
     players.push({id:p.element.id,name:p.element.web_name,base,recent:alt,hasRecent,
       availabilityContext,
+      returnPattern:hasRecent && availabilityContext==="available"
+        ?detectReturnPattern(past):"insufficient",
       roleTrend:hasRecent && availabilityContext==="available"
         ?detectMinutesRoleTrend(past):"insufficient"});
   }
@@ -167,6 +171,10 @@ export function gradeMinuteSnapshot(
     roleTrendBands:(["reduced","increased","stable"] as const).map(trend=>{
       const group=cohort.filter(p=>p.roleTrend===trend);
       return {trend,base:score("base",group),recent:score("recent",group)};
+    }),
+    returnPatternBands:(["cameos","starting-return"] as const).map(pattern=>{
+      const group=cohort.filter(p=>p.returnPattern===pattern);
+      return {pattern,base:score("base",group),recent:score("recent",group)};
     }),
     availabilityBands:(["available","doubtful","unavailable","unknown"] as const).map(context=>{
       const group=cohort.filter(p=>(p.availabilityContext??"unknown")===context);
