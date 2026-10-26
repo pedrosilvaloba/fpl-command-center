@@ -4,7 +4,7 @@ import { compareMinutesDecisions } from "../lib/minutesdecisioncomparison";
 import { buildMinuteSnapshot, gradeMinuteSnapshot, judgeMinuteExperiment } from "../lib/minutebenchmark";
 import { makeElement } from "./fixtures";
 import type { ScoredPlayer } from "../lib/recommend";
-import { deriveRecentMinutes, recentMinutesVariant, detectMinutesRoleTrend, detectReturnPattern } from "../lib/recentminutes";
+import { deriveRecentMinutes, recentMinutesVariant, detectMinutesRoleTrend, detectReturnPattern, validProspectiveMinutesSnapshot } from "../lib/recentminutes";
 const before=Date.parse("2026-10-25T10:00:00Z");
 const deadline="2026-10-25T18:00:00Z";
 const elements=Array.from({length:20},(_,i)=>makeElement({id:i+1,web_name:"P"+i}));
@@ -96,6 +96,14 @@ const withCap=recentMinutesVariant(cappedBaseline,highToZero);
 const withoutCap=recentMinutesVariant(cappedBaseline,highToZero,false);
 assert.ok(withoutCap.expectedMinutes<withCap.expectedMinutes,
   "The uncapped frozen challenger must retain the raw recency blend");
+assert.equal(validProspectiveMinutesSnapshot(recent,8,deadline),true);
+assert.equal(validProspectiveMinutesSnapshot({...recent,events:[4,5,6,8]},8,deadline),false,
+  "A current or future GW is never valid evidence");
+assert.equal(validProspectiveMinutesSnapshot({...recent,at:deadline},8,deadline),false,
+  "A postdeadline archive cannot generate a fair shadow");
+assert.equal(validProspectiveMinutesSnapshot({...recent,players:{
+  ...recent.players,["1"]:{...recent.players["1"],minutes:[0,0,Number.NaN,0]}
+}},8,deadline),false,"Non-finite past minutes must not enter the shadow");
 const snapshot=buildMinuteSnapshot(player,recent,8,deadline,before);
 assert.ok(snapshot);
 assert.equal(snapshot.players.length,20);
