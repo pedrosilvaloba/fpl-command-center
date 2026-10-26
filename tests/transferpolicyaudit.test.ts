@@ -31,4 +31,8 @@ assert.equal(auditTransferShadow([{...week,advice:{...base,shadowPlan:{...base.s
 assert.equal(auditTransferShadow([{...week,outcome:{...result,settlement:{...result.settlement!,shadowVsLive:9}}}]).excluded["inconsistent-settlement"],1);
 assert.equal(auditTransferShadow([{...week,outcome:{...result,settlement:{...result.settlement!,officialDelta:5}}}]).excluded["unverified-settlement"],1);
 assert.equal(auditTransferShadow([{...week,advice:{...base,shadowPlan:undefined}}]).excluded["missing-comparable-plan"],1);
+assert.equal(auditTransferShadow([{...week,advice:{...base,captain:99}}]).excluded["invalid-captain"],1);
+assert.equal(auditTransferShadow([{...week,advice:{...base,shadowPlan:{...base.shadowPlan!,vice:7}}}]).excluded["invalid-captain"],1);
+assert.equal(auditTransferShadow([{...week,advice:{...base,hitCost:2}}]).excluded["invalid-transfer-cost"],1);
+assert.equal(auditTransferShadow([{...week,outcome:{...result,settlement:{...result.settlement!,gainVsHold:2}}}]).excluded["inconsistent-settlement"],1);
 console.log("transfer policy integrity audit passed");
