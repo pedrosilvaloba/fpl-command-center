@@ -74,7 +74,7 @@ export function incrementalTransferHit(freeBefore:number,movesAlready:number):nu
 export function planMultipleGameweeks(
   state: SquadState,
   forecasts: PeriodForecast[],
-  opts: { beamWidth?: number; horizon?: number } = {}
+  opts: { beamWidth?: number; horizon?: number; firstWeekMoves?: "any"|"hold"|"free"|"hit" } = {}
 ): MultiPeriodReport {
   const horizon = Math.min(8, Math.max(1, Math.floor(opts.horizon ?? forecasts.length)));
   const width = Math.min(20, Math.max(3, Math.floor(opts.beamWidth ?? 10)));
@@ -171,7 +171,7 @@ export function planMultipleGameweeks(
       evaluated++;
     };
     for(const node of beam){
-      add(node,[]);
+      if(k!==0 || opts.firstWeekMoves===undefined || opts.firstWeekMoves==="any" || opts.firstWeekMoves==="hold")add(node,[]);
       const single:{n:Node;m:PeriodMove;score:number}[]=[];
       for(const out of node.ids){
         const old=map.get(out)??maps[0].get(out);
@@ -189,7 +189,10 @@ export function planMultipleGameweeks(
       }
       single.sort((a,b)=>b.score-a.score);
       const singles=single.slice(0,16);
-      for(const s of singles)add(s.n,[s.m]);
+      if(k!==0 || opts.firstWeekMoves===undefined || opts.firstWeekMoves==="any" ||
+        (opts.firstWeekMoves==="free" && node.free>=1) ||
+        (opts.firstWeekMoves==="hit" && node.free===0))
+        for(const s of singles)add(s.n,[s.m]);
       for(const s of singles.slice(0,8)){
         const seconds:typeof single=[];
         for(const out of s.n.ids){
@@ -206,7 +209,10 @@ export function planMultipleGameweeks(
           }
         }
         seconds.sort((a,b)=>b.score-a.score);
-        for(const second of seconds.slice(0,5))add(second.n,[s.m,second.m]);
+        if(k!==0 || opts.firstWeekMoves===undefined || opts.firstWeekMoves==="any" ||
+          (opts.firstWeekMoves==="free" && node.free>=2) ||
+          (opts.firstWeekMoves==="hit" && node.free<2))
+          for(const second of seconds.slice(0,5))add(second.n,[s.m,second.m]);
       }
     }
     const unique=new Map<string,Node>();
