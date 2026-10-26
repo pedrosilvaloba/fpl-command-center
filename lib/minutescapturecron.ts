@@ -14,8 +14,12 @@ export async function runDailyMinutesCapture():Promise<{ok:boolean;status:string
   try{
     const bootstrap=await getBootstrap();
     const now=Date.now();
-    const next=bootstrap.events.find(e=>Date.parse(e.deadline_time)>now);
+    const next=bootstrap.events.filter(e=>Number.isFinite(Date.parse(e.deadline_time))&&Date.parse(e.deadline_time)>now)
+      .sort((a,b)=>Date.parse(a.deadline_time)-Date.parse(b.deadline_time))[0];
     if(!next)return {ok:true,status:"no-upcoming-event"};
+    // A late daily snapshot is not a useful basis for predeadline action.
+    if(Date.parse(next.deadline_time)-now<60*60_000)
+      return {ok:false,status:"deadline-too-close"};
     if(await redis.get("fpl:minutes-decisions:snapshot:v1:"+next.id))
       return {ok:true,status:"already-frozen"};
     const recent=await readRecentMinutes();
