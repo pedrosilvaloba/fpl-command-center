@@ -81,6 +81,18 @@ const compare = settleOutcome(advice, {
 }, (id) => points.get(id) ?? 0);
 assert.equal(compare.settlement?.simulated, normal.points);
 assert.equal(compare.settlement?.subCount, 2);
+const withShadow = settleOutcome({
+  ...advice,
+  shadowPlan: {xi,bench,captain:7,vice:6,hitCost:0,transfers:[]},
+}, {
+  picks:officialPicks,activeChip:null,officialPoints:0,transfersCost:0,transfersIn:[],
+  minutesById:played,positionById:new Map(Object.keys(pos).map(k=>[Number(k),pos[Number(k)]])),
+},id=>points.get(id)??0);
+assert.equal(withShadow.settlement?.shadowVsLive,13,
+  "Same players with captain 7 and no -4 must score 13 more than app absent captain with vice 7");
+assert.equal(withShadow.settlement?.shadowVsHold,0,
+  "Exact shadow baseline matches hold when same captain and no hits");
+
 assert.equal(compare.settlement?.holdPoints, normal.points + 4);
 assert.equal(compare.settlement?.gainVsHold, -4, "hit cost must reduce realised gain vs holding");
 assert.ok(compare.settlement?.officialDelta !== undefined);
