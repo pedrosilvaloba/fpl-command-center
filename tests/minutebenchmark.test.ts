@@ -73,6 +73,21 @@ assert.ok(cameoModel.reasons.some(r=>r.includes("Duas entradas curtas")));
 assert.ok(cameoModel.pStart<=cameoModel.pAppear);
 const starterReturnModel=recentMinutesVariant(baseMinutes,starterReturn);
 assert.ok(starterReturnModel.reasons.some(r=>r.includes("Duas titularidades longas")));
+const extremeDown=recentMinutesVariant(
+  {pStart:.9,pAppear:.95,pPlay60:.85,expectedMinutes:85,avgMinutesPerStart:85,reasons:[]},
+  {minutes:[90,90,0,0],starts:[1,1,0,0]});
+assert.ok(extremeDown.expectedMinutes>=63,
+  "Confirmed downturn must not reduce forecast more than 22 minutes");
+const extremeUp=recentMinutesVariant(
+  {pStart:.1,pAppear:.2,pPlay60:.05,expectedMinutes:5,avgMinutesPerStart:60,reasons:[]},
+  {minutes:[0,0,90,90],starts:[0,0,1,1]});
+assert.ok(extremeUp.expectedMinutes<=27,
+  "Confirmed return cannot increase forecast more than 22 minutes");
+const singleSpike=recentMinutesVariant(
+  {pStart:.2,pAppear:.3,pPlay60:.15,expectedMinutes:10,avgMinutesPerStart:50,reasons:[]},
+  {minutes:[0,0,0,90],starts:[0,0,0,1]});
+assert.ok(singleSpike.expectedMinutes<=25,
+  "One match must not shift baseline by over 15 minutes");
 const snapshot=buildMinuteSnapshot(player,recent,8,deadline,before);
 assert.ok(snapshot);
 assert.equal(snapshot.players.length,20);
