@@ -87,7 +87,7 @@ const CALIBRATION_SCHEDULE = "0 7 * * *";
  * Não contam como "uma tarefa por horário": são manutenção de dados. */
 export type CronExtra = "lastseason" | "elite" | "decisions" | "officialscout" | "research" | "minutescapture";
 export type CronPlan = { backtest: boolean; calibration: boolean; extras: CronExtra[] };
-const ALL_EXTRAS: CronExtra[] = ["officialscout", "research", "lastseason", "elite", "decisions"];
+const ALL_EXTRAS: CronExtra[] = ["minutescapture", "officialscout", "research", "lastseason", "elite", "decisions"];
 
 /**
  * What this invocation should do.
