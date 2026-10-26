@@ -6,6 +6,10 @@ const labels:Record<FirstWeekStrategy,string>={
 export default function FirstWeekStrategiesPanel({comparison,teamId,horizon}:{
   comparison:FirstWeekComparison|null;teamId:number;horizon:number;
 }) {
+  const winner=comparison?.scenarios.find(s=>s.strategy===comparison.preferred && s.feasible);
+  const alternative=comparison?.scenarios.filter(s=>s.feasible && s.strategy!==comparison.preferred)
+    .sort((a,b)=>b.totalNetPoints!-a.totalNetPoints!)[0];
+  const edge=winner&&alternative ? winner.totalNetPoints!-alternative.totalNetPoints!:null;
   const url=`/?team=${teamId}&view=simular&horizonte=${horizon}&comparar=1#comparar-primeira-jornada`;
   return <section id="comparar-primeira-jornada" className="mt-4 rounded-xl border border-border p-4 space-y-3">
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -17,7 +21,7 @@ export default function FirstWeekStrategiesPanel({comparison,teamId,horizon}:{
         Comparar estratégias
       </a>}
     </div>
-    {comparison && <>
+    {comparison && <>\n      <p className="text-xs text-text-muted">Comparação das projeções líquidas nas próximas {comparison.horizon} jornadas. Os hits já estão descontados.</p>
       <div className="grid gap-2 md:grid-cols-3">
         {comparison.scenarios.map(s=><div key={s.strategy}
           className={`rounded-lg p-3 border ${s.strategy===comparison.preferred?"border-accent bg-accent/5":"border-border"}`}>
@@ -30,11 +34,11 @@ export default function FirstWeekStrategiesPanel({comparison,teamId,horizon}:{
           {s.strategy===comparison.preferred && <p className="mt-2 text-xs font-semibold text-accent">Melhor projeção encontrada</p>}
         </div>)}
       </div>
-      {comparison.preferred && <p className="text-sm">
-        Melhor percurso encontrado: <strong>{labels[comparison.preferred]}</strong>.
+      {winner && <p className="text-sm">
+        Melhor percurso encontrado: <strong>{labels[winner.strategy]}</strong>.\n        {edge!==null && <> Vantagem sobre a segunda alternativa: <strong>{edge.toFixed(1)} pts</strong>.</>}
         {" "}Não é garantia de mais pontos reais nem uma ordem para transferir.
       </p>}
-      <p className="text-xs text-text-muted">{comparison.note}</p>
+      {!winner && <p className="text-sm text-text-muted">Nenhuma das três estratégias encontrou um percurso viável. Confirma o plantel e as previsões disponíveis.</p>}\n      <p className="text-xs text-text-muted">{comparison.note}</p>
       <a href={`/?team=${teamId}&view=simular&horizonte=${horizon}#plano-multiplo`}
         className="inline-block text-xs text-accent underline">Fechar comparação</a>
     </>}
