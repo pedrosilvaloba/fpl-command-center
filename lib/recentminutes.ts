@@ -72,7 +72,9 @@ export async function refreshRecentMinutes(bootstrap?:FplBootstrap):Promise<{
  * is gated behind an explicit "recentes" toggle until prospective MAE and
  * participation calibration beat the existing model. */
 export function recentMinutesVariant(base:MinutesModel,recent:RecentMinutesPlayer|undefined):MinutesModel{
-  if(!recent || recent.minutes.length<4)return base;
+  if(!recent || recent.minutes.length<4 || recent.starts.length!==recent.minutes.length ||
+    recent.minutes.some(m=>!Number.isFinite(m) || m<0 || m>180) ||
+    recent.starts.some(v=>v!==null && (!Number.isFinite(v)||v<0||v>1)))return base;
   const minutes=recent.minutes.slice(-6).map(m=>Math.max(0,Math.min(90,m)));
   const weight=minutes.map((_,i)=>Math.pow(1.35,i));
   const total=weight.reduce((a,b)=>a+b,0);
@@ -87,10 +89,12 @@ export function recentMinutesVariant(base:MinutesModel,recent:RecentMinutesPlaye
   const expectedMinutes=Math.max(0,Math.min(90,base.expectedMinutes*(1-blend)+weightedMinutes*blend));
   const pStart=pRecentStart===null?base.pStart:Math.max(0,Math.min(1,base.pStart*(1-blend)+pRecentStart*blend));
   const pAppear=Math.max(pStart,Math.min(1,base.pAppear*(1-blend)+pRecentAppear*blend));
-  const pPlay60=Math.min(pAppear,base.pPlay60*(1-blend)+
-    minutes.reduce((s,m,i)=>s+(m>=60?1:0)*weight[i],0)/total*blend);
+  const pPlay60=Math.max(0,Math.min(pAppear,base.pPlay60*(1-blend)+
+    minutes.reduce((s,m,i)=>s+(m>=60?1:0)*weight[i],0)/total*blend));
+  // P(60+) cannot exceed P(start) in a single 90-minute fixture.
+  const coherent60=Math.min(pPlay60,pStart);
   return {
-    ...base,pStart,pAppear,pPlay60,expectedMinutes,
+    ...base,pStart,pAppear,pPlay60:coherent60,expectedMinutes,
     reasons:[...base.reasons,"Cenário experimental: últimos "+minutes.length+
       " jogos ponderados por recência (não calibrado fora da amostra)."],
   };
