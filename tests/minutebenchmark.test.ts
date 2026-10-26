@@ -88,6 +88,12 @@ const singleSpike=recentMinutesVariant(
   {minutes:[0,0,0,90],starts:[0,0,0,1]});
 assert.ok(singleSpike.expectedMinutes<=25,
   "One match must not shift baseline by over 15 minutes");
+const cappedBaseline={pStart:.9,pAppear:.95,pPlay60:.85,expectedMinutes:85,avgMinutesPerStart:85,reasons:[]};
+const highToZero={minutes:[90,90,0,0],starts:[1,1,0,0]};
+const withCap=recentMinutesVariant(cappedBaseline,highToZero);
+const withoutCap=recentMinutesVariant(cappedBaseline,highToZero,false);
+assert.ok(withoutCap.expectedMinutes<withCap.expectedMinutes,
+  "The uncapped frozen challenger must retain the raw recency blend");
 const snapshot=buildMinuteSnapshot(player,recent,8,deadline,before);
 assert.ok(snapshot);
 assert.equal(snapshot.players.length,20);
@@ -101,6 +107,8 @@ assert.equal(result.eligible,20);
 assert.equal(result.recentEligible,20);
 assert.equal(result.base.n,20);
 assert.equal(result.recent.n,20);
+assert.equal(result.uncappedComparableN,20);
+assert.ok(Number.isFinite(result.uncappedMinutesMAE));
 assert.equal(result.roleTrendBands?.reduce((total,b)=>total+b.base.n,0),20,
   "Every valid prospective player must belong to exactly one observed role group");
 const changedRecent=deriveRecentMinutes([4,5,6,7].map((event,index)=>({
