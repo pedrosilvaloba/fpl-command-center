@@ -116,7 +116,7 @@ export function gradeMinuteSnapshot(
 ):MinuteABResult {
   // For a fair paired A/B, compare ONLY players with a real pre-GW
   // recent history; all actual zeros remain, including substitutes.
-  const cohort=snapshot.players.filter(p=>p.hasRecent && actual.has(p.id));
+  const cohort=snapshot.players.filter(p=>{ const x=actual.get(p.id); return p.hasRecent && !!x && Number.isFinite(x.minutes) && x.minutes>=0 && x.minutes<=180; });
   const score=(kind:"base"|"recent"):MinuteScore=>{
     if(!cohort.length)return{
       n:0,minutesMAE:0,appearanceBrier:0,startsBrier:null,startsN:0,
@@ -129,7 +129,7 @@ export function gradeMinuteSnapshot(
       const m=boundedMinutes(outcome.minutes);
       mae+=Math.abs(x.minutes-m);
       appearance+=Math.pow(x.appearance-(m>0?1:0),2);
-      if(x.start!==null && outcome.starts!==null){
+      if(x.start!==null && outcome.starts!==null && Number.isFinite(outcome.starts) && (outcome.starts===0 || outcome.starts===1)){
         start+=Math.pow(x.start-(outcome.starts>0?1:0),2);startN++;
       }
       if(x.over60!==null){
@@ -179,9 +179,9 @@ export async function settleMinuteBenchmarks(finished:number[]):Promise<void>{
         const actual=new Map<number,{minutes:number;starts:number|null}>();
         for(const e of live.elements){
           const m=e.stats?.minutes;
-          if(typeof m!=="number"||!Number.isFinite(m))continue;
+          if(typeof m!=="number"||!Number.isFinite(m)||m<0||m>180)continue;
           const starts=e.stats?.starts;
-          actual.set(e.id,{minutes:m,starts:typeof starts==="number"&&Number.isFinite(starts)?starts:null});
+          actual.set(e.id,{minutes:m,starts:starts===0||starts===1?starts:null});
         }
         const outcome=gradeMinuteSnapshot(snap,actual);
         if(outcome.recentEligible<10)continue;
@@ -210,6 +210,8 @@ export interface MinuteABVerdict {
   confidenceLow:number|null;
   confidenceHigh:number|null;
   meanGainBrier:number;
+  startsEvaluatedGameweeks:number;
+  meanGainStartsBrier:number|null;
   rationale:string;
 }
 /** Conservative, event-level paired evaluation. Observations within one GW
@@ -226,8 +228,10 @@ export function judgeMinuteExperiment(results:MinuteABResult[]):MinuteABVerdict 
     Number.isFinite(r.base.appearanceBrier) && Number.isFinite(r.recent.appearanceBrier));
   const minutes=sample.map(r=>r.base.minutesMAE-r.recent.minutesMAE);
   const briers=sample.map(r=>r.base.appearanceBrier-r.recent.appearanceBrier);
+  const startPairs=sample.filter(r=>r.base.startsBrier!==null && r.recent.startsBrier!==null && r.base.startsN>=10 && r.recent.startsN>=10 && r.base.startsN===r.recent.startsN && Number.isFinite(r.base.startsBrier) && Number.isFinite(r.recent.startsBrier));
+  const starts=startPairs.map(r=>r.base.startsBrier!-r.recent.startsBrier!);
   const avg=(v:number[])=>v.length?v.reduce((s,x)=>s+x,0)/v.length:0;
-  const mean=avg(minutes),brier=avg(briers);
+  const mean=avg(minutes),brier=avg(briers),startBrier=starts.length?avg(starts):null;
   const variance=minutes.length>1
     ? minutes.reduce((s,x)=>s+(x-mean)**2,0)/(minutes.length-1):0;
   const stderr=minutes.length>1?Math.sqrt(variance/minutes.length):null;
@@ -236,7 +240,7 @@ export function judgeMinuteExperiment(results:MinuteABResult[]):MinuteABVerdict 
   const n=sample.length;
   const status:MinuteABVerdict["status"]=n<12?"insufficient":
     high!==null && high<0?"worse":
-    low!==null && low>0 && brier>0?"improved":"not-better";
+    low!==null && low>0 && brier>0 && (startPairs.length<10 || (startBrier!==null && startBrier>=0))?"improved":"not-better";
   const rationale=n<12?
     "É necessário observar pelo menos 12 jornadas prospetivas distintas para avaliar estabilidade.":
     status==="improved"?
@@ -244,5 +248,5 @@ export function judgeMinuteExperiment(results:MinuteABResult[]):MinuteABVerdict 
       status==="worse"?
         "Os minutos recentes aumentaram o erro médio em comparação emparelhada.":
         "Não existe evidência suficientemente clara de ganho estável; manter o modelo base.";
-  return{status,events:n,meanGainMinutes:mean,confidenceLow:low,confidenceHigh:high,meanGainBrier:brier,rationale};
+  return{status,events:n,meanGainMinutes:mean,confidenceLow:low,confidenceHigh:high,meanGainBrier:brier,startsEvaluatedGameweeks:startPairs.length,meanGainStartsBrier:startBrier,rationale};
 }
