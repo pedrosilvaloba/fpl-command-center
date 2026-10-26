@@ -65,7 +65,7 @@ assert.equal(detectReturnPattern(cameoPattern),"cameos");
 assert.equal(detectReturnPattern(starterReturn),"starting-return");
 assert.equal(detectReturnPattern({minutes:[0,0,12,0],starts:[0,0,0,0]}),"none",
   "One brief appearance cannot confirm a stable comeback");
-assert.equal(detectReturnPattern({minutes:[0,0,12,24],starts:[0,0,null,0]}),"none",
+assert.equal(detectReturnPattern({minutes:[0,0,12,24],starts:[0,0,null,0]}),"cameos",
   "Known substitute appearance remains a cameo even with one unknown start");
 assert.equal(detectReturnPattern({minutes:[0,0,12],starts:[0,0,0]}),"insufficient");
 const cameoModel=recentMinutesVariant(baseMinutes,cameoPattern);
