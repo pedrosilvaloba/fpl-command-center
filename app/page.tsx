@@ -1904,6 +1904,16 @@ export default async function Home({
           )}
         </Section>
 
+        {sp.detalhe==="1" ? <a className="mb-4 inline-block text-xs text-accent underline"
+          href={`/?team=${teamId}&view=analisar#liga`}>Fechar dados de apoio</a>
+          : <div className="rounded-xl border border-border bg-surface-2 p-4">
+              <p className="text-sm font-semibold">Dados de apoio e referências</p>
+              <p className="mt-1 text-xs text-text-muted">Plantel ideal, escolhas, indicadores e playbook.
+                Abre apenas quando precisares de investigar — o diagnóstico principal já está acima.</p>
+              <a className="mt-3 inline-block rounded-lg border border-accent px-3 py-2 text-xs font-semibold text-accent"
+                href={`/?team=${teamId}&view=analisar&detalhe=1#ideal`}>Consultar análise detalhada</a>
+            </div>}
+        {sp.detalhe==="1" && (<>
         <TierHeading label="Consultar" note="dados de apoio, para quando quiseres investigar" />
         {/* ================= 3. plantel ideal ================= */}
         <Section
@@ -2299,6 +2309,7 @@ export default async function Home({
           </div>
         </Section>
 
+        </>)}
         {/* MANUTENÇÃO, NO FIM — E A RAZÃO É UMA QUEIXA DIRETA DO DONO.
             Este painel estava em QUINTO lugar na página, acima do plantel do
             próprio gestor. É diagnóstico da máquina, não uma decisão de FPL:
