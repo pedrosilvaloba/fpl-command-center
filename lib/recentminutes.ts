@@ -106,7 +106,7 @@ export function detectReturnPattern(recent: RecentMinutesPlayer|undefined):
  * Starts are used only if live stats genuinely publish them. This variant
  * is gated behind an explicit "recentes" toggle until prospective MAE and
  * participation calibration beat the existing model. */
-export function recentMinutesVariant(base:MinutesModel,recent:RecentMinutesPlayer|undefined):MinutesModel{
+export function recentMinutesVariant(base:MinutesModel,recent:RecentMinutesPlayer|undefined, capChange=true):MinutesModel{
   if(!recent || recent.minutes.length<4 || recent.starts.length!==recent.minutes.length ||
     recent.minutes.some(m=>!Number.isFinite(m) || m<0 || m>180) ||
     recent.starts.some(v=>v!==null && (!Number.isFinite(v)||v<0||v>1)))return base;
@@ -130,8 +130,9 @@ export function recentMinutesVariant(base:MinutesModel,recent:RecentMinutesPlaye
   // This is a shadow-policy parameter requiring prospective validation.
   const rawExpectedMinutes=base.expectedMinutes*(1-blend)+weightedMinutes*blend;
   const maxChange=trend==="reduced"||trend==="increased"?22:15;
-  const expectedMinutes=Math.max(0,Math.min(90,
-    Math.max(base.expectedMinutes-maxChange,Math.min(base.expectedMinutes+maxChange,rawExpectedMinutes))));
+  const expectedMinutes=Math.max(0,Math.min(90,capChange
+    ?Math.max(base.expectedMinutes-maxChange,Math.min(base.expectedMinutes+maxChange,rawExpectedMinutes))
+    :rawExpectedMinutes));
   const pStart=pRecentStart===null?base.pStart:Math.max(0,Math.min(1,base.pStart*(1-blend)+pRecentStart*blend));
   const pAppear=Math.max(pStart,Math.min(1,base.pAppear*(1-blend)+pRecentAppear*blend));
   const pPlay60=Math.max(0,Math.min(pAppear,base.pPlay60*(1-blend)+
