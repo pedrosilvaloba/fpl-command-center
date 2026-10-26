@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { buildMinuteSnapshot, gradeMinuteSnapshot, judgeMinuteExperiment } from "../lib/minutebenchmark";
 import { makeElement } from "./fixtures";
 import type { ScoredPlayer } from "../lib/recommend";
-import { deriveRecentMinutes, recentMinutesVariant } from "../lib/recentminutes";
+import { deriveRecentMinutes, recentMinutesVariant, detectMinutesRoleTrend } from "../lib/recentminutes";
 const before=Date.parse("2026-10-25T10:00:00Z");
 const deadline="2026-10-25T18:00:00Z";
 const elements=Array.from({length:20},(_,i)=>makeElement({id:i+1,web_name:"P"+i}));
@@ -42,6 +42,23 @@ assert.deepEqual(recentMinutesVariant(baseMinutes,{minutes:[90,90,90,90],starts:
   "Partial starts arrays must not distort probabilities");
 assert.deepEqual(recentMinutesVariant(baseMinutes,{minutes:[90,-1,90,90],starts:[1,1,1,1]}),baseMinutes,
   "Malformed negative historical minutes must fail closed");
+const reduced={minutes:[90,90,20,10],starts:[1,1,0,0]};
+const increased={minutes:[0,15,80,90],starts:[0,0,1,1]};
+assert.equal(detectMinutesRoleTrend(reduced),"reduced");
+assert.equal(detectMinutesRoleTrend(increased),"increased");
+assert.equal(detectMinutesRoleTrend({minutes:[90,90,10,90],starts:[1,1,0,1]}),"stable",
+  "A single benching must not trigger a role-change warning");
+assert.equal(detectMinutesRoleTrend({minutes:[90,90,10],starts:[1,1,0]}),"insufficient");
+const reducedModel=recentMinutesVariant(
+  {pStart:.8,pAppear:.95,pPlay60:.8,expectedMinutes:75,avgMinutesPerStart:80,reasons:[]},
+  reduced);
+assert.ok(reducedModel.expectedMinutes<75);
+assert.ok(reducedModel.reasons.some(reason=>reason.includes("redução de minutos")));
+const increasedModel=recentMinutesVariant(
+  {pStart:.25,pAppear:.45,pPlay60:.2,expectedMinutes:25,avgMinutesPerStart:70,reasons:[]},
+  increased);
+assert.ok(increasedModel.expectedMinutes>25);
+assert.ok(increasedModel.reasons.some(reason=>reason.includes("subida de minutos")));
 const snapshot=buildMinuteSnapshot(player,recent,8,deadline,before);
 assert.ok(snapshot);
 assert.equal(snapshot.players.length,20);
