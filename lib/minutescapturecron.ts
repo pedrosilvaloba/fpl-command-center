@@ -7,7 +7,7 @@ import { validProspectiveMinutesSnapshot,readRecentMinutes,refreshRecentMinutes 
  * The response is not treated as success unless the immutable archive exists.
  */
 export async function runDailyMinutesCapture():Promise<{ok:boolean;status:string}>{
-  const redis=getRedis();
+  // Preview deployments can share Redis credentials with production.\n  // Never allow a preview/manual diagnostic to create immutable official evidence.\n  if(process.env.VERCEL_ENV!=="production")\n    return {ok:false,status:"production-only"};\n  const redis=getRedis();
   const domain=process.env.VERCEL_PROJECT_PRODUCTION_URL;
   if(!redis||!domain||!/^[a-z0-9.-]+$/i.test(domain))
     return {ok:false,status:"missing-storage-or-production-host"};
