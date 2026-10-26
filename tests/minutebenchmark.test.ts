@@ -85,6 +85,24 @@ const changedResult=gradeMinuteSnapshot(changedSnapshot,actual);
 assert.equal(changedResult.roleTrendBands?.find(b=>b.trend==="reduced")?.base.n,1);
 assert.equal(changedResult.roleTrendBands?.find(b=>b.trend==="increased")?.base.n,1);
 assert.equal(changedResult.roleTrendBands?.find(b=>b.trend==="stable")?.base.n,18);
+assert.equal(changedResult.availabilityBands?.reduce((total,b)=>total+b.base.n,0),20,
+  "Availability cohorts must cover all scored players exactly once");
+const flaggedPlayer=player.map((p,i)=>i===1 ? {
+  ...p,element:{...p.element,status:"i" as const,chance_of_playing_next_round:0}
+}:i===2 ? {...p,element:{...p.element,status:"d" as const,
+  chance_of_playing_next_round:50}}:p);
+const flaggedSnapshot=buildMinuteSnapshot(flaggedPlayer,changedRecent,8,deadline,before)!;
+const flaggedGrade=gradeMinuteSnapshot(flaggedSnapshot,actual);
+assert.equal(flaggedSnapshot.players[1].availabilityContext,"unavailable");
+assert.equal(flaggedSnapshot.players[1].roleTrend,"insufficient",
+  "Confirmed injury must not be labeled a lost starting role");
+assert.equal(flaggedSnapshot.players[2].availabilityContext,"doubtful");
+assert.equal(flaggedSnapshot.players[2].roleTrend,"insufficient",
+  "An official fitness doubt is not sufficient to infer a new bench role");
+assert.equal(flaggedGrade.availabilityBands?.find(b=>b.context==="unavailable")?.base.n,1);
+assert.equal(flaggedGrade.availabilityBands?.find(b=>b.context==="doubtful")?.recent.n,1);
+assert.equal(flaggedGrade.roleTrendBands?.find(b=>b.trend==="stable")?.base.n,18);
+
 assert.equal(changedResult.roleTrendBands?.find(b=>b.trend==="reduced")?.recent.n,1,
   "Paired role groups must use identical player cohorts for both models");
 
