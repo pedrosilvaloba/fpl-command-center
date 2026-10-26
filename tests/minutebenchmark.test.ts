@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { minuteDecisionAlerts } from "../lib/minutedecisionimpact";
 import { compareMinutesDecisions } from "../lib/minutesdecisioncomparison";
+import { gradeFrozenPair, type FrozenPair } from "../lib/minutesdecisionoutcomes";
 import { buildMinuteSnapshot, gradeMinuteSnapshot, judgeMinuteExperiment } from "../lib/minutebenchmark";
 import { makeElement } from "./fixtures";
 import type { ScoredPlayer } from "../lib/recommend";
