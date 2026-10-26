@@ -5,7 +5,7 @@ import { parseAppView, parseTeamId, viewHref } from "../lib/appcontext";
 import { planSensitivity, toDecisionAlternatives, transferRobustness, compareTransferPolicies } from "../lib/decisionrobustness";
 import { scenarioHref } from "../lib/chipscenarioview";
 import type { TransferPlan } from "../lib/transferplan";
-import { planMultipleGameweeks } from "../lib/multiperiod";
+import { planMultipleGameweeks, multiPeriodStateKey } from "../lib/multiperiod";
 import { multiPeriodCacheKey } from "../lib/multiperiodcache";
 import { answerAdviser, buildChatGPTContext, type AdviserContext } from "../lib/adviser";
 import { buildJournal, parseJournal, type LocalDecision } from "../lib/localjournal";
@@ -171,6 +171,11 @@ assert.equal(params.get("perfil"), "continuidade");
 const cleared = new URL(scenarioHref("?team=321&manter=11", "wildcard", [], [], "equilibrado"), "https://example.test/");
 assert.equal(cleared.searchParams.has("manter"), false);
 
+const stateKeyA=multiPeriodStateKey([2,1],1,20,new Map([[1,45],[2,50]]));
+const stateKeyB=multiPeriodStateKey([1,2],1,20,new Map([[1,46],[2,50]]));
+assert.notEqual(stateKeyA,stateKeyB,"Same roster/bank with different sale proceeds must remain distinct");
+assert.equal(stateKeyA,multiPeriodStateKey([1,2],1,20,new Map([[2,50],[1,45]])),
+  "Search deduplication must not depend on roster order");
 const legalPositions = [1,1,2,2,2,2,2,3,3,3,3,3,4,4,4];
 const weeklyPool = legalPositions.map((pos,i) => {
   const id=i+200;
