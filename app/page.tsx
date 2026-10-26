@@ -544,21 +544,6 @@ export default async function Home({
   // denominador "discordaram três vezes" não quer dizer nada.
   const expertCheck = applyExpertViews(scored, expertOpinions);
 
-  // Full-model same-squad shadow, limited to the analysis view to avoid
-  // repeating a 600-player score pass on the everyday dashboard. This DOES
-  // NOT change live decisions or claim hypothetical xP equals observed points.
-  const minuteDecisionComparison = view === "analisar" && recentMinutes &&
-    squadState.available && squadState.owned.length === 15 && !experimentalRecentMinutes
-    ? compareMinutesDecisions(
-        scored,
-        applyDispersionCorrection(
-          applyCalibration(buildScoredPlayers(
-            bootstrap,fixtures,fromEvent,5,oddsMatches,activeInsights,
-            undefined,lastSeasonTable,recentMinutes
-          ),learning.calibration),dispersionCorrection).applied,
-        squadState.owned.map(p=>p.elementId))
-    : null;
-
   // ---- league standings (optional) --------------------------------------
   let leagueName: string | null = null;
   let leagueResults: {
@@ -667,6 +652,23 @@ export default async function Home({
       ? await loadSquadState(myTeamIdNum, bootstrap, lastPublishedEvent)
       : EMPTY_SQUAD_STATE;
   const budgetM = squadState.available ? squadState.totalBudgetM : 100;
+
+  // Full-model same-squad shadow, limited to the analysis view to avoid
+  // repeating a 600-player score pass on the everyday dashboard. This DOES
+  // NOT change live decisions or claim hypothetical xP equals observed points.
+  const minuteDecisionComparison = view === "analisar" && recentMinutes &&
+    squadState.available && squadState.owned.length === 15 && !experimentalRecentMinutes
+    ? compareMinutesDecisions(
+        scored,
+        applyDispersionCorrection(
+          applyCalibration(buildScoredPlayers(
+            bootstrap,fixtures,fromEvent,5,oddsMatches,activeInsights,
+            undefined,lastSeasonTable,recentMinutes
+          ),learning.calibration),dispersionCorrection).applied,
+        squadState.owned.map(p=>p.elementId))
+    : null;
+
+
 
   const { squad, starters, totalCost, method: squadMethod } = buildOptimalSquad(
     scored,
