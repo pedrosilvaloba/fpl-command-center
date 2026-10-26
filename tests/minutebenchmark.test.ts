@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { minuteDecisionAlerts } from "../lib/minutedecisionimpact";
 import { buildMinuteSnapshot, gradeMinuteSnapshot, judgeMinuteExperiment } from "../lib/minutebenchmark";
 import { makeElement } from "./fixtures";
 import type { ScoredPlayer } from "../lib/recommend";
@@ -97,6 +98,17 @@ assert.ok(withoutCap.expectedMinutes<withCap.expectedMinutes,
 const snapshot=buildMinuteSnapshot(player,recent,8,deadline,before);
 assert.ok(snapshot);
 assert.equal(snapshot.players.length,20);
+const sensitive={...snapshot,players:snapshot.players.map((p,i)=>i===1?{
+  ...p,availabilityContext:"available" as const,recent:{...p.recent,minutes:p.base.minutes-17}
+}:i===2?{
+  ...p,availabilityContext:"doubtful" as const,recent:{...p.recent,minutes:p.base.minutes-19}
+}:p)};
+const alerts=minuteDecisionAlerts(sensitive,12);
+assert.equal(alerts.length,1,"Only substantial available-player shifts should be surfaced");
+assert.equal(alerts[0].id,2);
+assert.equal(minuteDecisionAlerts({...sensitive,capturedAt:deadline}).length,0,
+  "Never use postdeadline snapshots for decision sensitivity");
+
 assert.equal(snapshot.lastCompletedEvents.length,4);
 assert.equal(buildMinuteSnapshot(player,recent,8,deadline,Date.parse(deadline)),null);
 const actual=new Map(elements.map((e,i)=>[
