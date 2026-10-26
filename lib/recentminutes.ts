@@ -67,6 +67,22 @@ export async function refreshRecentMinutes(bootstrap?:FplBootstrap):Promise<{
   }catch{return {ok:false,events:0,players:0,cached:false};}
 }
 
+/** A trend is only flagged when TWO consecutive games move together, and
+ * both preceding games support a different role. One benching or short
+ * substitute cameo is not a change of first-team status.
+ * This is an experimental heuristic, not a medical or lineup prediction. */
+export function detectMinutesRoleTrend(recent: RecentMinutesPlayer | undefined):
+  "reduced" | "increased" | "stable" | "insufficient" {
+  if(!recent || recent.minutes.length<4 ||
+    recent.minutes.length!==recent.starts.length ||
+    recent.minutes.some(m=>!Number.isFinite(m)||m<0||m>180))return "insufficient";
+  const m=recent.minutes.slice(-4);
+  const previous=m.slice(0,2),latest=m.slice(2);
+  if(previous.every(n=>n>=60)&&latest.every(n=>n<=30))return "reduced";
+  if(previous.every(n=>n<=30)&&latest.every(n=>n>=60))return "increased";
+  return "stable";
+}
+
 /** Recency-sensitive alternative to the season-to-date minutes model.
  * Starts are used only if live stats genuinely publish them. This variant
  * is gated behind an explicit "recentes" toggle until prospective MAE and
@@ -85,7 +101,10 @@ export function recentMinutesVariant(base:MinutesModel,recent:RecentMinutesPlaye
   const pRecentStart=haveStarts?starts.reduce((s,x,i)=>s+(x??0)*weight[i],0)/total:null;
   // A conservative adjustment: 35% new evidence at most, not a reset on
   // one substitute appearance. Only known starts affect P(start).
-  const blend=0.35;
+  const trend=detectMinutesRoleTrend(recent);
+  // Confirmed two-match role transitions get slightly more weight, but
+  // the season baseline still controls a majority of the estimate.
+  const blend=trend==="reduced"||trend==="increased"?0.45:0.35;
   const expectedMinutes=Math.max(0,Math.min(90,base.expectedMinutes*(1-blend)+weightedMinutes*blend));
   const pStart=pRecentStart===null?base.pStart:Math.max(0,Math.min(1,base.pStart*(1-blend)+pRecentStart*blend));
   const pAppear=Math.max(pStart,Math.min(1,base.pAppear*(1-blend)+pRecentAppear*blend));
@@ -96,6 +115,8 @@ export function recentMinutesVariant(base:MinutesModel,recent:RecentMinutesPlaye
   return {
     ...base,pStart,pAppear,pPlay60:coherent60,expectedMinutes,
     reasons:[...base.reasons,"Cenário experimental: últimos "+minutes.length+
-      " jogos ponderados por recência (não calibrado fora da amostra)."],
+      " jogos ponderados por recência (não calibrado fora da amostra).",
+      ...(trend==="reduced"?["Sinal experimental: redução de minutos em dois jogos consecutivos."]:
+        trend==="increased"?["Sinal experimental: subida de minutos em dois jogos consecutivos."]:[])],
   };
 }
