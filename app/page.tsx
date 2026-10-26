@@ -1839,6 +1839,11 @@ export default async function Home({
               disappear — the opposite of what it is for. */}
           {leagueResults.length > 0 && (
             <div className="mt-5">
+              {leagueResults.length>20 && <p className="mb-2 text-xs">
+                {sp.ligaCompleta==="1"
+                  ? <a className="text-accent underline" href={`/?team=${teamId}&view=analisar#liga`}>Mostrar as primeiras 20 equipas</a>
+                  : <a className="text-accent underline" href={`/?team=${teamId}&view=analisar&ligaCompleta=1#liga`}>Ver todas as {leagueResults.length} equipas da liga</a>}
+              </p>}
               <p className="mb-2 flex flex-wrap items-baseline justify-between gap-2 text-xs text-text-muted">
                 <span>
                   Liga completa — <strong className="text-text">{leagueResults.length}</strong>{" "}
@@ -1868,7 +1873,7 @@ export default async function Home({
                   </tr>
                 </thead>
                 <tbody>
-                  {leagueResults.map((r) => (
+                  {leagueResults.slice(0,sp.ligaCompleta==="1"?undefined:20).map((r) => (
                     <tr
                       key={r.id}
                       className={`border-t border-border ${
