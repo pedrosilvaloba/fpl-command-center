@@ -1005,7 +1005,7 @@ export default async function Home({
   // completos (elemento da FPL inteiro, razões, risco, decomposição) eram
   // enviados para o browser porque o Shadow Team é um componente de
   // cliente. Ele só usa uma dúzia de campos; vai só isso.
-  const shadowPlayers = scored.map(
+  const shadowPlayers = (view === "simular" || view === "sistema" ? scored : []).map(
     (p) =>
       ({
         element: {
