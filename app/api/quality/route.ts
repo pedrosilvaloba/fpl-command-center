@@ -6,13 +6,14 @@ import { auditFrozenDecisions } from "@/lib/decisionquality";
 import { getBootstrap } from "@/lib/fpl-client";
 import { auditTransferShadow } from "@/lib/transferpolicyaudit";
 import { auditCaptainBaselines } from "@/lib/captainquality";
+import { getFrozenMinutesDecisionHistory } from "@/lib/minutesdecisionoutcomes";
 
 /** Public, aggregate-only evidence status: no manager identifiers, player
  * picks, notes, credentials or private team state. */
 export const dynamic = "force-dynamic";
 export async function GET() {
-  const [minutes,forward,decisions] = await Promise.all([
-    getMinuteABHistory(),getForwardHistory(),getDecisionHistory(),
+  const [minutes,forward,decisions,minuteDecisions] = await Promise.all([
+    getMinuteABHistory(),getForwardHistory(),getDecisionHistory(),getFrozenMinutesDecisionHistory(),
   ]);
   // Use FPL deadlines exclusively to validate archived predeadline advice.
   // A missing upstream deadline never authorizes a comparison.
@@ -41,6 +42,13 @@ export async function GET() {
   );
   return NextResponse.json({
     status:"experimental",
+    minutesDecisions:(()=>{const rows=minuteDecisions.results.filter(r=>r.different);
+      return {pairedDifferentGameweeks:rows.length,pending:minuteDecisions.pending,
+        challengerMinusBaseline:rows.length?rows.reduce((sum,r)=>sum+r.gain,0):null,
+        wins:rows.filter(r=>r.gain>0).length,losses:rows.filter(r=>r.gain<0).length,
+        ties:rows.filter(r=>r.gain===0).length,
+        evidence:rows.length<12?"insufficient":"descriptive-only",
+        note:"Frozen same-15 hypothetical XI, captain and vice; simulated auto-subs. No trades, hit costs or chips."};})(),
     minutes:{
       pairedGameweeks:verdict.events,
       promotionStatus:verdict.status,
