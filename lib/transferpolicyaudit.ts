@@ -14,6 +14,9 @@ const legalSquad=(xi:number[],bench:number[])=>{
   return xi.length===11 && bench.length===4 && new Set(ids).size===15 &&
     ids.every(n=>Number.isSafeInteger(n)&&n>0);
 };
+const validCaptain=(xi:number[],captain:number|null,vice:number|null)=>
+  captain!==null && vice!==null && captain!==vice &&
+  xi.includes(captain) && xi.includes(vice);
 const validMovements=(from:number[],to:number[],moves:{out:number;in:number}[])=>{
   const original=new Set(from),target=new Set(to);
   const outs=from.filter(n=>!target.has(n)).sort((a,b)=>a-b);
@@ -39,18 +42,26 @@ export function auditTransferShadow(weeks:PairedTransferWeek[]) {
     else if(advice.chip!==null || !shadow || !hold) reason="missing-comparable-plan";
     else if(!legalSquad(advice.xi,advice.bench)||!legalSquad(shadow.xi,shadow.bench)||!legalSquad(hold.xi,hold.bench))
       reason="invalid-squad";
+    else if(!validCaptain(advice.xi,advice.captain,advice.vice) ||
+      !validCaptain(shadow.xi,shadow.captain,shadow.vice) ||
+      !validCaptain(hold.xi,hold.captain,hold.vice))
+      reason="invalid-captain";
     else if(!validMovements([...hold.xi,...hold.bench],[...shadow.xi,...shadow.bench],shadow.transfers) ||
       !validMovements([...hold.xi,...hold.bench],[...advice.xi,...advice.bench],advice.transfers))
       reason="invalid-transfer-diff";
     else if(shadow.transfers.length>3||advice.transfers.length>3 ||
-      !Number.isFinite(shadow.hitCost)||shadow.hitCost<0||!Number.isFinite(advice.hitCost)||advice.hitCost<0)
+      !Number.isFinite(shadow.hitCost)||shadow.hitCost<0||
+      !Number.isFinite(advice.hitCost)||advice.hitCost<0||
+      shadow.hitCost%4!==0||advice.hitCost%4!==0)
       reason="invalid-transfer-cost";
     else if(!s || !Number.isFinite(s.shadowPoints)||!Number.isFinite(s.shadowVsLive)||
       !Number.isFinite(s.shadowVsHold)||!Number.isFinite(s.simulated)||!Number.isFinite(s.holdPoints)||
-      !Number.isFinite(s.officialDelta)||Math.abs(s.officialDelta)>1)
+      !Number.isFinite(s.officialDelta)||Math.abs(s.officialDelta)>1 ||
+      !Number.isFinite(s.gainVsHold) || !Number.isFinite(s.netDifference))
       reason="unverified-settlement";
     else if(Math.abs(s.shadowPoints!-s.simulated-s.shadowVsLive!)>0.001 ||
-      Math.abs(s.shadowPoints!-s.holdPoints!-s.shadowVsHold!)>0.001)
+      Math.abs(s.shadowPoints!-s.holdPoints!-s.shadowVsHold!)>0.001 ||
+      Math.abs(s.simulated-s.holdPoints!-s.gainVsHold!)>0.001)
       reason="inconsistent-settlement";
     if(reason){excluded[reason]=(excluded[reason]??0)+1;continue;}
     paired.push({event:advice.event,shadowMinusCurrent:s!.shadowVsLive!,shadowMinusHold:s!.shadowVsHold!});
