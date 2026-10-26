@@ -26,6 +26,12 @@ const partial=deriveRecentMinutes([4,5,6,7].map(event=>({
 })));
 assert.deepEqual(Object.keys(partial.players),["1"],
   "Incomplete histories are excluded rather than filled with artificial zeros");
+const missingMinutes=deriveRecentMinutes([4,5,6,7].map(event=>({
+ event,elements:[{id:1,stats:{minutes:0,starts:0}},
+ {id:2,stats:event===6?{starts:1}:{minutes:90,starts:1}}],
+})));
+assert.equal(missingMinutes.players["2"],undefined,
+  "Missing minutes fields must not be turned into zero appearances");
 assert.deepEqual(partial.players["1"].minutes,[0,0,0,0],
   "Actual recorded zero-minute gameweeks must remain valid");
 const snapshot=buildMinuteSnapshot(player,recent,8,deadline,before);
