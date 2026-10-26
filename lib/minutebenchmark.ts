@@ -3,6 +3,7 @@ import type { MinutesModel } from "./expectedpoints";
 import { recentMinutesVariant, detectMinutesRoleTrend, detectReturnPattern, type RecentMinutesSnapshot } from "./recentminutes";
 import { getRedis } from "./kv";
 import { getEventLive } from "./fpl-client";
+import { minuteDecisionAlerts } from "./minutedecisionimpact";
 
 const SNAP=(event:number)=>"fpl:minutes-ab:snapshot:v1:"+event;
 const RESULT=(event:number)=>"fpl:minutes-ab:result:v1:"+event;
@@ -56,6 +57,7 @@ export interface MinuteABHistory{
   configured:boolean;
   results:MinuteABResult[];
   pending:number[];
+  pendingDecisionSensitivity?: {event:number;affectedPlayers:number;up:number;down:number}[];
 }
 const clamp=(v:number)=>Math.min(1,Math.max(0,Number.isFinite(v)?v:0));
 const boundedMinutes=(v:number)=>Math.max(0,Math.min(180,Number.isFinite(v)?v:0));
@@ -239,10 +241,20 @@ export async function getMinuteABHistory():Promise<MinuteABHistory>{
   try{
     const ids=((await redis.smembers(INDEX))??[]).map(Number).filter(Number.isInteger).sort((a,b)=>b-a).slice(0,12);
     const data=await Promise.all(ids.map(id=>redis.get<MinuteABResult>(RESULT(id))));
+    const pending=ids.filter((_,idx)=>!data[idx]);
+    const snapshots=await Promise.all(pending.map(id=>redis.get<MinuteSnapshot>(SNAP(id))));
+    const pendingDecisionSensitivity=pending.flatMap((event,i)=>{
+      const snap=snapshots[i];
+      if(!snap || snap.version!==1 || snap.event!==event)return [];
+      const alerts=minuteDecisionAlerts(snap);
+      return [{event,affectedPlayers:alerts.length,
+        up:alerts.filter(a=>a.direction==="up").length,
+        down:alerts.filter(a=>a.direction==="down").length}];
+    });
     return{
       configured:true,
       results:data.filter((r):r is MinuteABResult=>!!r&&r.recentEligible>0),
-      pending:ids.filter((_,idx)=>!data[idx]),
+      pending,pendingDecisionSensitivity,
     };
   }catch{return{configured:true,results:[],pending:[]};}
 }
