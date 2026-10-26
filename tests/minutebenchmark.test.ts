@@ -94,6 +94,16 @@ const changedRecent=deriveRecentMinutes([4,5,6,7].map((event,index)=>({
     starts:1,
   }})),
 })));
+const patternRecent=deriveRecentMinutes([4,5,6,7].map((event,i)=>({
+  event,elements:elements.map(e=>({id:e.id,stats:{
+    minutes:e.id===2?[0,0,12,24][i]:e.id===3?[0,15,75,90][i]:70,
+    starts:e.id===3?(i>=2?1:0):e.id===2?0:1,
+  }}))
+})));
+const patternSnapshot=buildMinuteSnapshot(player,patternRecent,8,deadline,before)!;
+const patternScore=gradeMinuteSnapshot(patternSnapshot,actual);
+assert.equal(patternScore.returnPatternBands?.find(b=>b.pattern==="cameos")?.base.n,1);
+assert.equal(patternScore.returnPatternBands?.find(b=>b.pattern==="starting-return")?.recent.n,1);
 const changedSnapshot=buildMinuteSnapshot(player,changedRecent,8,deadline,before)!;
 const changedResult=gradeMinuteSnapshot(changedSnapshot,actual);
 assert.equal(changedResult.roleTrendBands?.find(b=>b.trend==="reduced")?.base.n,1);
