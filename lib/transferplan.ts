@@ -1225,8 +1225,14 @@ export function planTransfers(
     // vezes, mas com ruído puro de 0,8 pts/jornada o planeador passava a
     // recomendar trocas que valem zero (teste testPureNoiseProducesNoTransfers).
     // A retenção sozinha não chega contra o efeito de seleção; fica o piso.
-    p.requiredEdge =
-      p.key === "manter" ? 0 : noiseFloor(p.confidence, gamesOfEvidence, p.moves.length);
+    // Maintain the previously regression-tested conservative effective
+    // decision boundary while expressing it in five-GW point units.
+    // The additional calibration safety multiplier must remain until a
+    // prospective benchmark can prove a lower threshold is safe.
+    p.requiredEdge = p.key === "manter" ? 0 :
+      Math.round(objectiveToWindowPoints(
+        noiseFloor(p.confidence, gamesOfEvidence, p.moves.length)
+      ) * 100) / 100;
   }
 
   // THE NOISE FLOOR, APPLIED.
@@ -1238,11 +1244,12 @@ export function planTransfers(
   const ranked = [...plans].sort((a, b) => b.netValue - a.netValue);
   const clears = (p: TransferPlan) =>
     p.key === "manter" ||
-    (p.netValue - hold.netValue >= p.requiredEdge && costlyMoves(p).length === 0);
+    (objectiveToWindowPoints(p.netValue - hold.netValue) >= p.requiredEdge &&
+      costlyMoves(p).length === 0);
   const recommended = ranked.find(clears) ?? hold;
   for (const p of plans) {
     if (p.key === "manter") continue;
-    const edge = Math.round((p.netValue - hold.netValue) * 10) / 10;
+    const edge = Math.round(objectiveToWindowPoints(p.netValue - hold.netValue) * 10) / 10;
     const costly = costlyMoves(p);
     if (costly.length > 0) {
       p.rationale =
