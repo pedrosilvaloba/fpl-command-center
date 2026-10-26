@@ -545,13 +545,6 @@ export default async function Home({
   // denominador "discordaram três vezes" não quer dizer nada.
   const expertCheck = applyExpertViews(scored, expertOpinions);
 
-  if (minuteDecisionComparison && process.env.VERCEL_ENV==="production" &&
-    teamId===Number(DEFAULT_TEAM_ID) && !experimentalRecentMinutes) {
-    await captureFrozenMinutesPair(makeFrozenPair(fromEvent,
-      bootstrap.events.find(e=>e.id===fromEvent)?.deadline_time??"",
-      minuteDecisionComparison,squadState.owned.map(p=>p.elementId)));
-  }
-
   // ---- league standings (optional) --------------------------------------
   let leagueName: string | null = null;
   let leagueResults: {
@@ -679,6 +672,13 @@ export default async function Home({
     : null;
 
 
+
+  if (minuteDecisionComparison && process.env.VERCEL_ENV==="production" &&
+    teamId===Number(DEFAULT_TEAM_ID) && !experimentalRecentMinutes) {
+    await captureFrozenMinutesPair(makeFrozenPair(fromEvent,
+      bootstrap.events.find(e=>e.id===fromEvent)?.deadline_time??"",
+      minuteDecisionComparison,squadState.owned.map(p=>p.elementId)));
+  }
 
   const { squad, starters, totalCost, method: squadMethod } = buildOptimalSquad(
     scored,
