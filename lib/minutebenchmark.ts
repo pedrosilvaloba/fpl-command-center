@@ -1,6 +1,6 @@
 import type { ScoredPlayer } from "./recommend";
 import type { MinutesModel } from "./expectedpoints";
-import { recentMinutesVariant, detectMinutesRoleTrend, detectReturnPattern, type RecentMinutesSnapshot } from "./recentminutes";
+import { recentMinutesVariant, detectMinutesRoleTrend, detectReturnPattern, validProspectiveMinutesSnapshot, type RecentMinutesSnapshot } from "./recentminutes";
 import { getRedis } from "./kv";
 import { getEventLive } from "./fpl-client";
 import { minuteDecisionAlerts } from "./minutedecisionimpact";
@@ -77,15 +77,7 @@ export function buildMinuteSnapshot(
   // Only historical, complete and strictly predeadline observations can
   // influence a frozen challenger. A future event or malformed history
   // would leak data into a prospective experiment.
-  const safeRecent = recent && Number.isFinite(Date.parse(recent.at)) &&
-    Date.parse(recent.at) < limit &&
-    recent.events.length >= 4 && recent.events.length <= 6 &&
-    new Set(recent.events).size === recent.events.length &&
-    recent.events.every((gw,i) => Number.isInteger(gw) && gw > 0 &&
-      gw < event && (i === 0 || gw > recent.events[i-1])) &&
-    Object.values(recent.players).every(p => p.minutes.length === recent.events.length &&
-      p.starts.length === recent.events.length)
-    ? recent : null;
+  const safeRecent=validProspectiveMinutesSnapshot(recent,event,deadline)?recent:null;
   const players:MinutePrediction[]=[];
   for(const p of scored){
     const baseMin=boundedMinutes(p.expectedMinutesNext ?? p.pPlay*90);
