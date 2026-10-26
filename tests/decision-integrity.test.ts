@@ -88,8 +88,8 @@ const withShadow = settleOutcome({
   picks:officialPicks,activeChip:null,officialPoints:0,transfersCost:0,transfersIn:[],
   minutesById:played,positionById:new Map(Object.keys(pos).map(k=>[Number(k),pos[Number(k)]])),
 },id=>points.get(id)??0);
-assert.equal(withShadow.settlement?.shadowVsLive,13,
-  "Same players with captain 7 and no -4 must score 13 more than app absent captain with vice 7");
+assert.equal(withShadow.settlement?.shadowVsLive,4,
+  "Same players with captain 7 and no -4 must score four more by avoiding the hit with identical effective captain");
 assert.equal(withShadow.settlement?.shadowVsHold,0,
   "Exact shadow baseline matches hold when same captain and no hits");
 
