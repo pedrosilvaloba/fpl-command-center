@@ -1,5 +1,5 @@
 import { getRedis } from "./kv";
-import { getEventLive } from "./fpl-client";
+import { getEventLive, getBootstrap } from "./fpl-client";
 import { simulateLineup, type SimulatedPlayer } from "./lineupsettlement";
 import type { MinutesDecisionComparison, FrozenMinutesDecision } from "./minutesdecisioncomparison";
 
@@ -64,18 +64,32 @@ export async function settleFrozenMinutesPairs(finished:number[]):Promise<void>{
       try{
         if(await redis.get(RESULT(gw)))continue;
         const pair=await redis.get<FrozenPair>(SNAP(gw));if(!pair||pair.event!==gw)continue;
-        const live=await getEventLive(gw);
+        const [live,bootstrap]=await Promise.all([getEventLive(gw),getBootstrap()]);
+        const positions=new Map(bootstrap.elements.map(p=>[p.id,p.element_type]));
         const actual=new Map<number,SimulatedPlayer>();
         for(const p of live.elements){
           const minutes=p.stats?.minutes,points=p.stats?.total_points;
-          // Position cannot be taken from live elements: it lives in the
-          // bootstrap and is deliberately required separately below.
-          if(!Number.isFinite(minutes)||!Number.isFinite(points))continue;
-          const position=p.explain?.length;void position;
+          const position=positions.get(p.id);
+          if(typeof minutes!=="number"||!Number.isFinite(minutes)||minutes<0||
+            typeof points!=="number"||!Number.isFinite(points)||
+            (position!==1&&position!==2&&position!==3&&position!==4))continue;
+          actual.set(p.id,{id:p.id,minutes,points,position});
         }
-        // This job requires authoritative position data. Without that
-        // dependency we fail closed rather than invent a legal formation.
+        const outcome=gradeFrozenPair(pair,actual);
+        if(outcome)await redis.set(RESULT(gw),outcome);
       }catch{}
     }
   }catch{}
+}
+
+export async function getFrozenMinutesDecisionHistory():Promise<{
+  configured:boolean;results:SettledPair[];pending:number[];
+}>{
+  const redis=getRedis();if(!redis)return {configured:false,results:[],pending:[]};
+  try{
+    const ids=(await redis.smembers(INDEX)??[]).map(Number).filter(Number.isSafeInteger).sort((a,b)=>b-a).slice(0,20);
+    const results=await Promise.all(ids.map(id=>redis.get<SettledPair>(RESULT(id))));
+    return {configured:true,results:results.filter((r):r is SettledPair=>!!r),
+      pending:ids.filter((id,i)=>!results[i])};
+  }catch{return {configured:true,results:[],pending:[]};}
 }
