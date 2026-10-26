@@ -4,6 +4,7 @@ import { getForwardHistory } from "@/lib/forwardbenchmark";
 import { getDecisionHistory } from "@/lib/decisions";
 import { auditFrozenDecisions } from "@/lib/decisionquality";
 import { getBootstrap } from "@/lib/fpl-client";
+import { auditTransferShadow } from "@/lib/transferpolicyaudit";
 import { auditCaptainBaselines } from "@/lib/captainquality";
 
 /** Public, aggregate-only evidence status: no manager identifiers, player
@@ -101,26 +102,11 @@ export async function GET() {
       missingDeadlineOrRecord: decisions.rows.length - decisionAudit.inspected,
       note: "Contrafactual descritivo contra manter a equipa; nao prova superioridade estatistica nem a legalidade historica de todas as transferencias.",
     },
-    transferPolicyComparison: (() => {
-      const paired = decisions.rows.filter(r =>
-        !!r.advice?.shadowPlan && r.advice.chip === null &&
-        typeof r.outcome?.settlement?.shadowVsLive === "number" &&
-        Math.abs(r.outcome.settlement.officialDelta) <= 1 &&
-        !!deadlines.get(r.event) &&
-        Date.parse(r.advice.at) < Date.parse(deadlines.get(r.event)!) &&
-        Date.parse(r.outcome.settledAt) > Date.parse(deadlines.get(r.event)!)
-      );
-      const gains = paired.map(r => r.outcome!.settlement!.shadowVsLive!);
-      return {
-        pairedGameweeks: paired.length,
-        shadowMinusCurrent: gains.reduce((sum, v) => sum + v, 0),
-        wins: gains.filter(v => v > 0).length,
-        losses: gains.filter(v => v < 0).length,
-        ties: gains.filter(v => v === 0).length,
-        verdict: paired.length >= 12 ? "descriptive-only" : "insufficient-evidence",
-        note: "One-GW simulated comparison; not proof of future transfers, legality or statistical superiority.",
-      };
-    })(),
+    transferPolicyComparison: auditTransferShadow(decisions.rows.flatMap(r => {
+      const deadlineIso=deadlines.get(r.event);
+      return r.advice && r.outcome && deadlineIso
+        ? [{advice:r.advice,outcome:r.outcome,deadlineIso}] : [];
+    })),
     transfers:{
       verifiedSimulationGameweeks:reliable.length,
       totalSimulatedGainAgainstUser:decisions.totalDiff,
