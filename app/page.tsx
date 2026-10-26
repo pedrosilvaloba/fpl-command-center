@@ -87,6 +87,7 @@ import { cachedMultiPeriod } from "@/lib/multiperiodcache";
 import { readRecentMinutes, validProspectiveMinutesSnapshot } from "@/lib/recentminutes";
 import { captureMinuteBenchmark, getMinuteABHistory } from "@/lib/minutebenchmark";
 import { compareMinutesDecisions } from "@/lib/minutesdecisioncomparison";
+import { makeFrozenPair, captureFrozenMinutesPair } from "@/lib/minutesdecisionoutcomes";
 import MinuteABPanel from "@/components/MinuteABPanel";
 import MultiPeriodPanel from "@/components/MultiPeriodPanel";
 import AdviserPanel from "@/components/AdviserPanel";
@@ -543,6 +544,13 @@ export default async function Home({
   // concordâncias é tão importante como a de discordâncias, porque sem
   // denominador "discordaram três vezes" não quer dizer nada.
   const expertCheck = applyExpertViews(scored, expertOpinions);
+
+  if (minuteDecisionComparison && process.env.VERCEL_ENV==="production" &&
+    teamId===Number(DEFAULT_TEAM_ID) && !experimentalRecentMinutes) {
+    await captureFrozenMinutesPair(makeFrozenPair(fromEvent,
+      bootstrap.events.find(e=>e.id===fromEvent)?.deadline_time??"",
+      minuteDecisionComparison,squadState.owned.map(p=>p.elementId)));
+  }
 
   // ---- league standings (optional) --------------------------------------
   let leagueName: string | null = null;
