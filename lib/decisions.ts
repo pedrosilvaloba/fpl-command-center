@@ -48,6 +48,7 @@ export interface AdviceRecord {
   modelVersion?: string;
   /** Baseline: do not transfer, but choose the strongest XI/captain from
    * the existing squad. Recorded BEFORE the deadline, not reconstructed. */
+  shadowPlan?: { xi:number[]; bench:number[]; captain:number|null; vice:number|null; hitCost:number; transfers:{out:number;in:number}[]; };
   holdBaseline?: {
     xi: number[];
     bench: number[];
@@ -75,6 +76,9 @@ export interface OutcomeRecord {
     subCount: number;
     /** Positive when the actual policy beat same-XI max-xP, with both playing. */
     captainPolicyVsMaxXp?: number;
+    shadowPoints?: number;
+    shadowVsLive?: number;
+    shadowVsHold?: number;
     holdPoints?: number;
     gainVsHold?: number;
     officialReported: number;
@@ -128,7 +132,7 @@ export function settleOutcome(
     advisedIn.size === madeIn.size && [...advisedIn].every((id) => madeIn.has(id));
   let settlement: OutcomeRecord["settlement"];
   if (actual.picks.length === 15 && actual.minutesById && actual.positionById) {
-    const ids = [...new Set([...advice.xi, ...advice.bench, ...(advice.holdBaseline?.xi ?? []), ...(advice.holdBaseline?.bench ?? []), ...actual.picks.map((p) => p.element)])];
+    const ids = [...new Set([...advice.xi, ...advice.bench, ...(advice.holdBaseline?.xi ?? []), ...(advice.holdBaseline?.bench ?? []), ...(advice.shadowPlan?.xi ?? []), ...(advice.shadowPlan?.bench ?? []), ...actual.picks.map((p) => p.element)])];
     const allComplete = ids.every((id) =>
       actual.minutesById!.has(id) &&
       actual.positionById!.has(id) &&
@@ -173,6 +177,15 @@ export function settleOutcome(
         // They encode captain doubling and substitutions. This is NOT
         // identical to the official GW score when adjusted hits/other
         // scoring rules differ; retain the official delta for transparency.
+        const shadow = advice.chip === null && advice.shadowPlan &&
+          advice.shadowPlan.xi.length===11 && advice.shadowPlan.bench.length===4 &&
+          new Set([...advice.shadowPlan.xi,...advice.shadowPlan.bench]).size===15 &&
+          advice.shadowPlan.transfers.length<=3 && advice.shadowPlan.hitCost>=0 &&
+          Number.isFinite(advice.shadowPlan.hitCost) ? simulateLineup({
+            xi:advice.shadowPlan.xi, bench:advice.shadowPlan.bench,
+            captain:advice.shadowPlan.captain, vice:advice.shadowPlan.vice,
+            chip:null,hitCost:advice.shadowPlan.hitCost,players
+          }) : null;
         const actualViaMultipliers = actual.picks.reduce(
           (total, pick) => total + (pick.multiplier ?? 0) * pts(pick.element),
           0
@@ -183,6 +196,9 @@ export function settleOutcome(
           actualViaMultipliers,
           netDifference: app.points - actualViaMultipliers,
           subCount: app.subs.length,
+          ...(shadow?.reliable ? { shadowPoints:shadow.points,
+            shadowVsLive:shadow.points-app.points,
+            ...(hold?.reliable ? {shadowVsHold:shadow.points-hold.points}: {}) } : {}),
           ...(advice.chip === null && advice.captain !== null &&
             advice.captainMaxXp !== null && advice.captainMaxXp !== undefined &&
             advice.xi.includes(advice.captain) && advice.xi.includes(advice.captainMaxXp) &&
