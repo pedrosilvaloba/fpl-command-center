@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { minuteDecisionAlerts } from "../lib/minutedecisionimpact";
 import { compareMinutesDecisions } from "../lib/minutesdecisioncomparison";
-import { gradeFrozenPair, type FrozenPair } from "../lib/minutesdecisionoutcomes";
+import { makeFrozenPair, gradeFrozenPair, type FrozenPair } from "../lib/minutesdecisionoutcomes";
 import { buildMinuteSnapshot, gradeMinuteSnapshot, judgeMinuteExperiment } from "../lib/minutebenchmark";
 import { makeElement } from "./fixtures";
 import type { ScoredPlayer } from "../lib/recommend";
@@ -208,6 +208,13 @@ const challenger=assigned.map(p=>p.element.id===7?
   {...p,expectedPointsNext:9}:p);
 const compare=compareMinutesDecisions(assigned,challenger,assigned.map(p=>p.element.id));
 assert.equal(compare.comparable,true);
+const validPair=makeFrozenPair(8,deadline,compare,assigned.map(p=>p.element.id),before);
+assert.ok(validPair);
+const knownPoints=new Map(assigned.map(p=>[p.element.id,{id:p.element.id,
+  position:p.element.element_type as 1|2|3|4,minutes:90,points:2}] as const));
+assert.ok(gradeFrozenPair(validPair,knownPoints,"2026-10-27T20:00:00Z"));
+assert.equal(makeFrozenPair(8,deadline,compare,assigned.map(p=>p.element.id),Date.parse(deadline)),null);
+
 assert.equal(compare.baseline.xi.length,11);
 assert.equal(compare.challenger.xi.length,11);
 assert.equal(compare.changes.out.length,compare.changes.in.length);
