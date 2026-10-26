@@ -1,6 +1,6 @@
 import { getBootstrap } from "./fpl-client";
 import { getRedis } from "./kv";
-import { validProspectiveMinutesSnapshot,readRecentMinutes } from "./recentminutes";
+import { validProspectiveMinutesSnapshot,readRecentMinutes,refreshRecentMinutes } from "./recentminutes";
 
 /** Best-effort daily automated warm-up of the same full scoring analysis.
  * On Hobby, reuse an existing cron rather than creating a third scheduled job.
@@ -22,7 +22,15 @@ export async function runDailyMinutesCapture():Promise<{ok:boolean;status:string
       return {ok:false,status:"deadline-too-close"};
     if(await redis.get("fpl:minutes-decisions:snapshot:v1:"+next.id))
       return {ok:true,status:"already-frozen"};
-    const recent=await readRecentMinutes();
+    let recent=await readRecentMinutes();
+    // Daily capture must not rely on a human opening another page to warm
+    // the historical minute archive. Refresh only when the prospective
+    // snapshot is missing/invalid, then validate it again before use.
+    if(!validProspectiveMinutesSnapshot(recent,next.id,next.deadline_time)){
+      const refreshed=await refreshRecentMinutes(bootstrap);
+      if(!refreshed.ok)return {ok:false,status:"recent-minutes-refresh-failed"};
+      recent=await readRecentMinutes();
+    }
     if(!validProspectiveMinutesSnapshot(recent,next.id,next.deadline_time))
       return {ok:false,status:"missing-prospective-history"};
     const controller=new AbortController();
