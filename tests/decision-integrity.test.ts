@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { simulateLineup, type SimulatedPlayer } from "../lib/lineupsettlement";
 import { settleOutcome, type AdviceRecord } from "../lib/decisions";
 import { parseAppView, parseTeamId, viewHref } from "../lib/appcontext";
-import { planSensitivity, toDecisionAlternatives, transferRobustness } from "../lib/decisionrobustness";
+import { planSensitivity, toDecisionAlternatives, transferRobustness, compareTransferPolicies } from "../lib/decisionrobustness";
 import { scenarioHref } from "../lib/chipscenarioview";
 import type { TransferPlan } from "../lib/transferplan";
 import { planMultipleGameweeks } from "../lib/multiperiod";
@@ -131,6 +131,18 @@ assert.equal(transferRobustness(hypothetical).verdict,"fragile");
 assert.equal(transferRobustness(robustInput).verdict,"robust");
 assert.equal(transferRobustness({...hypothetical,netGainVsHold:1,requiredEdge:3}).verdict,"below-threshold");
 assert.equal(transferRobustness(hypothetical).evidence,"hypothetical");
+const liveHold = { ...noTransfer, feasible: true } as TransferPlan;
+const liveRisky = { ...hypothetical, feasible: true, netGainVsHold: 5, requiredEdge: 3 } as TransferPlan;
+const shadowCompare = compareTransferPolicies([liveHold, liveRisky], liveRisky);
+assert.equal(shadowCompare.current, "gratuitas");
+assert.equal(shadowCompare.shadow, "manter", "Fragile transfer cannot be shadow-recommended");
+assert.equal(shadowCompare.differs, true);
+const shadowStrong = compareTransferPolicies([liveHold, {
+  ...liveRisky, netGainVsHold: 30
+} as TransferPlan], liveHold);
+assert.equal(shadowStrong.shadow, "gratuitas");
+assert.equal(shadowStrong.shadowReason, "robust-plan");
+assert.equal(compareTransferPolicies([], null).shadowReason, "no-valid-hold");
 const variants = toDecisionAlternatives([noTransfer, hypothetical, hypothetical], hypothetical);
 assert.equal(variants.length, 2, "duplicate solver paths should not clutter UX");
 assert.equal(variants[1].robustness.verdict,"fragile");
