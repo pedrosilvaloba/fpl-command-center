@@ -19,10 +19,14 @@ export function deriveRecentMinutes(
   at="2026-10-25T00:00:00.000Z"
 ):RecentMinutesSnapshot{
   const sorted=weeks.slice().sort((a,b)=>a.event-b.event).slice(-6);
-  const ids=new Set(sorted.flatMap(w=>w.elements.map(e=>e.id)));
+  // An absent element is NOT a documented zero-minute GW: players joining
+  // mid-season, or partial live feeds, must not acquire fictitious benchings.
+  // Require observations for every archived week; explicit 0 remains valid.
+  const ids=new Set(sorted[0]?.elements.map(e=>e.id) ?? []);
   const byGw=sorted.map(w=>new Map(w.elements.map(e=>[e.id,e.stats] as const)));
   const players:RecentMinutesSnapshot["players"]={};
   for(const id of ids){
+    if(!byGw.every(gw=>gw.has(id)))continue;
     const mins=byGw.map(gw=>Number(gw.get(id)?.minutes??0));
     const starts=byGw.map(gw=>{
       const v=gw.get(id)?.starts;
