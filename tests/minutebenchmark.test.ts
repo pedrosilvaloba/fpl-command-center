@@ -15,6 +15,19 @@ const recent=deriveRecentMinutes([4,5,6,7].map(event=>({
   minutes:e.id===1?0:70,starts:e.id===1?0:1,
  }})),
 })));
+// A missing historical player record is not evidence that the player sat out.
+// Genuine explicit zero-minute records remain part of the paired benchmark.
+const partial=deriveRecentMinutes([4,5,6,7].map(event=>({
+ event,elements:[
+  {id:1,stats:{minutes:0,starts:0}},
+  ...(event===4?[]:[{id:2,stats:{minutes:90,starts:1}}]),
+  ...(event===6?[]:[{id:3,stats:{minutes:80,starts:1}}]),
+ ],
+})));
+assert.deepEqual(Object.keys(partial.players),["1"],
+  "Incomplete histories are excluded rather than filled with artificial zeros");
+assert.deepEqual(partial.players["1"].minutes,[0,0,0,0],
+  "Actual recorded zero-minute gameweeks must remain valid");
 const snapshot=buildMinuteSnapshot(player,recent,8,deadline,before);
 assert.ok(snapshot);
 assert.equal(snapshot.players.length,20);
