@@ -141,7 +141,9 @@ export async function GET(req: NextRequest) {
       continue;
     }
     if(extra==="minutescapture"){
-      ran.minutescapture=await runDailyMinutesCapture();
+      const capture=await runDailyMinutesCapture();
+      ran.minutescapture=capture;
+      if(!capture.ok)console.warn("fpl:minutes-capture-unavailable",{status:capture.status});
       continue;
     }
     const entry = await startJobRun(extra, trigger);
