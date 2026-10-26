@@ -88,6 +88,7 @@ export async function GET() {
           evidence:rows.length<12?"insufficient":"descriptive-only"};
       })(),
       pendingGWs:minutes.pending,
+      pendingDecisionSensitivity:minutes.pendingDecisionSensitivity??[],
       note:verdict.rationale,
     },
     playerForecastByPosition: [1,2,3,4].map(position => {
