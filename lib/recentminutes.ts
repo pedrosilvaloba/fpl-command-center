@@ -83,6 +83,25 @@ export function detectMinutesRoleTrend(recent: RecentMinutesPlayer | undefined):
   return "stable";
 }
 
+/** Descriptive recent playing pattern. Minutes alone cannot diagnose injury.
+ * Two observations are required; official availability is checked elsewhere.
+ */
+export function detectReturnPattern(recent: RecentMinutesPlayer|undefined):
+  "cameos"|"starting-return"|"none"|"insufficient" {
+  if(!recent || recent.minutes.length<4 ||
+    recent.starts.length!==recent.minutes.length ||
+    recent.minutes.some(m=>!Number.isFinite(m)||m<0||m>180) ||
+    recent.starts.some(v=>v!==null && (!Number.isFinite(v)||v<0||v>1)))
+    return "insufficient";
+  const m=recent.minutes.slice(-4);
+  const starts=recent.starts.slice(-2);
+  if(m[0]===0 && m[1]===0 && m[2]>0 && m[2]<=30 && m[3]>0 && m[3]<=30)
+    return "cameos";
+  if(m[0]<=30 && m[1]<=30 && m[2]>=60 && m[3]>=60 &&
+    starts.every(v=>v===1))return "starting-return";
+  return "none";
+}
+
 /** Recency-sensitive alternative to the season-to-date minutes model.
  * Starts are used only if live stats genuinely publish them. This variant
  * is gated behind an explicit "recentes" toggle until prospective MAE and
@@ -102,6 +121,7 @@ export function recentMinutesVariant(base:MinutesModel,recent:RecentMinutesPlaye
   // A conservative adjustment: 35% new evidence at most, not a reset on
   // one substitute appearance. Only known starts affect P(start).
   const trend=detectMinutesRoleTrend(recent);
+  const returnPattern=detectReturnPattern(recent);
   // Confirmed two-match role transitions get slightly more weight, but
   // the season baseline still controls a majority of the estimate.
   const blend=trend==="reduced"||trend==="increased"?0.45:0.35;
@@ -117,6 +137,8 @@ export function recentMinutesVariant(base:MinutesModel,recent:RecentMinutesPlaye
     reasons:[...base.reasons,"Cenário experimental: últimos "+minutes.length+
       " jogos ponderados por recência (não calibrado fora da amostra).",
       ...(trend==="reduced"?["Sinal experimental: redução de minutos em dois jogos consecutivos."]:
-        trend==="increased"?["Sinal experimental: subida de minutos em dois jogos consecutivos."]:[])],
+        trend==="increased"?["Sinal experimental: subida de minutos em dois jogos consecutivos."]:[]),
+      ...(returnPattern==="cameos"?["Duas entradas curtas após duas jornadas sem minutos; não implica titularidade nem confirma regresso de lesão."]:
+        returnPattern==="starting-return"?["Duas titularidades longas após utilização reduzida; padrão descritivo, não diagnóstico médico."]:[])],
   };
 }
