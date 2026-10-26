@@ -51,6 +51,16 @@ export function multiPeriodStateKey(ids:number[],free:number,bankT:number,sellPr
 const key=(n:Node)=>multiPeriodStateKey(n.ids,n.free,n.bankT,n.ownedSellT);
 const churn=(n:Node)=>n.steps.reduce((sum,step)=>sum+step.moves.length,0);
 const need: Record<number, number> = { 1: 2, 2: 5, 3: 5, 4: 3 };
+/** Cost of the next transfer relative to doing one fewer in this GW.
+ * Ranking candidates on gross xP can otherwise spend the scarce beam on
+ * hit-heavy paths before the objective even deducts the -4.
+ */
+export function incrementalTransferHit(freeBefore:number,movesAlready:number):number {
+  const free=Math.max(0,Math.min(5,Math.floor(freeBefore)));
+  const count=Math.max(0,Math.floor(movesAlready));
+  return Math.max(0,count+1-free)*4-Math.max(0,count-free)*4;
+}
+
 
 /**
  * Genuine sequential, bounded multi-GW search, not a claim of global
@@ -174,7 +184,7 @@ export function planMultipleGameweeks(
             -(map.get(incoming.element.id)?.expectedPointsNext??0)+(map.get(out)?.expectedPointsNext??0);
           single.push({n,m:{out,into:incoming.element.id,outName:old.element.web_name,
             inName:incoming.element.web_name,costM:round1((priceT(incoming)-(node.ownedSellT.get(out)??priceT(old)))/10)},
-            score:v+future});
+            score:v+future-incrementalTransferHit(node.free,0)});
         }
       }
       single.sort((a,b)=>b.score-a.score);
@@ -192,7 +202,7 @@ export function planMultipleGameweeks(
             if(!n)continue;
             seconds.push({n,m:{out,into:incoming.element.id,outName:old.element.web_name,
               inName:incoming.element.web_name,costM:round1((priceT(incoming)-(s.n.ownedSellT.get(out)??priceT(old)))/10)},
-              score:scoreWeek(n,k).points-scoreWeek(node,k).points});
+              score:scoreWeek(n,k).points-scoreWeek(node,k).points-incrementalTransferHit(node.free,1)});
           }
         }
         seconds.sort((a,b)=>b.score-a.score);
