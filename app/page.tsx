@@ -667,7 +667,7 @@ export default async function Home({
             bootstrap,fixtures,fromEvent,5,oddsMatches,activeInsights,
             undefined,lastSeasonTable,recentMinutes
           ),learning.calibration),dispersionCorrection).applied,
-        squadState.owned.map(p=>p.elementId))
+        squadState.owned.map(p=>p.elementId),posture.beta)
     : null;
 
 
@@ -1491,8 +1491,8 @@ export default async function Home({
                     <p className="text-xs text-text-muted">Recálculo completo de pontos esperados para os mesmos 15 jogadores. Não altera o teu onze nem demonstra mais pontos reais.</p>
                     <div className="grid grid-cols-2 gap-2 text-xs">
                       <div className="rounded-lg bg-surface-2 p-3">Trocas no XI: <strong>{minuteDecisionComparison.changes.out.length}</strong></div>
-                      <div className="rounded-lg bg-surface-2 p-3">Capitão diferente: <strong>{minuteDecisionComparison.captainChanged ? "Sim":"Não"}</strong></div>
-                      <div className="rounded-lg bg-surface-2 p-3">Vice diferente: <strong>{minuteDecisionComparison.viceChanged ? "Sim":"Não"}</strong></div>
+                      <div className="rounded-lg bg-surface-2 p-3">Capitão: <strong>{minuteDecisionComparison.captainChanged ? `${bootstrap.elements.find(p=>p.id===minuteDecisionComparison.baseline.captain)?.web_name??"—"} → ${bootstrap.elements.find(p=>p.id===minuteDecisionComparison.challenger.captain)?.web_name??"—"}`:"Mantém-se"}</strong></div>
+                      <div className="rounded-lg bg-surface-2 p-3">Vice: <strong>{minuteDecisionComparison.viceChanged ? `${bootstrap.elements.find(p=>p.id===minuteDecisionComparison.baseline.vice)?.web_name??"—"} → ${bootstrap.elements.find(p=>p.id===minuteDecisionComparison.challenger.vice)?.web_name??"—"}`:"Mantém-se"}</strong></div>
                       <div className="rounded-lg bg-surface-2 p-3">Alteração de xP no XI: <strong>{(minuteDecisionComparison.challenger.expectedXI-minuteDecisionComparison.baseline.expectedXI).toFixed(1)}</strong></div>
                     </div>
                     {minuteDecisionComparison.changes.out.length>0 && <p className="text-xs text-text-muted">
