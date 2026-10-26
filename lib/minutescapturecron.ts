@@ -1,0 +1,36 @@
+import { getBootstrap } from "./fpl-client";
+import { getRedis } from "./kv";
+import { validProspectiveMinutesSnapshot,readRecentMinutes } from "./recentminutes";
+
+/** Best-effort daily automated warm-up of the same full scoring analysis.
+ * On Hobby, reuse an existing cron rather than creating a third scheduled job.
+ * The response is not treated as success unless the immutable archive exists.
+ */
+export async function runDailyMinutesCapture():Promise<{ok:boolean;status:string}>{
+  const redis=getRedis();
+  const domain=process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  if(!redis||!domain||!/^[a-z0-9.-]+$/i.test(domain))
+    return {ok:false,status:"missing-storage-or-production-host"};
+  try{
+    const bootstrap=await getBootstrap();
+    const now=Date.now();
+    const next=bootstrap.events.find(e=>Date.parse(e.deadline_time)>now);
+    if(!next)return {ok:true,status:"no-upcoming-event"};
+    if(await redis.get("fpl:minutes-decisions:snapshot:v1:"+next.id))
+      return {ok:true,status:"already-frozen"};
+    const recent=await readRecentMinutes();
+    if(!validProspectiveMinutesSnapshot(recent,next.id,next.deadline_time))
+      return {ok:false,status:"missing-prospective-history"};
+    const controller=new AbortController();
+    const timeout=setTimeout(()=>controller.abort(),35_000);
+    try{
+      const response=await fetch("https://"+domain+"/?view=analisar",{
+        signal:controller.signal,cache:"no-store",redirect:"error",
+        headers:{"x-fpl-snapshot-trigger":"scheduled"}
+      });
+      if(!response.ok)return {ok:false,status:"analysis-page-"+response.status};
+    }finally{clearTimeout(timeout);}
+    const saved=await redis.get("fpl:minutes-decisions:snapshot:v1:"+next.id);
+    return saved?{ok:true,status:"frozen"}:{ok:false,status:"analysis-did-not-freeze"};
+  }catch{return {ok:false,status:"capture-failed"};}
+}
