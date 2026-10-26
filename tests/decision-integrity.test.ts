@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { simulateLineup, type SimulatedPlayer } from "../lib/lineupsettlement";
 import { settleOutcome, type AdviceRecord } from "../lib/decisions";
 import { parseAppView, parseTeamId, viewHref } from "../lib/appcontext";
-import { planSensitivity, toDecisionAlternatives } from "../lib/decisionrobustness";
+import { planSensitivity, toDecisionAlternatives, transferRobustness } from "../lib/decisionrobustness";
 import { scenarioHref } from "../lib/chipscenarioview";
 import type { TransferPlan } from "../lib/transferplan";
 import { planMultipleGameweeks } from "../lib/multiperiod";
@@ -125,8 +125,15 @@ assert.equal(planSensitivity(hypothetical, 20).stressedGain, -2,
 assert.equal(planSensitivity(hypothetical, 20).reversesDecision, true);
 assert.equal(planSensitivity(hypothetical, -5).downsidePct, 0);
 assert.equal(planSensitivity(hypothetical, 80).downsidePct, 50);
+const robustInput={...hypothetical,netGainVsHold:20,requiredEdge:3};
+assert.equal(transferRobustness(noTransfer).verdict,"hold");
+assert.equal(transferRobustness(hypothetical).verdict,"fragile");
+assert.equal(transferRobustness(robustInput).verdict,"robust");
+assert.equal(transferRobustness({...hypothetical,netGainVsHold:1,requiredEdge:3}).verdict,"below-threshold");
+assert.equal(transferRobustness(hypothetical).evidence,"hypothetical");
 const variants = toDecisionAlternatives([noTransfer, hypothetical, hypothetical], hypothetical);
 assert.equal(variants.length, 2, "duplicate solver paths should not clutter UX");
+assert.equal(variants[1].robustness.verdict,"fragile");
 assert.equal(variants[1].recommended, true);
 assert.equal(variants[1].transfers.length, 2);
 
