@@ -62,6 +62,18 @@ export function buildMinuteSnapshot(
 ):MinuteSnapshot|null{
   const limit=Date.parse(deadline);
   if(!Number.isInteger(event)||event<1||!Number.isFinite(limit)||now>=limit) return null;
+  // Only historical, complete and strictly predeadline observations can
+  // influence a frozen challenger. A future event or malformed history
+  // would leak data into a prospective experiment.
+  const safeRecent = recent && Number.isFinite(Date.parse(recent.at)) &&
+    Date.parse(recent.at) < limit &&
+    recent.events.length >= 4 && recent.events.length <= 6 &&
+    new Set(recent.events).size === recent.events.length &&
+    recent.events.every((gw,i) => Number.isInteger(gw) && gw > 0 &&
+      gw < event && (i === 0 || gw > recent.events[i-1])) &&
+    Object.values(recent.players).every(p => p.minutes.length === recent.events.length &&
+      p.starts.length === recent.events.length)
+    ? recent : null;
   const players:MinutePrediction[]=[];
   for(const p of scored){
     const baseMin=boundedMinutes(p.expectedMinutesNext ?? p.pPlay*90);
@@ -71,7 +83,7 @@ export function buildMinuteSnapshot(
       start:p.pStart===undefined?null:clamp(p.pStart),
       over60:p.pPlay60===undefined?null:clamp(p.pPlay60),
     };
-    const past=recent?.players[String(p.element.id)];
+    const past=safeRecent?.players[String(p.element.id)];
     const hasRecent=!!past && past.minutes.length>=4;
     const asMinutes:MinutesModel={
       pStart:base.start??base.appearance,
@@ -94,7 +106,7 @@ export function buildMinuteSnapshot(
   if(!players.length)return null;
   return {
     version:1,event,deadline,capturedAt:new Date(now).toISOString(),
-    lastCompletedEvents:recent?.events??[],players,
+    lastCompletedEvents:safeRecent?.events??[],players,
   };
 }
 export function gradeMinuteSnapshot(
@@ -204,7 +216,14 @@ export interface MinuteABVerdict {
  * share injuries/fixtures and are not independent replicates. Avoid making
  * 600 player rows appear like hundreds of independent gameweeks. */
 export function judgeMinuteExperiment(results:MinuteABResult[]):MinuteABVerdict {
-  const sample=results.filter(r=>r.base.n>=10 && r.recent.n>=10);
+  // One observation per distinct GW; duplicate records must not create
+  // fictitious independent evidence or tighten a confidence interval.
+  const counts=new Map<number,number>();
+  for(const r of results)counts.set(r.event,(counts.get(r.event)??0)+1);
+  const sample=results.filter(r=>counts.get(r.event)===1 &&
+    r.base.n>=10 && r.recent.n>=10 && r.base.n===r.recent.n &&
+    Number.isFinite(r.base.minutesMAE) && Number.isFinite(r.recent.minutesMAE) &&
+    Number.isFinite(r.base.appearanceBrier) && Number.isFinite(r.recent.appearanceBrier));
   const minutes=sample.map(r=>r.base.minutesMAE-r.recent.minutesMAE);
   const briers=sample.map(r=>r.base.appearanceBrier-r.recent.appearanceBrier);
   const avg=(v:number[])=>v.length?v.reduce((s,x)=>s+x,0)/v.length:0;
