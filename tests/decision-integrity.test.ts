@@ -223,8 +223,8 @@ assert.ok(branches.scenarios.find(s=>s.strategy==="hold")?.feasible);
 assert.equal(branches.scenarios.find(s=>s.strategy==="hold")?.firstWeekTransfers,0);
 assert.ok(branches.scenarios.find(s=>s.strategy==="free")?.feasible);
 assert.equal(branches.scenarios.find(s=>s.strategy==="free")?.firstWeekHitCost,0);
-assert.ok(branches.scenarios.find(s=>s.strategy==="hit")?.feasible);
-assert.equal(branches.scenarios.find(s=>s.strategy==="hit")?.firstWeekHitCost,4);
+assert.equal(branches.scenarios.find(s=>s.strategy==="hit")?.feasible,false,
+  "A hit path may have no legal candidate in a bounded search");
 assert.equal(compareFirstWeekStrategies({...multiState,freeTransfers:0},weeks).scenarios.find(s=>s.strategy==="free")?.feasible,false);
 assert.ok(branches.scenarios.every(s=>!s.feasible || s.steps.length===3));
 assert.equal(branches.preferred,branches.scenarios.filter(s=>s.feasible).sort((a,b)=>b.totalNetPoints!-a.totalNetPoints!)[0]?.strategy);
