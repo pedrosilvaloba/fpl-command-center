@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { buildMinuteSnapshot, gradeMinuteSnapshot, judgeMinuteExperiment } from "../lib/minutebenchmark";
 import { makeElement } from "./fixtures";
 import type { ScoredPlayer } from "../lib/recommend";
-import { deriveRecentMinutes, recentMinutesVariant, detectMinutesRoleTrend } from "../lib/recentminutes";
+import { deriveRecentMinutes, recentMinutesVariant, detectMinutesRoleTrend, detectReturnPattern } from "../lib/recentminutes";
 const before=Date.parse("2026-10-25T10:00:00Z");
 const deadline="2026-10-25T18:00:00Z";
 const elements=Array.from({length:20},(_,i)=>makeElement({id:i+1,web_name:"P"+i}));
@@ -59,6 +59,20 @@ const increasedModel=recentMinutesVariant(
   increased);
 assert.ok(increasedModel.expectedMinutes>25);
 assert.ok(increasedModel.reasons.some(reason=>reason.includes("subida de minutos")));
+const cameoPattern={minutes:[0,0,12,24],starts:[0,0,0,0]};
+const starterReturn={minutes:[0,15,75,90],starts:[0,0,1,1]};
+assert.equal(detectReturnPattern(cameoPattern),"cameos");
+assert.equal(detectReturnPattern(starterReturn),"starting-return");
+assert.equal(detectReturnPattern({minutes:[0,0,12,0],starts:[0,0,0,0]}),"none",
+  "One brief appearance cannot confirm a stable comeback");
+assert.equal(detectReturnPattern({minutes:[0,0,12,24],starts:[0,0,null,0]}),"none",
+  "Known substitute appearance remains a cameo even with one unknown start");
+assert.equal(detectReturnPattern({minutes:[0,0,12],starts:[0,0,0]}),"insufficient");
+const cameoModel=recentMinutesVariant(baseMinutes,cameoPattern);
+assert.ok(cameoModel.reasons.some(r=>r.includes("Duas entradas curtas")));
+assert.ok(cameoModel.pStart<=cameoModel.pAppear);
+const starterReturnModel=recentMinutesVariant(baseMinutes,starterReturn);
+assert.ok(starterReturnModel.reasons.some(r=>r.includes("Duas titularidades longas")));
 const snapshot=buildMinuteSnapshot(player,recent,8,deadline,before);
 assert.ok(snapshot);
 assert.equal(snapshot.players.length,20);
