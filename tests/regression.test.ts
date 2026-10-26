@@ -8783,6 +8783,13 @@ function testConsultantImprovements() {
   check("histórico elite da GW anterior não substitui previsão futura dentro da margem", d1.captain?.element.id === 2 && d1.source === "modelo" && /não na próxima jornada/.test(d1.reason));
   const d2 = chooseCaptainWithElite([mk(1, 4), mk(2, 7.5), other], mk(2, 7.5), elite, 2);
   check("modelo prefere por 3,5 pts (> margem): o modelo ganha", d2.captain?.element.id === 2 && d2.source === "modelo");
+  // The current strategic captain may be materially worse than the top
+  // expected-points candidate in the SAME playable XI.
+  const lowerXp=mk(4,3.9), higherXp=mk(5,5.4);
+  const dGuard=chooseCaptainWithElite([lowerXp,higherXp],lowerXp,null,2);
+  check("material xP shortfall overrides unproven tactical captain",dGuard.captain?.element.id===5 && /pontos esperados/.test(dGuard.reason));
+  const dNear=chooseCaptainWithElite([mk(6,5.1),mk(7,5.4)],mk(6,5.1),null,2);
+  check("near ties retain current model decision",dNear.captain?.element.id===6);
   const d3 = chooseCaptainWithElite([hal, jp], jp, null, 2);
   check("sem dados da elite, manda o modelo", d3.captain?.element.id === 2 && d3.source === "modelo-sem-elite");
   near("a margem nunca é menos de 2", captainOverrideMargin(1.1), 2, 1e-9);
