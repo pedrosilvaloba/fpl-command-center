@@ -1238,11 +1238,12 @@ export function planTransfers(
   const ranked = [...plans].sort((a, b) => b.netValue - a.netValue);
   const clears = (p: TransferPlan) =>
     p.key === "manter" ||
-    (p.netValue - hold.netValue >= p.requiredEdge && costlyMoves(p).length === 0);
+    (objectiveToWindowPoints(p.netValue - hold.netValue) >= p.requiredEdge &&
+      costlyMoves(p).length === 0);
   const recommended = ranked.find(clears) ?? hold;
   for (const p of plans) {
     if (p.key === "manter") continue;
-    const edge = Math.round((p.netValue - hold.netValue) * 10) / 10;
+    const edge = Math.round(objectiveToWindowPoints(p.netValue - hold.netValue) * 10) / 10;
     const costly = costlyMoves(p);
     if (costly.length > 0) {
       p.rationale =
