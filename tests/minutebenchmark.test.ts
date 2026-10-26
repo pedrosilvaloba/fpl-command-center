@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { minuteDecisionAlerts } from "../lib/minutedecisionimpact";
+import { compareMinutesDecisions } from "../lib/minutesdecisioncomparison";
 import { buildMinuteSnapshot, gradeMinuteSnapshot, judgeMinuteExperiment } from "../lib/minutebenchmark";
 import { makeElement } from "./fixtures";
 import type { ScoredPlayer } from "../lib/recommend";
@@ -187,6 +188,24 @@ assert.equal(guarded.base.startsN,17,"Invalid start labels must not be counted a
 const n1=gradeMinuteSnapshot(snapshot,actual);
 const n2=gradeMinuteSnapshot(snapshot,actual);
 assert.deepEqual(n1.base,n2.base,"Metric reproducibility must not depend on current date");
+// Same 15-player squad: a shadow minutes change can move the starting XI
+// without ever pretending this is a live recommendation or realised gain.
+const assigned=elements.slice(0,15).map((e,i)=>({
+  ...player[i],element:{...e,element_type:i<2?1:i<7?2:i<12?3:4},
+  expectedPointsNext:i===0?8:i===1?4:i===6?3:i===7?6:5,
+  pPlay:.9,
+}));
+const challenger=assigned.map(p=>p.element.id===7?
+  {...p,expectedPointsNext:9}:p);
+const compare=compareMinutesDecisions(assigned,challenger,assigned.map(p=>p.element.id));
+assert.equal(compare.comparable,true);
+assert.equal(compare.baseline.xi.length,11);
+assert.equal(compare.challenger.xi.length,11);
+assert.equal(compare.changes.out.length,compare.changes.in.length);
+assert.ok(compare.changes.out.length>=1,
+  "A full-scored shadow may change the lineup on the same squad");
+assert.equal(compareMinutesDecisions(assigned,challenger,assigned.slice(0,14).map(p=>p.element.id)).comparable,false);
+assert.equal(compareMinutesDecisions(assigned,assigned,assigned.map(p=>p.element.id)).changes.out.length,0);
 console.log("minutes paired benchmark tests passed");
 
 assert.equal(judgeMinuteExperiment([result]).status,"insufficient");
