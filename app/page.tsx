@@ -93,7 +93,7 @@ import DecisionConfirmationPanel from "@/components/DecisionConfirmationPanel";
 import TeamPreferenceSync from "@/components/TeamPreferenceSync";
 import { cookies } from "next/headers";
 import DecisionLabPanel from "@/components/DecisionLabPanel";
-import { toDecisionAlternatives, compareTransferPolicies } from "@/lib/decisionrobustness";
+import { toDecisionAlternatives, compareTransferPolicies, selectShadowTransferPlan } from "@/lib/decisionrobustness";
 import ElitePanel from "@/components/ElitePanel";
 import type { ScoredPlayer } from "@/lib/recommend";
 import DecisionLogPanel from "@/components/DecisionLogPanel";
@@ -910,6 +910,7 @@ export default async function Home({
     : [];
   // O conselho desta jornada fica registado até ao deadline (lib/decisions.ts).
   const advisedPlan = transferAdvice.recommended;
+  const shadowPlan = selectShadowTransferPlan(transferAdvice.plans);
   const advisedChip =
     chipAdvice.find((c) => c.verdict === "jogar")?.chip ??
     transferAdvice.scenarios.find(
@@ -932,6 +933,12 @@ export default async function Home({
         hitCost: advisedPlan?.hitCost ?? 0,
         chip: advisedChip,
         captainSource: captainDecision.source,
+        shadowPlan: shadowPlan ? {
+          xi:shadowPlan.xi.map(p=>p.element.id),bench:shadowPlan.bench.map(p=>p.element.id),
+          captain:shadowPlan.captain?.element.id??null,vice:shadowPlan.viceCaptain?.element.id??null,
+          hitCost:shadowPlan.hitCost,
+          transfers:shadowPlan.moves.map(m=>({out:m.out.element.id,in:m.in.element.id})),
+        }:undefined,
         captainMaxXp: (advisedPlan?.xi ?? starters)
           .filter(p => Number.isFinite(p.expectedPointsNext))
           .slice().sort((a,b) => b.expectedPointsNext - a.expectedPointsNext ||
