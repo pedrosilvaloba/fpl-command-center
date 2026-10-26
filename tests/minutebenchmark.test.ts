@@ -67,6 +67,13 @@ assert.equal(missingGrade.recent.startsN,0);
 const zeros=new Map(elements.map(e=>[e.id,{minutes:0,starts:0}] as const));
 const blank=gradeMinuteSnapshot(snapshot,zeros);
 assert.equal(blank.recentEligible,20,"Actual zero-minute players must not be discarded");
+const corrupt=new Map(actual);
+corrupt.set(2,{minutes:-20,starts:1});
+corrupt.set(3,{minutes:Number.NaN,starts:1});
+corrupt.set(4,{minutes:80,starts:2});
+const guarded=gradeMinuteSnapshot(snapshot,corrupt);
+assert.equal(guarded.recentEligible,18,"Invalid actual-minute outcomes cannot be silently turned into zero");
+assert.equal(guarded.base.startsN,17,"Invalid start labels must not be counted as evidence");
 const n1=gradeMinuteSnapshot(snapshot,actual);
 const n2=gradeMinuteSnapshot(snapshot,actual);
 assert.deepEqual(n1.base,n2.base,"Metric reproducibility must not depend on current date");
@@ -81,6 +88,14 @@ const historical = Array.from({length:12},(_,i)=>({
 const winning=judgeMinuteExperiment(historical);
 assert.equal(winning.events,12);
 assert.equal(winning.status,"improved");
+assert.equal(winning.startsEvaluatedGameweeks,12);
+const badStarts=judgeMinuteExperiment(historical.map(r=>({
+  ...r,base:{...r.base,startsBrier:.16,startsN:20},
+  recent:{...r.recent,startsBrier:.34,startsN:20},
+})));
+assert.equal(badStarts.status,"not-better",
+  "A minutes gain cannot promote a model that predicts starts materially worse");
+assert.ok((badStarts.meanGainStartsBrier??0)<0);
 assert.ok(winning.confidenceLow!==null && winning.confidenceLow>0);
 const losing=judgeMinuteExperiment(historical.map(r=>({
   ...r,base:{...r.base,minutesMAE:14},
