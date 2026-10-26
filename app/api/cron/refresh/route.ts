@@ -103,7 +103,8 @@ export function planFromRequest(
   schedule: string | null | undefined,
   only: string | null | undefined
 ): CronPlan {
-  if (only === "minutescapture") return { backtest:false, calibration:false, extras:["minutescapture"] };\n  if (only === "backtest") return { backtest: true, calibration: false, extras: [] };
+  if (only === "minutescapture") return { backtest:false, calibration:false, extras:["minutescapture"] };
+  if (only === "backtest") return { backtest: true, calibration: false, extras: [] };
   if (only === "calibration") return { backtest: false, calibration: true, extras: [] };
   if (only && (ALL_EXTRAS as string[]).includes(only)) {
     return { backtest: false, calibration: false, extras: [only as CronExtra] };
