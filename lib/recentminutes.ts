@@ -26,7 +26,7 @@ export function deriveRecentMinutes(
   const byGw=sorted.map(w=>new Map(w.elements.map(e=>[e.id,e.stats] as const)));
   const players:RecentMinutesSnapshot["players"]={};
   for(const id of ids){
-    if(!byGw.every(gw=>gw.has(id)))continue;
+    if(!byGw.every(gw=>Number.isFinite(gw.get(id)?.minutes) && (gw.get(id)?.minutes??-1)>=0))continue;
     const mins=byGw.map(gw=>Number(gw.get(id)?.minutes??0));
     const starts=byGw.map(gw=>{
       const v=gw.get(id)?.starts;
