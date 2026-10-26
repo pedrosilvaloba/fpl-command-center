@@ -34,8 +34,10 @@ export function makeFrozenPair(event:number,deadline:string,comparison:MinutesDe
  */
 export function gradeFrozenPair(pair:FrozenPair,actual:Map<number,SimulatedPlayer>,
   settledAt=new Date().toISOString()):SettledPair|null {
-  if(pair.version!==1||Date.parse(pair.capturedAt)>=Date.parse(pair.deadline)||
-    !Number.isFinite(Date.parse(pair.deadline))||Date.parse(settledAt)<=Date.parse(pair.deadline))return null;
+  const captured=Date.parse(pair.capturedAt),limit=Date.parse(pair.deadline),settled=Date.parse(settledAt);
+  if(pair.version!==1||!Number.isSafeInteger(pair.event)||pair.event<1||
+    !Number.isFinite(captured)||!Number.isFinite(limit)||!Number.isFinite(settled)||
+    captured>=limit||settled<=limit)return null;
   const validate=(d:FrozenMinutesDecision,bench:number[])=>{
     const squad=[...d.xi,...bench];
     return d.valid && d.xi.length===11 && bench.length===4 &&
@@ -50,6 +52,13 @@ export function gradeFrozenPair(pair:FrozenPair,actual:Map<number,SimulatedPlaye
   const result=(d:FrozenMinutesDecision,bench:number[])=>simulateLineup({
     xi:d.xi,bench,captain:d.captain,vice:d.vice,players:actual,chip:null,hitCost:0,
   });
+  // Each of the 15 actual player rows must be complete; a partial API
+  // response cannot be treated as 0 minutes/points or a settled week.
+  const ids=[...pair.baseline.xi,...pair.benchBase];
+  if(ids.some(id=>{const p=actual.get(id);
+    return !p||!Number.isFinite(p.minutes)||p.minutes<0||p.minutes>180||
+      !Number.isFinite(p.points)||![1,2,3,4].includes(p.position);
+  }))return null;
   const b=result(pair.baseline,pair.benchBase),c=result(pair.challenger,pair.benchChallenger);
   if(!b.reliable||!c.reliable)return null;
   return {event:pair.event,baselinePoints:b.points,challengerPoints:c.points,
