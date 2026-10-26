@@ -215,6 +215,8 @@ assert.ok(compare.changes.out.length>=1,
   "A full-scored shadow may change the lineup on the same squad");
 assert.equal(compareMinutesDecisions(assigned,challenger,assigned.slice(0,14).map(p=>p.element.id)).comparable,false);
 assert.equal(compareMinutesDecisions(assigned,assigned,assigned.map(p=>p.element.id)).changes.out.length,0);
+const invalidPair:FrozenPair={version:1,event:8,capturedAt:deadline,deadline,baseline:{valid:true,xi:[],captain:1,vice:2,expectedXI:0},challenger:{valid:true,xi:[],captain:1,vice:2,expectedXI:0},benchBase:[],benchChallenger:[]};
+assert.equal(gradeFrozenPair(invalidPair,new Map()),null);
 console.log("minutes paired benchmark tests passed");
 
 assert.equal(judgeMinuteExperiment([result]).status,"insufficient");
