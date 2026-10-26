@@ -50,6 +50,12 @@ export async function GET() {
       participationBrierImprovement:verdict.meanGainBrier,
       startsEvaluatedGameweeks:verdict.startsEvaluatedGameweeks,
       startsBrierImprovement:verdict.meanGainStartsBrier,
+      availabilityAccuracy:(["available","doubtful","unavailable","unknown"] as const).map(context=>{
+        const bands=minutes.results.flatMap(r=>r.availabilityBands?.filter(b=>b.context===context)??[]);
+        const n=bands.reduce((sum,b)=>sum+b.base.n,0);
+        const delta=n?bands.reduce((sum,b)=>sum+(b.base.minutesMAE-b.recent.minutesMAE)*b.base.n,0)/n:null;
+        return {context,playerGameweeks:n,minutesMAEImprovement:delta===null?null:Math.round(delta*100)/100};
+      }),
       roleTrendAccuracy:(["reduced","increased","stable"] as const).map(trend=>{
         const bands=minutes.results.flatMap(r=>r.roleTrendBands?.filter(b=>b.trend===trend)??[]);
         const n=bands.reduce((sum,b)=>sum+b.base.n,0);
