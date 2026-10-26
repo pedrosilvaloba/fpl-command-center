@@ -58,6 +58,17 @@ export function transferRobustness(plan: TransferPlan): {
  * Shadow is counterfactual: no automatic promotion, no extra solver calls.
  * Do not confuse 20% hypothetical stress with calibrated risk.
  */
+export function selectShadowTransferPlan(plans: TransferPlan[]): TransferPlan | null {
+  const hold=plans.find(p=>p.key==="manter" && p.feasible);
+  const eligible=plans.filter(p=>p.feasible && p.key!=="manter" && p.moves.length>0 &&
+    p.moves.every(m=>m.in.element.id>0 && m.out.element.id>0) &&
+    transferRobustness(p).verdict==="robust" && Number.isFinite(p.netGainVsHold) &&
+    p.netGainVsHold>=p.requiredEdge &&
+    !p.moves.some(m=>m.in.expectedPoints-m.out.expectedPoints < -2));
+  eligible.sort((a,b)=>b.netGainVsHold-a.netGainVsHold || a.key.localeCompare(b.key));
+  return eligible[0] ?? hold ?? null;
+}
+
 export function compareTransferPolicies(
   plans: TransferPlan[],
   live: TransferPlan | null
@@ -75,7 +86,7 @@ export function compareTransferPolicies(
     Number.isFinite(p.netGainVsHold) && p.netGainVsHold >= p.requiredEdge &&
     !p.moves.some(m => m.in.expectedPoints - m.out.expectedPoints < -2));
   eligible.sort((a,b)=>b.netGainVsHold-a.netGainVsHold || a.key.localeCompare(b.key));
-  const shadow = eligible[0] ?? hold ?? null;
+  const shadow = selectShadowTransferPlan(plans);
   return {
     current: live?.key ?? null,
     shadow: shadow?.key ?? null,
