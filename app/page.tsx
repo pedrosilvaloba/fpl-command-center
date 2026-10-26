@@ -86,6 +86,7 @@ import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
 import { cachedMultiPeriod } from "@/lib/multiperiodcache";
 import { readRecentMinutes } from "@/lib/recentminutes";
 import { captureMinuteBenchmark, getMinuteABHistory } from "@/lib/minutebenchmark";
+import { compareMinutesDecisions } from "@/lib/minutesdecisioncomparison";
 import MinuteABPanel from "@/components/MinuteABPanel";
 import MultiPeriodPanel from "@/components/MultiPeriodPanel";
 import AdviserPanel from "@/components/AdviserPanel";
@@ -542,6 +543,21 @@ export default async function Home({
   // concordâncias é tão importante como a de discordâncias, porque sem
   // denominador "discordaram três vezes" não quer dizer nada.
   const expertCheck = applyExpertViews(scored, expertOpinions);
+
+  // Full-model same-squad shadow, limited to the analysis view to avoid
+  // repeating a 600-player score pass on the everyday dashboard. This DOES
+  // NOT change live decisions or claim hypothetical xP equals observed points.
+  const minuteDecisionComparison = view === "analisar" && recentMinutes &&
+    squadState.available && squadState.owned.length === 15 && !experimentalRecentMinutes
+    ? compareMinutesDecisions(
+        scored,
+        applyDispersionCorrection(
+          applyCalibration(buildScoredPlayers(
+            bootstrap,fixtures,fromEvent,5,oddsMatches,activeInsights,
+            undefined,lastSeasonTable,recentMinutes
+          ),learning.calibration),dispersionCorrection).applied,
+        squadState.owned.map(p=>p.elementId))
+    : null;
 
   // ---- league standings (optional) --------------------------------------
   let leagueName: string | null = null;
@@ -1463,6 +1479,24 @@ export default async function Home({
             <div className="mt-5 border-t border-border pt-4">
               <SubHeading>Experiência A/B — minutos da época vs. minutos recentes</SubHeading>
               <MinuteABPanel history={minuteABHistory} />
+              {minuteDecisionComparison && <div className="mt-4 rounded-xl border border-border p-4 space-y-2">
+                <p className="font-semibold text-sm">Impacto experimental nas decisões</p>
+                {!minuteDecisionComparison.comparable
+                  ? <p className="text-xs text-text-muted">Comparação indisponível: não foi possível validar a mesma equipa de 15 jogadores nas duas previsões.</p>
+                  : <>
+                    <p className="text-xs text-text-muted">Recálculo completo de pontos esperados para os mesmos 15 jogadores. Não altera o teu onze nem demonstra mais pontos reais.</p>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="rounded-lg bg-surface-2 p-3">Trocas no XI: <strong>{minuteDecisionComparison.changes.out.length}</strong></div>
+                      <div className="rounded-lg bg-surface-2 p-3">Capitão diferente: <strong>{minuteDecisionComparison.captainChanged ? "Sim":"Não"}</strong></div>
+                      <div className="rounded-lg bg-surface-2 p-3">Vice diferente: <strong>{minuteDecisionComparison.viceChanged ? "Sim":"Não"}</strong></div>
+                      <div className="rounded-lg bg-surface-2 p-3">Alteração de xP no XI: <strong>{(minuteDecisionComparison.challenger.expectedXI-minuteDecisionComparison.baseline.expectedXI).toFixed(1)}</strong></div>
+                    </div>
+                    {minuteDecisionComparison.changes.out.length>0 && <p className="text-xs text-text-muted">
+                      Saem: {minuteDecisionComparison.changes.out.map(id=>bootstrap.elements.find(p=>p.id===id)?.web_name??String(id)).join(", ")}.
+                      Entram: {minuteDecisionComparison.changes.in.map(id=>bootstrap.elements.find(p=>p.id===id)?.web_name??String(id)).join(", ")}.
+                    </p>}
+                  </>}
+              </div>}
             </div>
           </div>
 
