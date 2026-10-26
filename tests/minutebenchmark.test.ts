@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { buildMinuteSnapshot, gradeMinuteSnapshot, judgeMinuteExperiment } from "../lib/minutebenchmark";
 import { makeElement } from "./fixtures";
 import type { ScoredPlayer } from "../lib/recommend";
-import { deriveRecentMinutes } from "../lib/recentminutes";
+import { deriveRecentMinutes, recentMinutesVariant } from "../lib/recentminutes";
 const before=Date.parse("2026-10-25T10:00:00Z");
 const deadline="2026-10-25T18:00:00Z";
 const elements=Array.from({length:20},(_,i)=>makeElement({id:i+1,web_name:"P"+i}));
@@ -34,6 +34,14 @@ assert.equal(missingMinutes.players["2"],undefined,
   "Missing minutes fields must not be turned into zero appearances");
 assert.deepEqual(partial.players["1"].minutes,[0,0,0,0],
   "Actual recorded zero-minute gameweeks must remain valid");
+const baseMinutes={pStart:.25,pAppear:.6,pPlay60:.55,expectedMinutes:35,avgMinutesPerStart:75,reasons:[]};
+const coherent=recentMinutesVariant(baseMinutes,{minutes:[90,90,90,90],starts:[0,0,0,0]});
+assert.ok(coherent.pPlay60<=coherent.pStart,"P(60+) must not exceed P(start)");
+assert.ok(coherent.pStart<=coherent.pAppear,"P(start) must not exceed P(appear)");
+assert.deepEqual(recentMinutesVariant(baseMinutes,{minutes:[90,90,90,90],starts:[1,1,1]}),baseMinutes,
+  "Partial starts arrays must not distort probabilities");
+assert.deepEqual(recentMinutesVariant(baseMinutes,{minutes:[90,-1,90,90],starts:[1,1,1,1]}),baseMinutes,
+  "Malformed negative historical minutes must fail closed");
 const snapshot=buildMinuteSnapshot(player,recent,8,deadline,before);
 assert.ok(snapshot);
 assert.equal(snapshot.players.length,20);
