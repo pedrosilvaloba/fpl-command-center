@@ -236,6 +236,12 @@ const validFrozen:FrozenPair={
  benchBase:[2,7,12,15],benchChallenger:[2,7,12,15],
 };
 assert.ok(gradeFrozenPair(validFrozen,identicalPlayers,"2026-10-27T20:00:00Z"));
+assert.equal(gradeFrozenPair({...validFrozen,capturedAt:"not-a-time"},identicalPlayers,"2026-10-27T20:00:00Z"),null);
+assert.equal(gradeFrozenPair(validFrozen,identicalPlayers,"not-a-time"),null);
+assert.equal(gradeFrozenPair(validFrozen,new Map([...identicalPlayers].filter(([id])=>id!==15)),"2026-10-27T20:00:00Z"),null);
+assert.equal(gradeFrozenPair(validFrozen,new Map([...identicalPlayers].map(([id,p])=>
+ [id,id===12?{...p,minutes:200}:p])),"2026-10-27T20:00:00Z"),null);
+
 assert.equal(gradeFrozenPair({...validFrozen,challenger:{...validFrozen.challenger,captain:15}},
  identicalPlayers,"2026-10-27T20:00:00Z"),null,
  "Captain outside XI cannot settle");
