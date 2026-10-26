@@ -35,4 +35,19 @@ assert.equal(auditTransferShadow([{...week,advice:{...base,captain:99}}]).exclud
 assert.equal(auditTransferShadow([{...week,advice:{...base,shadowPlan:{...base.shadowPlan!,vice:7}}}]).excluded["invalid-captain"],1);
 assert.equal(auditTransferShadow([{...week,advice:{...base,hitCost:2}}]).excluded["invalid-transfer-cost"],1);
 assert.equal(auditTransferShadow([{...week,outcome:{...result,settlement:{...result.settlement!,gainVsHold:2}}}]).excluded["inconsistent-settlement"],1);
+const samePolicy={...week,advice:{...base,
+  shadowPlan:{xi,bench,captain:7,vice:8,transfers:[],hitCost:0}},
+  outcome:{...result,settlement:{...result.settlement!,
+    shadowPoints:40,shadowVsLive:0,shadowVsHold:0}}};
+const sameAudit=auditTransferShadow([samePolicy]);
+assert.equal(sameAudit.pairedGameweeks,1);
+assert.equal(sameAudit.divergentGameweeks,0);
+assert.equal(sameAudit.meanDifferenceWhenDivergent,null);
+assert.equal(score.divergentGameweeks,1);
+assert.equal(score.meanDifferenceWhenDivergent,3);
+// A policy can disagree while producing equal points. This must still count.
+const tiedDifferent=auditTransferShadow([{...week,outcome:{...result,settlement:{
+  ...result.settlement!,shadowPoints:40,shadowVsLive:0,shadowVsHold:0}}}]);
+assert.equal(tiedDifferent.divergentGameweeks,1);
+assert.equal(tiedDifferent.ties,1);
 console.log("transfer policy integrity audit passed");
