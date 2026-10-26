@@ -78,6 +78,15 @@ export async function GET() {
           startsBrierImprovement:startImprovement===null?null:Math.round(startImprovement*10000)/10000,
           evidence:n===0?"no-observations":"descriptive-only"};
       }),
+      capPolicyComparison:(()=>{
+        const rows=minutes.results.filter(r=>r.uncappedComparableN && r.uncappedComparableN>=10 &&
+          Number.isFinite(r.cappedVsUncappedMinutesGain));
+        const n=rows.reduce((sum,r)=>sum+r.uncappedComparableN!,0);
+        const weightedGain=n?rows.reduce((sum,r)=>sum+r.cappedVsUncappedMinutesGain!*r.uncappedComparableN!,0)/n:null;
+        return {pairedGameweeks:rows.length,playerGameweeks:n,
+          cappedVsUncappedMinutesMAEGain:weightedGain===null?null:Math.round(weightedGain*100)/100,
+          evidence:rows.length<12?"insufficient":"descriptive-only"};
+      })(),
       pendingGWs:minutes.pending,
       note:verdict.rationale,
     },
