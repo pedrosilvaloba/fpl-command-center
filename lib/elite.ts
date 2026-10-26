@@ -130,6 +130,26 @@ export function chooseCaptainWithElite(
   margin: number
 ): CaptainDecision {
   const base = { modelChoice, margin };
+  // Action-first rule: do not recommend a materially lower expected-points
+  // captain because of tactical/rank heuristics until that policy beats the
+  // straightforward xP baseline prospectively. This is a conservative
+  // product decision, NOT evidence that xP itself is well calibrated.
+  const topXp = starters
+    .filter(p => Number.isFinite(p.expectedPointsNext) && p.expectedPointsNext >= 0)
+    .slice()
+    .sort((a,b) => b.expectedPointsNext-a.expectedPointsNext ||
+      a.element.id-b.element.id)[0];
+  const modelInXi = !!modelChoice && starters.some(p=>p.element.id===modelChoice.element.id);
+  if (topXp && (!modelInXi || topXp.expectedPointsNext - modelChoice!.expectedPointsNext > 0.5)) {
+    const gap = modelChoice ? topXp.expectedPointsNext-modelChoice.expectedPointsNext : null;
+    return {
+      ...base, captain: topXp, eliteChoice: undefined, eliteCapPct: 0,
+      source: "modelo",
+      reason: gap===null
+        ? "Capitão escolhido entre os titulares pelo maior valor esperado de pontos."
+        : `Capitão por pontos esperados: ${topXp.element.web_name} tem +${gap.toFixed(1)} pts previstos face à escolha estratégica anterior. O desvio estratégico não tem vantagem prospetiva demonstrada; confirmar minutos e notícias antes do deadline.`,
+    };
+  }
   if (!elite || starters.length === 0) {
     return {
       ...base,
