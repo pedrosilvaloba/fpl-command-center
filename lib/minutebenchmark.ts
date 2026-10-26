@@ -1,6 +1,6 @@
 import type { ScoredPlayer } from "./recommend";
 import type { MinutesModel } from "./expectedpoints";
-import { recentMinutesVariant, type RecentMinutesSnapshot } from "./recentminutes";
+import { recentMinutesVariant, detectMinutesRoleTrend, type RecentMinutesSnapshot } from "./recentminutes";
 import { getRedis } from "./kv";
 import { getEventLive } from "./fpl-client";
 
@@ -14,6 +14,7 @@ export interface MinutePrediction {
   base:{minutes:number;appearance:number;start:number|null;over60:number|null};
   recent:{minutes:number;appearance:number;start:number|null;over60:number|null};
   hasRecent:boolean;
+  roleTrend?: "reduced"|"increased"|"stable"|"insufficient";
 }
 export interface MinuteSnapshot {
   version:1;
@@ -40,6 +41,7 @@ export interface MinuteABResult {
   recentEligible:number;
   base:MinuteScore;
   recent:MinuteScore;
+  roleTrendBands?: {trend:"reduced"|"increased"|"stable";base:MinuteScore;recent:MinuteScore}[];
   note:string;
 }
 export interface MinuteABHistory{
@@ -101,7 +103,8 @@ export function buildMinuteSnapshot(
       start:base.start===null?null:clamp(candidate.pStart),
       over60:base.over60===null?null:clamp(candidate.pPlay60),
     };
-    players.push({id:p.element.id,name:p.element.web_name,base,recent:alt,hasRecent});
+    players.push({id:p.element.id,name:p.element.web_name,base,recent:alt,hasRecent,
+      roleTrend:hasRecent?detectMinutesRoleTrend(past):"insufficient"});
   }
   if(!players.length)return null;
   return {
@@ -117,13 +120,13 @@ export function gradeMinuteSnapshot(
   // For a fair paired A/B, compare ONLY players with a real pre-GW
   // recent history; all actual zeros remain, including substitutes.
   const cohort=snapshot.players.filter(p=>{ const x=actual.get(p.id); return p.hasRecent && !!x && Number.isFinite(x.minutes) && x.minutes>=0 && x.minutes<=180; });
-  const score=(kind:"base"|"recent"):MinuteScore=>{
-    if(!cohort.length)return{
+  const score=(kind:"base"|"recent",group=cohort):MinuteScore=>{
+    if(!group.length)return{
       n:0,minutesMAE:0,appearanceBrier:0,startsBrier:null,startsN:0,
       sixtyBrier:null,sixtyN:0,
     };
     let mae=0,appearance=0,start=0,startN=0,sixty=0,sixtyN=0;
-    for(const p of cohort){
+    for(const p of group){
       const outcome=actual.get(p.id)!;
       const x=p[kind];
       const m=boundedMinutes(outcome.minutes);
@@ -137,9 +140,9 @@ export function gradeMinuteSnapshot(
       }
     }
     return{
-      n:cohort.length,
-      minutesMAE:mae/cohort.length,
-      appearanceBrier:appearance/cohort.length,
+      n:group.length,
+      minutesMAE:mae/group.length,
+      appearanceBrier:appearance/group.length,
       startsBrier:startN?start/startN:null,startsN:startN,
       sixtyBrier:sixtyN?sixty/sixtyN:null,sixtyN,
     };
@@ -148,6 +151,10 @@ export function gradeMinuteSnapshot(
     event:snapshot.event,capturedAt:snapshot.capturedAt,settledAt,
     eligible:snapshot.players.filter(p=>actual.has(p.id)).length,
     recentEligible:cohort.length,base:score("base"),recent:score("recent"),
+    roleTrendBands:(["reduced","increased","stable"] as const).map(trend=>{
+      const group=cohort.filter(p=>p.roleTrend===trend);
+      return {trend,base:score("base",group),recent:score("recent",group)};
+    }),
     note:"A/B emparelhado de previsões congeladas antes do deadline. O modelo recente só poderá ser promovido após várias jornadas com ganhos estáveis fora da amostra.",
   };
 }
