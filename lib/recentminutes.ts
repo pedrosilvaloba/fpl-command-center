@@ -125,7 +125,13 @@ export function recentMinutesVariant(base:MinutesModel,recent:RecentMinutesPlaye
   // Confirmed two-match role transitions get slightly more weight, but
   // the season baseline still controls a majority of the estimate.
   const blend=trend==="reduced"||trend==="increased"?0.45:0.35;
-  const expectedMinutes=Math.max(0,Math.min(90,base.expectedMinutes*(1-blend)+weightedMinutes*blend));
+  // Bound a new estimate to a realistic step from the season baseline.
+  // Two unusual matches should trigger attention, not a 60-minute jump.
+  // This is a shadow-policy parameter requiring prospective validation.
+  const rawExpectedMinutes=base.expectedMinutes*(1-blend)+weightedMinutes*blend;
+  const maxChange=trend==="reduced"||trend==="increased"?22:15;
+  const expectedMinutes=Math.max(0,Math.min(90,
+    Math.max(base.expectedMinutes-maxChange,Math.min(base.expectedMinutes+maxChange,rawExpectedMinutes))));
   const pStart=pRecentStart===null?base.pStart:Math.max(0,Math.min(1,base.pStart*(1-blend)+pRecentStart*blend));
   const pAppear=Math.max(pStart,Math.min(1,base.pAppear*(1-blend)+pRecentAppear*blend));
   const pPlay60=Math.max(0,Math.min(pAppear,base.pPlay60*(1-blend)+
