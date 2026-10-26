@@ -65,3 +65,19 @@ const brierBad=judgeMinuteExperiment(historical.map(r=>({
 })));
 assert.equal(brierBad.status,"not-better");
 console.log("minutes evidence gates passed");
+
+const futureHistory = { ...recent, events: [4,5,6,8] };
+const noLeak = buildMinuteSnapshot(player,futureHistory,8,deadline,before);
+assert.ok(noLeak);
+assert.equal(noLeak.lastCompletedEvents.length,0,"future GW can never influence a predeadline model");
+assert.ok(noLeak.players.every(p=>!p.hasRecent));
+const afterCapture = { ...recent, at:"2026-10-26T12:00:00Z" };
+const noLateHistory=buildMinuteSnapshot(player,afterCapture,8,deadline,before);
+assert.ok(noLateHistory);
+assert.equal(noLateHistory.lastCompletedEvents.length,0,"postdeadline history must be rejected");
+const duplicateHistory={...recent,events:[4,5,5,7]};
+assert.equal(buildMinuteSnapshot(player,duplicateHistory,8,deadline,before)?.lastCompletedEvents.length,0);
+const duplicateResults=judgeMinuteExperiment([...historical,historical[0]]);
+assert.equal(duplicateResults.events,11,"duplicate GW cannot manufacture independent weeks");
+assert.equal(duplicateResults.status,"insufficient");
+console.log("prospective minute data leakage and distinct-GW guards passed");
