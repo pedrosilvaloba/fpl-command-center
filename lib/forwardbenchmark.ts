@@ -70,6 +70,8 @@ export interface ForwardResult {
   /** Complete preselected universe, including risky/non-playing players. */
   fullCohort?: { model: ForwardMetric; ppg: ForwardMetric; fpl: ForwardMetric };
   availabilityBands?: { label: string; model: ForwardMetric; ppg: ForwardMetric; fpl: ForwardMetric }[];
+  /** Positional errors on the immutable full player cohort, including actual zeros. */
+  positionBands?: { position: number; model: ForwardMetric; ppg: ForwardMetric; fpl: ForwardMetric }[];
 }
 
 export interface ForwardHistory {
@@ -200,6 +202,15 @@ export function scoreForwardSnapshot(
     ppg: bandMetric(b.players, "ppg"),
     fpl: bandMetric(b.players, "fpl"),
   }));
+  const positionBands = [1,2,3,4].map(position => {
+    const group = all.filter(p => p.position === position);
+    return {
+      position,
+      model: bandMetric(group, "model"),
+      ppg: bandMetric(group, "ppg"),
+      fpl: bandMetric(group, "fpl"),
+    };
+  });
   return {
     event: snapshot.event,
     capturedAt: snapshot.capturedAt,
@@ -207,6 +218,7 @@ export function scoreForwardSnapshot(
     eligible: eligible.length,
     fullCohort,
     availabilityBands,
+    positionBands,
     model: metric(rows("model")),
     ppg: metric(rows("ppg")),
     fpl: metric(rows("fpl")),
