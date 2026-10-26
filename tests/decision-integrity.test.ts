@@ -84,6 +84,18 @@ assert.equal(compare.settlement?.subCount, 2);
 assert.equal(compare.settlement?.holdPoints, normal.points + 4);
 assert.equal(compare.settlement?.gainVsHold, -4, "hit cost must reduce realised gain vs holding");
 assert.ok(compare.settlement?.officialDelta !== undefined);
+const compareCaptain = settleOutcome({...advice, captain:7, vice:6, captainMaxXp:6}, {
+  picks: officialPicks, activeChip:null, officialPoints:0, transfersCost:0, transfersIn:[],
+  minutesById:played, positionById:new Map(Object.keys(pos).map(k=>[Number(k),pos[Number(k)]])),
+}, id=>points.get(id)??0);
+assert.equal(compareCaptain.settlement?.captainPolicyVsMaxXp, 4,
+  "Actual captain policy vs frozen best-xP same-XI candidate, extra armband points");
+const notComparable = settleOutcome({...advice, captain:11, captainMaxXp:7}, {
+  picks: officialPicks, activeChip:null, officialPoints:0, transfersCost:0, transfersIn:[],
+  minutesById:played, positionById:new Map(Object.keys(pos).map(k=>[Number(k),pos[Number(k)]])),
+}, id=>points.get(id)??0);
+assert.equal(notComparable.settlement?.captainPolicyVsMaxXp,undefined,
+  "Absent captain with automatic vice switch is excluded, not mis-scored");
 console.log("decision integrity tests passed");
 
 assert.equal(parseTeamId("2107193"), 2107193);

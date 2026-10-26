@@ -931,6 +931,10 @@ export default async function Home({
         hitCost: advisedPlan?.hitCost ?? 0,
         chip: advisedChip,
         captainSource: captainDecision.source,
+        captainMaxXp: (advisedPlan?.xi ?? starters)
+          .filter(p => Number.isFinite(p.expectedPointsNext))
+          .slice().sort((a,b) => b.expectedPointsNext - a.expectedPointsNext ||
+            a.element.id - b.element.id)[0]?.element.id ?? null,
         predictedXi: advisedPlan?.xiNextPoints ?? xiExpected,
         teamId,
         holdBaseline: transferAdvice.hold

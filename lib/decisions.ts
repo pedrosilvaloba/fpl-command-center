@@ -39,6 +39,8 @@ export interface AdviceRecord {
   hitCost: number;
   chip: string | null;
   captainSource: string;
+  /** Same-XI highest-xP captain frozen before deadline, not a hindsight choice. */
+  captainMaxXp?: number | null;
   predictedXi: number;
   /** Automatically captured prediction, NOT a confirmed user instruction. */
   captureSource?: "automatic";
@@ -71,6 +73,8 @@ export interface OutcomeRecord {
     actualViaMultipliers: number;
     netDifference: number;
     subCount: number;
+    /** Positive when the actual policy beat same-XI max-xP, with both playing. */
+    captainPolicyVsMaxXp?: number;
     holdPoints?: number;
     gainVsHold?: number;
     officialReported: number;
@@ -179,6 +183,15 @@ export function settleOutcome(
           actualViaMultipliers,
           netDifference: app.points - actualViaMultipliers,
           subCount: app.subs.length,
+          ...(advice.chip === null && advice.captain !== null &&
+            advice.captainMaxXp !== null && advice.captainMaxXp !== undefined &&
+            advice.xi.includes(advice.captain) && advice.xi.includes(advice.captainMaxXp) &&
+            advice.captain !== advice.captainMaxXp &&
+            actual.minutesById!.get(advice.captain)! > 0 &&
+            actual.minutesById!.get(advice.captainMaxXp)! > 0
+            ? { captainPolicyVsMaxXp: pts(advice.captain) - pts(advice.captainMaxXp) }
+            : advice.captain !== null && advice.captain === advice.captainMaxXp && advice.chip === null
+              ? { captainPolicyVsMaxXp: 0 } : {}),
           ...(hold?.reliable
             ? { holdPoints: hold.points, gainVsHold: app.points - hold.points }
             : {}),

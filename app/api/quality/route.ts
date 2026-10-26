@@ -63,6 +63,25 @@ export async function GET() {
         model:summarize("model"),ppg:summarize("ppg"),fpl:summarize("fpl") };
     }),
     captainAudit: auditCaptainBaselines(forward.rows),
+    actualCaptainPolicy: (() => {
+      const compared = decisions.rows.flatMap(r => {
+        const x = r.outcome?.settlement?.captainPolicyVsMaxXp;
+        return typeof x === "number" && Number.isFinite(x) &&
+          r.advice?.captainMaxXp != null && deadlines.has(r.event) &&
+          Date.parse(r.advice.at) < Date.parse(deadlines.get(r.event)!) &&
+          Date.parse(r.outcome!.settledAt) > Date.parse(deadlines.get(r.event)!)
+          ? [x] : [];
+      });
+      return {
+        pairedGameweeks: compared.length,
+        extraPoints: compared.reduce((a,b)=>a+b,0),
+        wins: compared.filter(x=>x>0).length,
+        losses: compared.filter(x=>x<0).length,
+        ties: compared.filter(x=>x===0).length,
+        status: compared.length < 12 ? "insufficient-evidence" : "descriptive-only",
+        note: "Política realmente recomendada vs maior xP no mesmo XI; só ambos com minutos e sem chip. Sem provas de vantagem antes de várias jornadas.",
+      };
+    })(),
     captain:{
       pairedGameweeks:captain.length,
       modelBasePoints:sum("model"),
