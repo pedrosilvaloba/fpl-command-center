@@ -1,3 +1,5 @@
+import { getRedis } from "./kv";
+import { multiPeriodCacheKey } from "./multiperiodcache";
 import { planMultipleGameweeks, type PeriodForecast, type MultiPeriodReport } from "./multiperiod";
 import type { SquadState } from "./squadstate";
 
@@ -42,4 +44,24 @@ export function compareFirstWeekStrategies(
   return {horizon:forecasts.slice(0,Math.min(8,opts.horizon??forecasts.length)).length,
     scenarios,preferred:ranked[0]?.strategy??null,
     note:"Comparação hipotética: três percursos de pesquisa limitada, mesmas previsões e janela. Custos de hits já descontados; transferências futuras e preços não garantidos."};
+}
+
+/** The three bounded searches can be expensive. A short input-addressed
+ * cache avoids repeating them when a user reopens the comparison.
+ * Never serve results from another roster, bank, FT balance or forecast.
+ */
+export async function cachedFirstWeekStrategies(
+  state:SquadState,forecasts:PeriodForecast[],opts:{beamWidth?:number;horizon?:number}={}
+):Promise<FirstWeekComparison>{
+  const redis=getRedis();
+  const horizon=opts.horizon??forecasts.length;
+  const width=opts.beamWidth??10;
+  const key="firstweek:v1:"+multiPeriodCacheKey(state,forecasts,horizon,width);
+  if(redis)try{
+    const old=await redis.get<FirstWeekComparison>(key);
+    if(old && Array.isArray(old.scenarios) && old.scenarios.length===3)return old;
+  }catch{}
+  const result=compareFirstWeekStrategies(state,forecasts,opts);
+  if(redis)try{await redis.set(key,result,{ex:120});}catch{}
+  return result;
 }
