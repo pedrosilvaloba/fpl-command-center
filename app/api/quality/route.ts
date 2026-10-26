@@ -49,6 +49,18 @@ export async function GET() {
       pendingGWs:minutes.pending,
       note:verdict.rationale,
     },
+    playerForecastByPosition: [1,2,3,4].map(position => {
+      const bands=forward.rows.flatMap(row => row.positionBands?.filter(b=>b.position===position) ?? []);
+      const summarize=(key:"model"|"ppg"|"fpl")=>{
+        const valid=bands.map(b=>b[key]).filter(m=>m.n>0);
+        const n=valid.reduce((acc,m)=>acc+m.n,0);
+        return { playerGameweeks:n,
+          mae:n ? Math.round(valid.reduce((acc,m)=>acc+m.mae*m.n,0)/n*100)/100 : null,
+          bias:n ? Math.round(valid.reduce((acc,m)=>acc+m.bias*m.n,0)/n*100)/100 : null };
+      };
+      return { position,pairedGameweeks:bands.filter(b=>b.model.n>0 && b.ppg.n>0).length,
+        model:summarize("model"),ppg:summarize("ppg"),fpl:summarize("fpl") };
+    }),
     captain:{
       pairedGameweeks:captain.length,
       modelBasePoints:sum("model"),
