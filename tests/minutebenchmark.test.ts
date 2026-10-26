@@ -224,6 +224,25 @@ assert.equal(compareMinutesDecisions(assigned,challenger,assigned.slice(0,14).ma
 assert.equal(compareMinutesDecisions(assigned,assigned,assigned.map(p=>p.element.id)).changes.out.length,0);
 const invalidPair:FrozenPair={version:1,event:8,capturedAt:deadline,deadline,baseline:{valid:true,xi:[],captain:1,vice:2,expectedXI:0},challenger:{valid:true,xi:[],captain:1,vice:2,expectedXI:0},benchBase:[],benchChallenger:[]};
 assert.equal(gradeFrozenPair(invalidPair,new Map()),null);
+const identicalPlayers=new Map(Array.from({length:15},(_,i)=>{
+ const id=i+1;
+ return [id,{id,position:(id<=2?1:id<=7?2:id<=12?3:4) as 1|2|3|4,
+ minutes:90,points:2}] as const;
+}));
+const validFrozen:FrozenPair={
+ ...invalidPair,capturedAt:"2026-10-25T10:00:00Z",
+ baseline:{valid:true,xi:[1,3,4,5,6,8,9,10,11,13,14],captain:8,vice:9,expectedXI:50},
+ challenger:{valid:true,xi:[1,3,4,5,6,8,9,10,11,13,14],captain:9,vice:8,expectedXI:50},
+ benchBase:[2,7,12,15],benchChallenger:[2,7,12,15],
+};
+assert.ok(gradeFrozenPair(validFrozen,identicalPlayers,"2026-10-27T20:00:00Z"));
+assert.equal(gradeFrozenPair({...validFrozen,challenger:{...validFrozen.challenger,captain:15}},
+ identicalPlayers,"2026-10-27T20:00:00Z"),null,
+ "Captain outside XI cannot settle");
+assert.equal(gradeFrozenPair({...validFrozen,benchChallenger:[2,7,12,12]},
+ identicalPlayers,"2026-10-27T20:00:00Z"),null,
+ "Duplicate player cannot settle");
+
 console.log("minutes paired benchmark tests passed");
 
 assert.equal(judgeMinuteExperiment([result]).status,"insufficient");
