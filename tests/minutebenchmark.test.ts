@@ -1,3 +1,4 @@
+import { runDailyMinutesCapture } from "../lib/minutescapturecron";
 import assert from "node:assert/strict";
 import { minuteDecisionAlerts } from "../lib/minutedecisionimpact";
 import { compareMinutesDecisions } from "../lib/minutesdecisioncomparison";
@@ -295,3 +296,20 @@ const duplicateResults=judgeMinuteExperiment([...historical,historical[0]]);
 assert.equal(duplicateResults.events,11,"duplicate GW cannot manufacture independent weeks");
 assert.equal(duplicateResults.status,"insufficient");
 console.log("prospective minute data leakage and distinct-GW guards passed");
+
+async function captureEnvironmentGuardRegression(){
+  const previous=process.env.VERCEL_ENV;
+  try {
+    for(const environment of [undefined,"preview","development"]){
+      if(environment===undefined)delete process.env.VERCEL_ENV;
+      else process.env.VERCEL_ENV=environment;
+      const result=await runDailyMinutesCapture();
+      assert.deepEqual(result,{ok:false,status:"production-only"},
+        "Non-production execution must stop before Redis or FPL access");
+    }
+  }finally{
+    if(previous===undefined)delete process.env.VERCEL_ENV;
+    else process.env.VERCEL_ENV=previous;
+  }
+}
+void captureEnvironmentGuardRegression().catch(err=>{console.error(err);process.exitCode=1;});
