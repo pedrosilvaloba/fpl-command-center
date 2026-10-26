@@ -4,6 +4,7 @@ import { getForwardHistory } from "@/lib/forwardbenchmark";
 import { getDecisionHistory } from "@/lib/decisions";
 import { auditFrozenDecisions } from "@/lib/decisionquality";
 import { getBootstrap } from "@/lib/fpl-client";
+import { auditCaptainBaselines } from "@/lib/captainquality";
 
 /** Public, aggregate-only evidence status: no manager identifiers, player
  * picks, notes, credentials or private team state. */
@@ -61,6 +62,7 @@ export async function GET() {
       return { position,pairedGameweeks:bands.filter(b=>b.model.n>0 && b.ppg.n>0).length,
         model:summarize("model"),ppg:summarize("ppg"),fpl:summarize("fpl") };
     }),
+    captainAudit: auditCaptainBaselines(forward.rows),
     captain:{
       pairedGameweeks:captain.length,
       modelBasePoints:sum("model"),
