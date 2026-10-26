@@ -237,6 +237,11 @@ const changedWeeks=weeks.map((w,i)=>i!==0?w:{...w,players:w.players.map(p=>
   p.element.id===500?{...p,expectedPointsNext:p.expectedPointsNext+1}:p)});
 const keyAfter=multiPeriodCacheKey(multiState,changedWeeks,3,10);
 assert.notEqual(keyBefore,keyAfter,"A changed player projection must invalidate the cached plan");
+const changedCaptainAvailability=weeks.map((w,i)=>i!==0?w:{
+ ...w,players:w.players.map(p=>p.element.id===500?{...p,pPlay:.4}:p)
+});
+assert.notEqual(keyBefore,multiPeriodCacheKey(multiState,changedCaptainAvailability,3,10),
+ "Changed captain appearance probabilities must invalidate cached forecasts");
 assert.notEqual(keyBefore,multiPeriodCacheKey({...multiState,bankM:.1},weeks,3,10),
   "Budget changes must invalidate all cached plans");
 assert.notEqual(keyBefore,multiPeriodCacheKey(multiState,weeks,5,10),
