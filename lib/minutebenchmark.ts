@@ -13,6 +13,7 @@ export interface MinutePrediction {
   name:string;
   base:{minutes:number;appearance:number;start:number|null;over60:number|null};
   recent:{minutes:number;appearance:number;start:number|null;over60:number|null};
+  uncappedMinutes?:number;
   hasRecent:boolean;
   roleTrend?: "reduced"|"increased"|"stable"|"insufficient";
   returnPattern?: "cameos"|"starting-return"|"none"|"insufficient";
@@ -43,6 +44,9 @@ export interface MinuteABResult {
   recentEligible:number;
   base:MinuteScore;
   recent:MinuteScore;
+  uncappedMinutesMAE?:number;
+  cappedVsUncappedMinutesGain?:number;
+  uncappedComparableN?:number;
   roleTrendBands?: {trend:"reduced"|"increased"|"stable";base:MinuteScore;recent:MinuteScore}[];
   returnPatternBands?: {pattern:"cameos"|"starting-return";base:MinuteScore;recent:MinuteScore}[];
   availabilityBands?: {context:"available"|"doubtful"|"unavailable"|"unknown";base:MinuteScore;recent:MinuteScore}[];
@@ -101,6 +105,7 @@ export function buildMinuteSnapshot(
       reasons:[],
     };
     const candidate=hasRecent ? recentMinutesVariant(asMinutes,past) : asMinutes;
+    const uncapped=hasRecent ? recentMinutesVariant(asMinutes,past,false) : asMinutes;
     const alt:MinutePrediction["recent"]={
       minutes:boundedMinutes(candidate.expectedMinutes),
       appearance:clamp(candidate.pAppear),
@@ -117,6 +122,7 @@ export function buildMinuteSnapshot(
         ? "doubtful" as const
         : status==="a" ? "available" as const : "unknown" as const;
     players.push({id:p.element.id,name:p.element.web_name,base,recent:alt,hasRecent,
+      uncappedMinutes:hasRecent?boundedMinutes(uncapped.expectedMinutes):undefined,
       availabilityContext,
       returnPattern:hasRecent && availabilityContext==="available"
         ?detectReturnPattern(past):"insufficient",
@@ -168,6 +174,12 @@ export function gradeMinuteSnapshot(
     event:snapshot.event,capturedAt:snapshot.capturedAt,settledAt,
     eligible:snapshot.players.filter(p=>actual.has(p.id)).length,
     recentEligible:cohort.length,base:score("base"),recent:score("recent"),
+    ...(()=>{const comparable=cohort.filter(p=>typeof p.uncappedMinutes==="number" && Number.isFinite(p.uncappedMinutes));
+      if(!comparable.length)return {};
+      const uncappedMinutesMAE=comparable.reduce((sum,p)=>sum+Math.abs(p.uncappedMinutes!-actual.get(p.id)!.minutes),0)/comparable.length;
+      const cappedMAE=comparable.reduce((sum,p)=>sum+Math.abs(p.recent.minutes-actual.get(p.id)!.minutes),0)/comparable.length;
+      return {uncappedMinutesMAE,cappedVsUncappedMinutesGain:uncappedMinutesMAE-cappedMAE,uncappedComparableN:comparable.length};
+    })(),
     roleTrendBands:(["reduced","increased","stable"] as const).map(trend=>{
       const group=cohort.filter(p=>p.roleTrend===trend);
       return {trend,base:score("base",group),recent:score("recent",group)};
