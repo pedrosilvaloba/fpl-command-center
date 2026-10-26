@@ -48,6 +48,8 @@ export async function GET() {
       intervalLow:verdict.confidenceLow,
       intervalHigh:verdict.confidenceHigh,
       participationBrierImprovement:verdict.meanGainBrier,
+      startsEvaluatedGameweeks:verdict.startsEvaluatedGameweeks,
+      startsBrierImprovement:verdict.meanGainStartsBrier,
       pendingGWs:minutes.pending,
       note:verdict.rationale,
     },
