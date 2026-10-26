@@ -90,6 +90,8 @@ import { compareMinutesDecisions } from "@/lib/minutesdecisioncomparison";
 import { makeFrozenPair, captureFrozenMinutesPair } from "@/lib/minutesdecisionoutcomes";
 import MinuteABPanel from "@/components/MinuteABPanel";
 import MultiPeriodPanel from "@/components/MultiPeriodPanel";
+import FirstWeekStrategiesPanel from "@/components/FirstWeekStrategiesPanel";
+import { compareFirstWeekStrategies } from "@/lib/firstweekstrategies";
 import AdviserPanel from "@/components/AdviserPanel";
 import DecisionConfirmationPanel from "@/components/DecisionConfirmationPanel";
 import TeamPreferenceSync from "@/components/TeamPreferenceSync";
@@ -763,6 +765,15 @@ export default async function Home({
       })
     : null;
 
+  // Three bounded searches are opt-in: avoid extra solver work on ordinary
+  // simulation visits, and never perform them on the homepage.
+  const firstWeekComparison = view==="simular" && sp.comparar==="1" &&
+    periodForecasts.length>0 && squadState.available
+    ? compareFirstWeekStrategies(squadState,periodForecasts,{
+        horizon:periodForecasts.length,beamWidth:10
+      })
+    : null;
+
   // ---- how the last/current gameweek actually went ---------------------
   const reviewEvent = lastPublishedEvent;
   const gwReview =
@@ -1408,6 +1419,9 @@ export default async function Home({
               </div>
               <div id="plano-multiplo" className="mt-6 border-t border-border pt-5">
                 {multiPeriod && <MultiPeriodPanel report={multiPeriod} teamId={teamId}
+                  horizon={requestedHorizon} />}
+                {multiPeriod?.available && <FirstWeekStrategiesPanel
+                  comparison={firstWeekComparison} teamId={teamId}
                   horizon={requestedHorizon} />}
               </div>
               <div className="mt-4">
