@@ -72,10 +72,16 @@ export function auditTransferShadow(weeks:PairedTransferWeek[]) {
     inspected:weeks.length,pairedGameweeks:paired.length,excluded,
     shadowMinusCurrent:paired.length?total:null,
     meanShadowMinusCurrent:paired.length?total/paired.length:null,
+    // Same-decision weeks inflate n without testing which policy is better.
+    divergentGameweeks:paired.filter(p=>p.shadowMinusCurrent!==0).length,
+    meanDifferenceWhenDivergent:(()=>{
+      const different=paired.filter(p=>p.shadowMinusCurrent!==0);
+      return different.length?different.reduce((sum,p)=>sum+p.shadowMinusCurrent,0)/different.length:null;
+    })(),
     wins:paired.filter(p=>p.shadowMinusCurrent>0).length,
     losses:paired.filter(p=>p.shadowMinusCurrent<0).length,
     ties:paired.filter(p=>p.shadowMinusCurrent===0).length,
-    verdict:paired.length<12?"insufficient-evidence" as const:"descriptive-only" as const,
-    note:"Same-GW simulated points; squad/transfer identity checked, but not budget, club quota, future FT accrual or multiweek feasibility.",
+    verdict:paired.filter(p=>p.shadowMinusCurrent!==0).length<12?"insufficient-evidence" as const:"descriptive-only" as const,
+    note:"Same-GW simulated points; tied outcomes do not count as policy disagreements. Budget, club quota, future FT accrual and multiweek feasibility remain unverified.",
   };
 }
