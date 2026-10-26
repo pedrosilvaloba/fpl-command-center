@@ -30,6 +30,30 @@ export function planSensitivity(plan: TransferPlan, downsidePct = 20): Sensitivi
   };
 }
 
+/**
+ * A counterfactual stress diagnostic, NOT a recommendation policy. Identifies
+ * nominal improvements that disappear under a modest downgrade of incoming
+ * forecasts. The live planner remains authoritative until paired prospective
+ * decision outcomes establish which threshold improves actual points.
+ */
+export function transferRobustness(plan: TransferPlan): {
+  verdict: "hold" | "below-threshold" | "fragile" | "robust";
+  stressedGain10: number;
+  stressedGain20: number;
+  requiredEdge: number;
+  evidence: "hypothetical";
+} {
+  const threshold = Number.isFinite(plan.requiredEdge) ? Math.max(0,plan.requiredEdge) : Infinity;
+  const ten = planSensitivity(plan,10).stressedGain;
+  const twenty = planSensitivity(plan,20).stressedGain;
+  const verdict = plan.moves.length===0 ? "hold" :
+    !Number.isFinite(plan.netGainVsHold) || plan.netGainVsHold < threshold
+      ? "below-threshold" :
+      twenty >= threshold ? "robust" : "fragile";
+  return {verdict,stressedGain10:ten,stressedGain20:twenty,
+    requiredEdge:threshold,evidence:"hypothetical"};
+}
+
 export interface DecisionAlternative {
   id: string;
   label: string;
@@ -40,6 +64,7 @@ export interface DecisionAlternative {
   transfers: string[];
   confidence: number;
   recommended: boolean;
+  robustness: ReturnType<typeof transferRobustness>;
 }
 export function toDecisionAlternatives(
   plans: TransferPlan[],
@@ -58,6 +83,7 @@ export function toDecisionAlternatives(
       hits: p.hitCost,
       transfers: p.moves.map(m => m.out.element.web_name + " → " + m.in.element.web_name),
       confidence: p.confidence,
+      robustness: transferRobustness(p),
       recommended: p.key === recommended?.key && p.moves.length === recommended?.moves.length &&
         p.moves.every((m, i) => m.in.element.id === recommended.moves[i]?.in.element.id),
     });
