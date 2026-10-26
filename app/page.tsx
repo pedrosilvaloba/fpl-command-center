@@ -84,7 +84,7 @@ import ChipScenarioPanel from "@/components/ChipScenarioPanel";
 import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, parseWildcardProfile } from "@/lib/chipscenarioview";
 import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
 import { cachedMultiPeriod } from "@/lib/multiperiodcache";
-import { readRecentMinutes } from "@/lib/recentminutes";
+import { readRecentMinutes, validProspectiveMinutesSnapshot } from "@/lib/recentminutes";
 import { captureMinuteBenchmark, getMinuteABHistory } from "@/lib/minutebenchmark";
 import { compareMinutesDecisions } from "@/lib/minutesdecisioncomparison";
 import MinuteABPanel from "@/components/MinuteABPanel";
@@ -656,7 +656,9 @@ export default async function Home({
   // Full-model same-squad shadow, limited to the analysis view to avoid
   // repeating a 600-player score pass on the everyday dashboard. This DOES
   // NOT change live decisions or claim hypothetical xP equals observed points.
-  const minuteDecisionComparison = view === "analisar" && recentMinutes &&
+  const minuteDecisionComparison = view === "analisar" &&
+    validProspectiveMinutesSnapshot(recentMinutes,fromEvent,
+      bootstrap.events.find(e=>e.id===fromEvent)?.deadline_time??"") &&
     squadState.available && squadState.owned.length === 15 && !experimentalRecentMinutes
     ? compareMinutesDecisions(
         scored,
