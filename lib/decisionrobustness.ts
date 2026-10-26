@@ -54,6 +54,39 @@ export function transferRobustness(plan: TransferPlan): {
     requiredEdge:threshold,evidence:"hypothetical"};
 }
 
+/** Paired decision policies over exactly the same already-computed plans.
+ * Shadow is counterfactual: no automatic promotion, no extra solver calls.
+ * Do not confuse 20% hypothetical stress with calibrated risk.
+ */
+export function compareTransferPolicies(
+  plans: TransferPlan[],
+  live: TransferPlan | null
+): {
+  current: string | null;
+  shadow: string | null;
+  differs: boolean;
+  shadowReason: "robust-plan" | "hold" | "no-valid-hold";
+  evidence: "hypothetical";
+} {
+  const hold = plans.find(p => p.key === "manter" && p.feasible);
+  const eligible = plans.filter(p => p.feasible && p.key !== "manter" &&
+    p.moves.length > 0 && p.moves.every(m => m.in.element.id > 0 && m.out.element.id > 0) &&
+    transferRobustness(p).verdict === "robust" &&
+    Number.isFinite(p.netGainVsHold) && p.netGainVsHold >= p.requiredEdge &&
+    !p.moves.some(m => m.in.expectedPoints - m.out.expectedPoints < -2));
+  eligible.sort((a,b)=>b.netGainVsHold-a.netGainVsHold || a.key.localeCompare(b.key));
+  const shadow = eligible[0] ?? hold ?? null;
+  return {
+    current: live?.key ?? null,
+    shadow: shadow?.key ?? null,
+    differs: !!live && !!shadow && (live.key !== shadow.key ||
+      live.moves.map(m=>m.out.element.id+":"+m.in.element.id).sort().join("|") !==
+      shadow.moves.map(m=>m.out.element.id+":"+m.in.element.id).sort().join("|")),
+    shadowReason: eligible.length ? "robust-plan" : hold ? "hold" : "no-valid-hold",
+    evidence: "hypothetical",
+  };
+}
+
 export interface DecisionAlternative {
   id: string;
   label: string;

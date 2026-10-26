@@ -93,7 +93,7 @@ import DecisionConfirmationPanel from "@/components/DecisionConfirmationPanel";
 import TeamPreferenceSync from "@/components/TeamPreferenceSync";
 import { cookies } from "next/headers";
 import DecisionLabPanel from "@/components/DecisionLabPanel";
-import { toDecisionAlternatives } from "@/lib/decisionrobustness";
+import { toDecisionAlternatives, compareTransferPolicies } from "@/lib/decisionrobustness";
 import ElitePanel from "@/components/ElitePanel";
 import type { ScoredPlayer } from "@/lib/recommend";
 import DecisionLogPanel from "@/components/DecisionLogPanel";
@@ -691,6 +691,7 @@ export default async function Home({
   });
   // eslint-disable-next-line react-hooks/purity
   const plannerDurationMs = Math.round(performance.now() - plannerStartedAt);
+  const policyShadow = compareTransferPolicies(transferAdvice.plans, transferAdvice.recommended);
   if (plannerDurationMs > 3000) {
     console.warn("fpl:slow-transfer-planner", {
       durationMs: plannerDurationMs,
@@ -1344,6 +1345,15 @@ export default async function Home({
             <div className="mb-6 border-b border-border pb-5">
               <SubHeading>Transferências — comparar e desafiar</SubHeading>
               <DecisionLabPanel alternatives={toDecisionAlternatives(transferAdvice.plans, transferAdvice.recommended)} />
+              <div className="mt-3 rounded-lg border border-border bg-surface-2 p-3 text-xs text-text-muted">
+                <p className="font-semibold text-text">Ensaio de robustez (não altera o conselho)</p>
+                <p className="mt-1">
+                  Motor atual: {policyShadow.current ?? "sem plano"} · cenário prudente: {policyShadow.shadow ?? "sem alternativa"}.
+                  {policyShadow.differs
+                    ? " Os dois critérios divergem. A alternativa prudente é experimental e não deve ser adotada sem resultados reais."
+                    : " Os critérios estão alinhados neste conjunto de planos."}
+                </p>
+              </div>
               <div className="mt-4 rounded-lg border border-border bg-surface-2 p-3">
                 <p className="text-sm font-semibold">Previsão de minutos: testar recência</p>
                 <p className="mt-1 text-xs text-text-muted">
