@@ -41,7 +41,15 @@ interface Node {
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 const priceT = (p: ScoredPlayer) => Math.round(p.priceM * 10);
-const key = (n: Node) => n.ids.slice().sort((a,b) => a-b).join(",") + ":" + n.free + ":" + n.bankT;
+/** Equivalent rosters can have DIFFERENT future sale proceeds depending on
+ * acquisition history. Omitting the sale basis silently merges paths that
+ * have different legal next-week budgets. */
+export function multiPeriodStateKey(ids:number[],free:number,bankT:number,sellPrices:Map<number,number>):string {
+  return ids.slice().sort((a,b)=>a-b).map(id=>id+"@"+(sellPrices.get(id)??"unknown")).join(",")
+    +":"+free+":"+bankT;
+}
+const key=(n:Node)=>multiPeriodStateKey(n.ids,n.free,n.bankT,n.ownedSellT);
+const churn=(n:Node)=>n.steps.reduce((sum,step)=>sum+step.moves.length,0);
 const need: Record<number, number> = { 1: 2, 2: 5, 3: 5, 4: 3 };
 
 /**
@@ -194,17 +202,18 @@ export function planMultipleGameweeks(
     const unique=new Map<string,Node>();
     for(const n of next){
       const id=key(n);
-      if(!unique.has(id)||unique.get(id)!.total<n.total)unique.set(id,n);
+      if(!unique.has(id)||unique.get(id)!.total<n.total-1e-8 ||
+        (Math.abs(unique.get(id)!.total-n.total)<=1e-8&&churn(n)<churn(unique.get(id)!)))unique.set(id,n);
     }
     // Look ahead to avoid the trivial greedy path that sells assets with
     // attractive upcoming fixtures. This heuristic is not a guarantee.
     const potential=(n:Node) => weeks.slice(k+1).reduce((sum,_,idx)=>sum+scoreWeek(n,k+idx+1).points,0);
     beam=[...unique.values()]
-      .sort((a,b)=>(b.total+potential(b)+b.free*.2)-(a.total+potential(a)+a.free*.2))
+      .sort((a,b)=>(b.total+potential(b)+b.free*.2)-(a.total+potential(a)+a.free*.2)||churn(a)-churn(b))
       .slice(0,width);
     if(!beam.length)return unavailable("O planeador não encontrou uma sequência legal.");
   }
-  const best=beam.slice().sort((a,b)=>b.total-a.total)[0];
+  const best=beam.slice().sort((a,b)=>b.total-a.total||churn(a)-churn(b))[0];
   // Hypothetical forecast downside test for acquired assets, not calibrated
   // uncertainty or a reason to force a transfer. An asset is at risk only
   // while still present in the chosen path.
