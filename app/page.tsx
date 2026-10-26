@@ -84,10 +84,14 @@ import ChipScenarioPanel from "@/components/ChipScenarioPanel";
 import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, parseWildcardProfile } from "@/lib/chipscenarioview";
 import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
 import { cachedMultiPeriod } from "@/lib/multiperiodcache";
-import { readRecentMinutes } from "@/lib/recentminutes";
+import { readRecentMinutes, validProspectiveMinutesSnapshot } from "@/lib/recentminutes";
 import { captureMinuteBenchmark, getMinuteABHistory } from "@/lib/minutebenchmark";
+import { compareMinutesDecisions } from "@/lib/minutesdecisioncomparison";
+import { makeFrozenPair, captureFrozenMinutesPair } from "@/lib/minutesdecisionoutcomes";
 import MinuteABPanel from "@/components/MinuteABPanel";
 import MultiPeriodPanel from "@/components/MultiPeriodPanel";
+import FirstWeekStrategiesPanel from "@/components/FirstWeekStrategiesPanel";
+import { cachedFirstWeekStrategies } from "@/lib/firstweekstrategies";
 import AdviserPanel from "@/components/AdviserPanel";
 import DecisionConfirmationPanel from "@/components/DecisionConfirmationPanel";
 import TeamPreferenceSync from "@/components/TeamPreferenceSync";
@@ -652,6 +656,32 @@ export default async function Home({
       : EMPTY_SQUAD_STATE;
   const budgetM = squadState.available ? squadState.totalBudgetM : 100;
 
+  // Full-model same-squad shadow, limited to the analysis view to avoid
+  // repeating a 600-player score pass on the everyday dashboard. This DOES
+  // NOT change live decisions or claim hypothetical xP equals observed points.
+  const minuteDecisionComparison = view === "analisar" &&
+    validProspectiveMinutesSnapshot(recentMinutes,fromEvent,
+      bootstrap.events.find(e=>e.id===fromEvent)?.deadline_time??"") &&
+    squadState.available && squadState.owned.length === 15 && !experimentalRecentMinutes
+    ? compareMinutesDecisions(
+        scored,
+        applyDispersionCorrection(
+          applyCalibration(buildScoredPlayers(
+            bootstrap,fixtures,fromEvent,5,oddsMatches,activeInsights,
+            undefined,lastSeasonTable,recentMinutes
+          ),learning.calibration),dispersionCorrection).applied,
+        squadState.owned.map(p=>p.elementId),posture.beta)
+    : null;
+
+
+
+  if (minuteDecisionComparison && process.env.VERCEL_ENV==="production" &&
+    teamId===Number(DEFAULT_TEAM_ID) && !experimentalRecentMinutes) {
+    await captureFrozenMinutesPair(makeFrozenPair(fromEvent,
+      bootstrap.events.find(e=>e.id===fromEvent)?.deadline_time??"",
+      minuteDecisionComparison,squadState.owned.map(p=>p.elementId)));
+  }
+
   const { squad, starters, totalCost, method: squadMethod } = buildOptimalSquad(
     scored,
     budgetM,
@@ -732,6 +762,15 @@ export default async function Home({
   const multiPeriod = periodForecasts.length > 0
     ? await cachedMultiPeriod(squadState, periodForecasts, {
         horizon: periodForecasts.length, beamWidth: 10,
+      })
+    : null;
+
+  // Three bounded searches are opt-in: avoid extra solver work on ordinary
+  // simulation visits, and never perform them on the homepage.
+  const firstWeekComparison = view==="simular" && sp.comparar==="1" &&
+    periodForecasts.length>0 && squadState.available
+    ? await cachedFirstWeekStrategies(squadState,periodForecasts,{
+        horizon:periodForecasts.length,beamWidth:10
       })
     : null;
 
@@ -966,7 +1005,7 @@ export default async function Home({
   // completos (elemento da FPL inteiro, razões, risco, decomposição) eram
   // enviados para o browser porque o Shadow Team é um componente de
   // cliente. Ele só usa uma dúzia de campos; vai só isso.
-  const shadowPlayers = scored.map(
+  const shadowPlayers = (view === "simular" || view === "sistema" ? scored : []).map(
     (p) =>
       ({
         element: {
@@ -1381,6 +1420,9 @@ export default async function Home({
               <div id="plano-multiplo" className="mt-6 border-t border-border pt-5">
                 {multiPeriod && <MultiPeriodPanel report={multiPeriod} teamId={teamId}
                   horizon={requestedHorizon} />}
+                {multiPeriod?.available && <FirstWeekStrategiesPanel
+                  comparison={firstWeekComparison} teamId={teamId}
+                  horizon={requestedHorizon} />}
               </div>
               <div className="mt-4">
                 <SubHeading>E se esperasse e acumulasse mais uma FT?</SubHeading>
@@ -1463,6 +1505,24 @@ export default async function Home({
             <div className="mt-5 border-t border-border pt-4">
               <SubHeading>Experiência A/B — minutos da época vs. minutos recentes</SubHeading>
               <MinuteABPanel history={minuteABHistory} />
+              {minuteDecisionComparison && <div className="mt-4 rounded-xl border border-border p-4 space-y-2">
+                <p className="font-semibold text-sm">Impacto experimental nas decisões</p>
+                {!minuteDecisionComparison.comparable
+                  ? <p className="text-xs text-text-muted">Comparação indisponível: não foi possível validar a mesma equipa de 15 jogadores nas duas previsões.</p>
+                  : <>
+                    <p className="text-xs text-text-muted">Recálculo completo de pontos esperados para os mesmos 15 jogadores. Não altera o teu onze nem demonstra mais pontos reais.</p>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="rounded-lg bg-surface-2 p-3">Trocas no XI: <strong>{minuteDecisionComparison.changes.out.length}</strong></div>
+                      <div className="rounded-lg bg-surface-2 p-3">Capitão: <strong>{minuteDecisionComparison.captainChanged ? `${bootstrap.elements.find(p=>p.id===minuteDecisionComparison.baseline.captain)?.web_name??"—"} → ${bootstrap.elements.find(p=>p.id===minuteDecisionComparison.challenger.captain)?.web_name??"—"}`:"Mantém-se"}</strong></div>
+                      <div className="rounded-lg bg-surface-2 p-3">Vice: <strong>{minuteDecisionComparison.viceChanged ? `${bootstrap.elements.find(p=>p.id===minuteDecisionComparison.baseline.vice)?.web_name??"—"} → ${bootstrap.elements.find(p=>p.id===minuteDecisionComparison.challenger.vice)?.web_name??"—"}`:"Mantém-se"}</strong></div>
+                      <div className="rounded-lg bg-surface-2 p-3">Alteração de xP no XI: <strong>{(minuteDecisionComparison.challenger.expectedXI-minuteDecisionComparison.baseline.expectedXI).toFixed(1)}</strong></div>
+                    </div>
+                    {minuteDecisionComparison.changes.out.length>0 && <p className="text-xs text-text-muted">
+                      Saem: {minuteDecisionComparison.changes.out.map(id=>bootstrap.elements.find(p=>p.id===id)?.web_name??String(id)).join(", ")}.
+                      Entram: {minuteDecisionComparison.changes.in.map(id=>bootstrap.elements.find(p=>p.id===id)?.web_name??String(id)).join(", ")}.
+                    </p>}
+                  </>}
+              </div>}
             </div>
           </div>
 
@@ -1507,7 +1567,7 @@ export default async function Home({
                     </tr>
                   </thead>
                   <tbody>
-                    {accuracyHistory.results.map((r) => (
+                    {accuracyHistory.results.slice(sp.historico==="1"?0:-8).map((r) => (
                       <tr key={r.event} className="border-t border-border">
                         <td className="py-2 pr-3">GW{r.event}</td>
                         <td className="py-2 pr-3 text-right font-mono tabular">
@@ -1586,6 +1646,11 @@ export default async function Home({
                 </p>
               </div>
             )}
+            {accuracyHistory.results.length>8 && <p className="mt-3 text-xs text-text-muted">
+              {sp.historico==="1"
+                ? <a className="text-accent underline" href={`/?team=${teamId}&view=analisar#aprendizagem`}>Mostrar apenas oito jornadas</a>
+                : <a className="text-accent underline" href={`/?team=${teamId}&view=analisar&historico=1#aprendizagem`}>Ver histórico completo ({accuracyHistory.results.length} jornadas)</a>}
+            </p>}
           </div>
 
           <div className="mt-6 border-t border-border pt-5">
@@ -1774,6 +1839,11 @@ export default async function Home({
               disappear — the opposite of what it is for. */}
           {leagueResults.length > 0 && (
             <div className="mt-5">
+              {leagueResults.length>20 && <p className="mb-2 text-xs">
+                {sp.ligaCompleta==="1"
+                  ? <a className="text-accent underline" href={`/?team=${teamId}&view=analisar#liga`}>Mostrar as primeiras 20 equipas</a>
+                  : <a className="text-accent underline" href={`/?team=${teamId}&view=analisar&ligaCompleta=1#liga`}>Ver todas as {leagueResults.length} equipas da liga</a>}
+              </p>}
               <p className="mb-2 flex flex-wrap items-baseline justify-between gap-2 text-xs text-text-muted">
                 <span>
                   Liga completa — <strong className="text-text">{leagueResults.length}</strong>{" "}
@@ -1803,7 +1873,7 @@ export default async function Home({
                   </tr>
                 </thead>
                 <tbody>
-                  {leagueResults.map((r) => (
+                  {leagueResults.slice(0,sp.ligaCompleta==="1"?undefined:20).map((r) => (
                     <tr
                       key={r.id}
                       className={`border-t border-border ${
@@ -1834,6 +1904,16 @@ export default async function Home({
           )}
         </Section>
 
+        {sp.detalhe==="1" ? <a className="mb-4 inline-block text-xs text-accent underline"
+          href={`/?team=${teamId}&view=analisar#liga`}>Fechar dados de apoio</a>
+          : <div className="rounded-xl border border-border bg-surface-2 p-4">
+              <p className="text-sm font-semibold">Dados de apoio e referências</p>
+              <p className="mt-1 text-xs text-text-muted">Plantel ideal, escolhas, indicadores e playbook.
+                Abre apenas quando precisares de investigar — o diagnóstico principal já está acima.</p>
+              <a className="mt-3 inline-block rounded-lg border border-accent px-3 py-2 text-xs font-semibold text-accent"
+                href={`/?team=${teamId}&view=analisar&detalhe=1#ideal`}>Consultar análise detalhada</a>
+            </div>}
+        {sp.detalhe==="1" && (<>
         <TierHeading label="Consultar" note="dados de apoio, para quando quiseres investigar" />
         {/* ================= 3. plantel ideal ================= */}
         <Section
@@ -2229,6 +2309,7 @@ export default async function Home({
           </div>
         </Section>
 
+        </>)}
         {/* MANUTENÇÃO, NO FIM — E A RAZÃO É UMA QUEIXA DIRETA DO DONO.
             Este painel estava em QUINTO lugar na página, acima do plantel do
             próprio gestor. É diagnóstico da máquina, não uma decisão de FPL:

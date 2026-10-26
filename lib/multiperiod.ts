@@ -1,5 +1,5 @@
 import type { ScoredPlayer } from "./recommend";
-import { pickBestXI } from "./recommend";
+import { pickBestXI, pickCaptain } from "./recommend";
 import type { SquadState } from "./squadstate";
 
 export interface PeriodForecast { event: number; players: ScoredPlayer[] }
@@ -41,8 +41,26 @@ interface Node {
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 const priceT = (p: ScoredPlayer) => Math.round(p.priceM * 10);
-const key = (n: Node) => n.ids.slice().sort((a,b) => a-b).join(",") + ":" + n.free + ":" + n.bankT;
+/** Equivalent rosters can have DIFFERENT future sale proceeds depending on
+ * acquisition history. Omitting the sale basis silently merges paths that
+ * have different legal next-week budgets. */
+export function multiPeriodStateKey(ids:number[],free:number,bankT:number,sellPrices:Map<number,number>):string {
+  return ids.slice().sort((a,b)=>a-b).map(id=>id+"@"+(sellPrices.get(id)??"unknown")).join(",")
+    +":"+free+":"+bankT;
+}
+const key=(n:Node)=>multiPeriodStateKey(n.ids,n.free,n.bankT,n.ownedSellT);
+const churn=(n:Node)=>n.steps.reduce((sum,step)=>sum+step.moves.length,0);
 const need: Record<number, number> = { 1: 2, 2: 5, 3: 5, 4: 3 };
+/** Cost of the next transfer relative to doing one fewer in this GW.
+ * Ranking candidates on gross xP can otherwise spend the scarce beam on
+ * hit-heavy paths before the objective even deducts the -4.
+ */
+export function incrementalTransferHit(freeBefore:number,movesAlready:number):number {
+  const free=Math.max(0,Math.min(5,Math.floor(freeBefore)));
+  const count=Math.max(0,Math.floor(movesAlready));
+  return Math.max(0,count+1-free)*4-Math.max(0,count-free)*4;
+}
+
 
 /**
  * Genuine sequential, bounded multi-GW search, not a claim of global
@@ -56,7 +74,7 @@ const need: Record<number, number> = { 1: 2, 2: 5, 3: 5, 4: 3 };
 export function planMultipleGameweeks(
   state: SquadState,
   forecasts: PeriodForecast[],
-  opts: { beamWidth?: number; horizon?: number } = {}
+  opts: { beamWidth?: number; horizon?: number; firstWeekMoves?: "any"|"hold"|"free"|"hit" } = {}
 ): MultiPeriodReport {
   const horizon = Math.min(8, Math.max(1, Math.floor(opts.horizon ?? forecasts.length)));
   const width = Math.min(20, Math.max(3, Math.floor(opts.beamWidth ?? 10)));
@@ -94,9 +112,9 @@ export function planMultipleGameweeks(
     const squad = node.ids.map(id => byId.get(id) ?? maps[0].get(id)!)
       .map(p => p && byId.has(p.element.id) ? p : ({...p, score:0, expectedPointsNext:0} as ScoredPlayer));
     const xi = pickBestXI(squad.map(p => ({...p,score:p.expectedPointsNext})));
-    const captain = [...xi].sort((a,b) => b.expectedPointsNext-a.expectedPointsNext)[0] ?? null;
+    const { captain, viceCaptain } = pickCaptain(xi);
     const value = {
-      points: xi.reduce((s,p) => s + p.expectedPointsNext,0)+(captain?.expectedPointsNext??0),
+      points: xi.reduce((s,p) => s + p.expectedPointsNext,0)+(captain?.expectedPointsNext??0)+(viceCaptain ? Math.max(0.02,1-(captain?.pPlay??1))*viceCaptain.expectedPointsNext : 0),
       xi:xi.map(p=>p.element.id), captain:captain?.element.id??null,
     };
     weekScoreCache.set(scoreKey,value);
@@ -153,7 +171,7 @@ export function planMultipleGameweeks(
       evaluated++;
     };
     for(const node of beam){
-      add(node,[]);
+      if(k!==0 || opts.firstWeekMoves===undefined || opts.firstWeekMoves==="any" || opts.firstWeekMoves==="hold")add(node,[]);
       const single:{n:Node;m:PeriodMove;score:number}[]=[];
       for(const out of node.ids){
         const old=map.get(out)??maps[0].get(out);
@@ -166,12 +184,15 @@ export function planMultipleGameweeks(
             -(map.get(incoming.element.id)?.expectedPointsNext??0)+(map.get(out)?.expectedPointsNext??0);
           single.push({n,m:{out,into:incoming.element.id,outName:old.element.web_name,
             inName:incoming.element.web_name,costM:round1((priceT(incoming)-(node.ownedSellT.get(out)??priceT(old)))/10)},
-            score:v+future});
+            score:v+future-incrementalTransferHit(node.free,0)});
         }
       }
       single.sort((a,b)=>b.score-a.score);
       const singles=single.slice(0,16);
-      for(const s of singles)add(s.n,[s.m]);
+      if(k!==0 || opts.firstWeekMoves===undefined || opts.firstWeekMoves==="any" ||
+        (opts.firstWeekMoves==="free" && node.free>=1) ||
+        (opts.firstWeekMoves==="hit" && node.free===0))
+        for(const s of singles)add(s.n,[s.m]);
       for(const s of singles.slice(0,8)){
         const seconds:typeof single=[];
         for(const out of s.n.ids){
@@ -184,27 +205,31 @@ export function planMultipleGameweeks(
             if(!n)continue;
             seconds.push({n,m:{out,into:incoming.element.id,outName:old.element.web_name,
               inName:incoming.element.web_name,costM:round1((priceT(incoming)-(s.n.ownedSellT.get(out)??priceT(old)))/10)},
-              score:scoreWeek(n,k).points-scoreWeek(node,k).points});
+              score:scoreWeek(n,k).points-scoreWeek(node,k).points-incrementalTransferHit(node.free,1)});
           }
         }
         seconds.sort((a,b)=>b.score-a.score);
-        for(const second of seconds.slice(0,5))add(second.n,[s.m,second.m]);
+        if(k!==0 || opts.firstWeekMoves===undefined || opts.firstWeekMoves==="any" ||
+          (opts.firstWeekMoves==="free" && node.free>=2) ||
+          (opts.firstWeekMoves==="hit" && node.free<2))
+          for(const second of seconds.slice(0,5))add(second.n,[s.m,second.m]);
       }
     }
     const unique=new Map<string,Node>();
     for(const n of next){
       const id=key(n);
-      if(!unique.has(id)||unique.get(id)!.total<n.total)unique.set(id,n);
+      if(!unique.has(id)||unique.get(id)!.total<n.total-1e-8 ||
+        (Math.abs(unique.get(id)!.total-n.total)<=1e-8&&churn(n)<churn(unique.get(id)!)))unique.set(id,n);
     }
     // Look ahead to avoid the trivial greedy path that sells assets with
     // attractive upcoming fixtures. This heuristic is not a guarantee.
     const potential=(n:Node) => weeks.slice(k+1).reduce((sum,_,idx)=>sum+scoreWeek(n,k+idx+1).points,0);
     beam=[...unique.values()]
-      .sort((a,b)=>(b.total+potential(b)+b.free*.2)-(a.total+potential(a)+a.free*.2))
+      .sort((a,b)=>(b.total+potential(b)+b.free*.2)-(a.total+potential(a)+a.free*.2)||churn(a)-churn(b))
       .slice(0,width);
     if(!beam.length)return unavailable("O planeador não encontrou uma sequência legal.");
   }
-  const best=beam.slice().sort((a,b)=>b.total-a.total)[0];
+  const best=beam.slice().sort((a,b)=>b.total-a.total||churn(a)-churn(b))[0];
   // Hypothetical forecast downside test for acquired assets, not calibrated
   // uncertainty or a reason to force a transfer. An asset is at risk only
   // while still present in the chosen path.

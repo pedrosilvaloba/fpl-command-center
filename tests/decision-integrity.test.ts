@@ -5,7 +5,8 @@ import { parseAppView, parseTeamId, viewHref } from "../lib/appcontext";
 import { planSensitivity, toDecisionAlternatives, transferRobustness, compareTransferPolicies } from "../lib/decisionrobustness";
 import { scenarioHref } from "../lib/chipscenarioview";
 import type { TransferPlan } from "../lib/transferplan";
-import { planMultipleGameweeks } from "../lib/multiperiod";
+import { planMultipleGameweeks, multiPeriodStateKey, incrementalTransferHit } from "../lib/multiperiod";
+import { compareFirstWeekStrategies } from "../lib/firstweekstrategies";
 import { multiPeriodCacheKey } from "../lib/multiperiodcache";
 import { answerAdviser, buildChatGPTContext, type AdviserContext } from "../lib/adviser";
 import { buildJournal, parseJournal, type LocalDecision } from "../lib/localjournal";
@@ -171,6 +172,18 @@ assert.equal(params.get("perfil"), "continuidade");
 const cleared = new URL(scenarioHref("?team=321&manter=11", "wildcard", [], [], "equilibrado"), "https://example.test/");
 assert.equal(cleared.searchParams.has("manter"), false);
 
+const stateKeyA=multiPeriodStateKey([2,1],1,20,new Map([[1,45],[2,50]]));
+const stateKeyB=multiPeriodStateKey([1,2],1,20,new Map([[1,46],[2,50]]));
+assert.notEqual(stateKeyA,stateKeyB,"Same roster/bank with different sale proceeds must remain distinct");
+assert.equal(stateKeyA,multiPeriodStateKey([1,2],1,20,new Map([[2,50],[1,45]])),
+  "Search deduplication must not depend on roster order");
+assert.equal(incrementalTransferHit(0,0),4);
+assert.equal(incrementalTransferHit(1,0),0);
+assert.equal(incrementalTransferHit(1,1),4);
+assert.equal(incrementalTransferHit(2,1),0);
+assert.equal(incrementalTransferHit(2,2),4);
+assert.equal(incrementalTransferHit(5,4),0);
+assert.equal(incrementalTransferHit(5,5),4);
 const legalPositions = [1,1,2,2,2,2,2,3,3,3,3,3,4,4,4];
 const weeklyPool = legalPositions.map((pos,i) => {
   const id=i+200;
@@ -204,6 +217,17 @@ for(const week of path.steps) {
   assert.ok(week.hitCost>=0 && week.hitCost%4===0);
   assert.ok(week.freeAfter<=5);
 }
+const branches=compareFirstWeekStrategies(multiState,weeks,{horizon:3,beamWidth:10});
+assert.equal(branches.scenarios.length,3);
+assert.ok(branches.scenarios.find(s=>s.strategy==="hold")?.feasible);
+assert.equal(branches.scenarios.find(s=>s.strategy==="hold")?.firstWeekTransfers,0);
+assert.ok(branches.scenarios.find(s=>s.strategy==="free")?.feasible);
+assert.equal(branches.scenarios.find(s=>s.strategy==="free")?.firstWeekHitCost,0);
+assert.equal(branches.scenarios.find(s=>s.strategy==="hit")?.feasible,false,
+  "A hit path may have no legal candidate in a bounded search");
+assert.equal(compareFirstWeekStrategies({...multiState,freeTransfers:0},weeks).scenarios.find(s=>s.strategy==="free")?.feasible,false);
+assert.ok(branches.scenarios.every(s=>!s.feasible || s.steps.length===3));
+assert.equal(branches.preferred,branches.scenarios.filter(s=>s.feasible).sort((a,b)=>b.totalNetPoints!-a.totalNetPoints!)[0]?.strategy);
 const failed = planMultipleGameweeks({...multiState,available:false},weeks);
 assert.equal(failed.available,false);
 const unsequenced = planMultipleGameweeks(multiState,[weeks[0],weeks[2]]);
@@ -213,6 +237,11 @@ const changedWeeks=weeks.map((w,i)=>i!==0?w:{...w,players:w.players.map(p=>
   p.element.id===500?{...p,expectedPointsNext:p.expectedPointsNext+1}:p)});
 const keyAfter=multiPeriodCacheKey(multiState,changedWeeks,3,10);
 assert.notEqual(keyBefore,keyAfter,"A changed player projection must invalidate the cached plan");
+const changedCaptainAvailability=weeks.map((w,i)=>i!==0?w:{
+ ...w,players:w.players.map(p=>p.element.id===500?{...p,pPlay:.4}:p)
+});
+assert.notEqual(keyBefore,multiPeriodCacheKey(multiState,changedCaptainAvailability,3,10),
+ "Changed captain appearance probabilities must invalidate cached forecasts");
 assert.notEqual(keyBefore,multiPeriodCacheKey({...multiState,bankM:.1},weeks,3,10),
   "Budget changes must invalidate all cached plans");
 assert.notEqual(keyBefore,multiPeriodCacheKey(multiState,weeks,5,10),

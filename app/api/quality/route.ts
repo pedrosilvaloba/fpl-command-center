@@ -4,14 +4,16 @@ import { getForwardHistory } from "@/lib/forwardbenchmark";
 import { getDecisionHistory } from "@/lib/decisions";
 import { auditFrozenDecisions } from "@/lib/decisionquality";
 import { getBootstrap } from "@/lib/fpl-client";
+import { auditTransferShadow } from "@/lib/transferpolicyaudit";
 import { auditCaptainBaselines } from "@/lib/captainquality";
+import { getFrozenMinutesDecisionHistory } from "@/lib/minutesdecisionoutcomes";
 
 /** Public, aggregate-only evidence status: no manager identifiers, player
  * picks, notes, credentials or private team state. */
 export const dynamic = "force-dynamic";
 export async function GET() {
-  const [minutes,forward,decisions] = await Promise.all([
-    getMinuteABHistory(),getForwardHistory(),getDecisionHistory(),
+  const [minutes,forward,decisions,minuteDecisions] = await Promise.all([
+    getMinuteABHistory(),getForwardHistory(),getDecisionHistory(),getFrozenMinutesDecisionHistory(),
   ]);
   // Use FPL deadlines exclusively to validate archived predeadline advice.
   // A missing upstream deadline never authorizes a comparison.
@@ -40,6 +42,13 @@ export async function GET() {
   );
   return NextResponse.json({
     status:"experimental",
+    minutesDecisions:(()=>{const rows=minuteDecisions.results.filter(r=>r.different);
+      return {pairedDifferentGameweeks:rows.length,pending:minuteDecisions.pending,
+        challengerMinusBaseline:rows.length?rows.reduce((sum,r)=>sum+r.gain,0):null,
+        wins:rows.filter(r=>r.gain>0).length,losses:rows.filter(r=>r.gain<0).length,
+        ties:rows.filter(r=>r.gain===0).length,
+        evidence:rows.length<12?"insufficient":"descriptive-only",
+        note:"Frozen same-15 hypothetical XI, captain and vice; simulated auto-subs. No trades, hit costs or chips."};})(),
     minutes:{
       pairedGameweeks:verdict.events,
       promotionStatus:verdict.status,
@@ -47,7 +56,47 @@ export async function GET() {
       intervalLow:verdict.confidenceLow,
       intervalHigh:verdict.confidenceHigh,
       participationBrierImprovement:verdict.meanGainBrier,
+      startsEvaluatedGameweeks:verdict.startsEvaluatedGameweeks,
+      startsBrierImprovement:verdict.meanGainStartsBrier,
+      availabilityAccuracy:(["available","doubtful","unavailable","unknown"] as const).map(context=>{
+        const bands=minutes.results.flatMap(r=>r.availabilityBands?.filter(b=>b.context===context)??[]);
+        const n=bands.reduce((sum,b)=>sum+b.base.n,0);
+        const delta=n?bands.reduce((sum,b)=>sum+(b.base.minutesMAE-b.recent.minutesMAE)*b.base.n,0)/n:null;
+        return {context,playerGameweeks:n,minutesMAEImprovement:delta===null?null:Math.round(delta*100)/100};
+      }),
+      roleTrendAccuracy:(["reduced","increased","stable"] as const).map(trend=>{
+        const bands=minutes.results.flatMap(r=>r.roleTrendBands?.filter(b=>b.trend===trend)??[]);
+        const n=bands.reduce((sum,b)=>sum+b.base.n,0);
+        const gain=n?bands.reduce((sum,b)=>sum+(b.base.minutesMAE-b.recent.minutesMAE)*b.base.n,0)/n:null;
+        return {trend,playerGameweeks:n,minutesMAEImprovement:gain===null?null:Math.round(gain*100)/100,
+          gameweeksWithObservations:bands.filter(b=>b.base.n>0).length};
+      }),
+      returnPatternAccuracy:(["cameos","starting-return"] as const).map(pattern=>{
+        const bands=minutes.results.flatMap(r=>r.returnPatternBands?.filter(b=>b.pattern===pattern)??[]);
+        const valid=bands.filter(b=>b.base.n>0&&b.base.n===b.recent.n);
+        const n=valid.reduce((sum,b)=>sum+b.base.n,0);
+        const improvement=n?valid.reduce((sum,b)=>sum+(b.base.minutesMAE-b.recent.minutesMAE)*b.base.n,0)/n:null;
+        const startPairs=valid.filter(b=>b.base.startsBrier!==null&&b.recent.startsBrier!==null&&
+          b.base.startsN>0&&b.base.startsN===b.recent.startsN);
+        const startN=startPairs.reduce((sum,b)=>sum+b.base.startsN,0);
+        const startImprovement=startN?startPairs.reduce((sum,b)=>sum+
+          (b.base.startsBrier!-b.recent.startsBrier!)*b.base.startsN,0)/startN:null;
+        return {pattern,playerGameweeks:n,gameweeksWithObservations:valid.length,
+          minutesMAEImprovement:improvement===null?null:Math.round(improvement*100)/100,
+          startsBrierImprovement:startImprovement===null?null:Math.round(startImprovement*10000)/10000,
+          evidence:n===0?"no-observations":"descriptive-only"};
+      }),
+      capPolicyComparison:(()=>{
+        const rows=minutes.results.filter(r=>r.uncappedComparableN && r.uncappedComparableN>=10 &&
+          Number.isFinite(r.cappedVsUncappedMinutesGain));
+        const n=rows.reduce((sum,r)=>sum+r.uncappedComparableN!,0);
+        const weightedGain=n?rows.reduce((sum,r)=>sum+r.cappedVsUncappedMinutesGain!*r.uncappedComparableN!,0)/n:null;
+        return {pairedGameweeks:rows.length,playerGameweeks:n,
+          cappedVsUncappedMinutesMAEGain:weightedGain===null?null:Math.round(weightedGain*100)/100,
+          evidence:rows.length<12?"insufficient":"descriptive-only"};
+      })(),
       pendingGWs:minutes.pending,
+      pendingDecisionSensitivity:minutes.pendingDecisionSensitivity??[],
       note:verdict.rationale,
     },
     playerForecastByPosition: [1,2,3,4].map(position => {
@@ -101,26 +150,11 @@ export async function GET() {
       missingDeadlineOrRecord: decisions.rows.length - decisionAudit.inspected,
       note: "Contrafactual descritivo contra manter a equipa; nao prova superioridade estatistica nem a legalidade historica de todas as transferencias.",
     },
-    transferPolicyComparison: (() => {
-      const paired = decisions.rows.filter(r =>
-        !!r.advice?.shadowPlan && r.advice.chip === null &&
-        typeof r.outcome?.settlement?.shadowVsLive === "number" &&
-        Math.abs(r.outcome.settlement.officialDelta) <= 1 &&
-        !!deadlines.get(r.event) &&
-        Date.parse(r.advice.at) < Date.parse(deadlines.get(r.event)!) &&
-        Date.parse(r.outcome.settledAt) > Date.parse(deadlines.get(r.event)!)
-      );
-      const gains = paired.map(r => r.outcome!.settlement!.shadowVsLive!);
-      return {
-        pairedGameweeks: paired.length,
-        shadowMinusCurrent: gains.reduce((sum, v) => sum + v, 0),
-        wins: gains.filter(v => v > 0).length,
-        losses: gains.filter(v => v < 0).length,
-        ties: gains.filter(v => v === 0).length,
-        verdict: paired.length >= 12 ? "descriptive-only" : "insufficient-evidence",
-        note: "One-GW simulated comparison; not proof of future transfers, legality or statistical superiority.",
-      };
-    })(),
+    transferPolicyComparison: auditTransferShadow(decisions.rows.flatMap(r => {
+      const deadlineIso=deadlines.get(r.event);
+      return r.advice && r.outcome && deadlineIso
+        ? [{advice:r.advice,outcome:r.outcome,deadlineIso}] : [];
+    })),
     transfers:{
       verifiedSimulationGameweeks:reliable.length,
       totalSimulatedGainAgainstUser:decisions.totalDiff,
