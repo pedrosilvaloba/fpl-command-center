@@ -72,6 +72,22 @@ assert.equal(result.eligible,20);
 assert.equal(result.recentEligible,20);
 assert.equal(result.base.n,20);
 assert.equal(result.recent.n,20);
+assert.equal(result.roleTrendBands?.reduce((total,b)=>total+b.base.n,0),20,
+  "Every valid prospective player must belong to exactly one observed role group");
+const changedRecent=deriveRecentMinutes([4,5,6,7].map((event,index)=>({
+  event,elements:elements.map(e=>({id:e.id,stats:{
+    minutes:e.id===2?(index<2?90:10):e.id===3?(index<2?10:90):70,
+    starts:1,
+  }})),
+})));
+const changedSnapshot=buildMinuteSnapshot(player,changedRecent,8,deadline,before)!;
+const changedResult=gradeMinuteSnapshot(changedSnapshot,actual);
+assert.equal(changedResult.roleTrendBands?.find(b=>b.trend==="reduced")?.base.n,1);
+assert.equal(changedResult.roleTrendBands?.find(b=>b.trend==="increased")?.base.n,1);
+assert.equal(changedResult.roleTrendBands?.find(b=>b.trend==="stable")?.base.n,18);
+assert.equal(changedResult.roleTrendBands?.find(b=>b.trend==="reduced")?.recent.n,1,
+  "Paired role groups must use identical player cohorts for both models");
+
 assert.ok(result.base.appearanceBrier>0);
 assert.ok(Number.isFinite(result.recent.minutesMAE));
 assert.ok(result.base.startsBrier!==null);
