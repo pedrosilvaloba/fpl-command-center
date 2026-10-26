@@ -63,6 +63,21 @@ export async function GET() {
         return {trend,playerGameweeks:n,minutesMAEImprovement:gain===null?null:Math.round(gain*100)/100,
           gameweeksWithObservations:bands.filter(b=>b.base.n>0).length};
       }),
+      returnPatternAccuracy:(["cameos","starting-return"] as const).map(pattern=>{
+        const bands=minutes.results.flatMap(r=>r.returnPatternBands?.filter(b=>b.pattern===pattern)??[]);
+        const valid=bands.filter(b=>b.base.n>0&&b.base.n===b.recent.n);
+        const n=valid.reduce((sum,b)=>sum+b.base.n,0);
+        const improvement=n?valid.reduce((sum,b)=>sum+(b.base.minutesMAE-b.recent.minutesMAE)*b.base.n,0)/n:null;
+        const startPairs=valid.filter(b=>b.base.startsBrier!==null&&b.recent.startsBrier!==null&&
+          b.base.startsN>0&&b.base.startsN===b.recent.startsN);
+        const startN=startPairs.reduce((sum,b)=>sum+b.base.startsN,0);
+        const startImprovement=startN?startPairs.reduce((sum,b)=>sum+
+          (b.base.startsBrier!-b.recent.startsBrier!)*b.base.startsN,0)/startN:null;
+        return {pattern,playerGameweeks:n,gameweeksWithObservations:valid.length,
+          minutesMAEImprovement:improvement===null?null:Math.round(improvement*100)/100,
+          startsBrierImprovement:startImprovement===null?null:Math.round(startImprovement*10000)/10000,
+          evidence:n===0?"no-observations":"descriptive-only"};
+      }),
       pendingGWs:minutes.pending,
       note:verdict.rationale,
     },
