@@ -6,6 +6,7 @@ import { planSensitivity, toDecisionAlternatives, transferRobustness, compareTra
 import { scenarioHref } from "../lib/chipscenarioview";
 import type { TransferPlan } from "../lib/transferplan";
 import { planMultipleGameweeks, multiPeriodStateKey, incrementalTransferHit } from "../lib/multiperiod";
+import { compareFirstWeekStrategies } from "../lib/firstweekstrategies";
 import { multiPeriodCacheKey } from "../lib/multiperiodcache";
 import { answerAdviser, buildChatGPTContext, type AdviserContext } from "../lib/adviser";
 import { buildJournal, parseJournal, type LocalDecision } from "../lib/localjournal";
@@ -216,6 +217,17 @@ for(const week of path.steps) {
   assert.ok(week.hitCost>=0 && week.hitCost%4===0);
   assert.ok(week.freeAfter<=5);
 }
+const branches=compareFirstWeekStrategies(multiState,weeks,{horizon:3,beamWidth:10});
+assert.equal(branches.scenarios.length,3);
+assert.ok(branches.scenarios.find(s=>s.strategy==="hold")?.feasible);
+assert.equal(branches.scenarios.find(s=>s.strategy==="hold")?.firstWeekTransfers,0);
+assert.ok(branches.scenarios.find(s=>s.strategy==="free")?.feasible);
+assert.equal(branches.scenarios.find(s=>s.strategy==="free")?.firstWeekHitCost,0);
+assert.ok(branches.scenarios.find(s=>s.strategy==="hit")?.feasible);
+assert.equal(branches.scenarios.find(s=>s.strategy==="hit")?.firstWeekHitCost,4);
+assert.equal(compareFirstWeekStrategies({...multiState,freeTransfers:0},weeks).scenarios.find(s=>s.strategy==="free")?.feasible,false);
+assert.ok(branches.scenarios.every(s=>!s.feasible || s.steps.length===3));
+assert.equal(branches.preferred,branches.scenarios.filter(s=>s.feasible).sort((a,b)=>b.totalNetPoints!-a.totalNetPoints!)[0]?.strategy);
 const failed = planMultipleGameweeks({...multiState,available:false},weeks);
 assert.equal(failed.available,false);
 const unsequenced = planMultipleGameweeks(multiState,[weeks[0],weeks[2]]);
