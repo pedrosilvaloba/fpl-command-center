@@ -36,6 +36,23 @@ export function deriveRecentMinutes(
   }
   return {version:1,at,events:sorted.map(w=>w.event),players};
 }
+/** Strict prospective eligibility. A cached snapshot created after the
+ * deadline, or containing the forecast event itself, is not an experiment.
+ * Share this guard between benchmark and the full-scoring decision shadow.
+ */
+export function validProspectiveMinutesSnapshot(
+  recent:RecentMinutesSnapshot|null|undefined,event:number,deadline:string
+):recent is RecentMinutesSnapshot {
+  if(!recent || !Number.isSafeInteger(event)||event<1)return false;
+  const timestamp=Date.parse(recent.at),limit=Date.parse(deadline);
+  return recent.version===1 && Number.isFinite(timestamp)&&Number.isFinite(limit)&&
+    timestamp<limit && recent.events.length>=4 && recent.events.length<=6 &&
+    new Set(recent.events).size===recent.events.length &&
+    recent.events.every((gw,i)=>Number.isSafeInteger(gw)&&gw>0&&gw<event&&
+      (i===0||gw>recent.events[i-1])) &&
+    Object.values(recent.players).every(p=>p.minutes.length===recent.events.length &&
+      p.starts.length===recent.events.length && p.minutes.every(m=>Number.isFinite(m)&&m>=0&&m<=180));
+}
 export async function readRecentMinutes():Promise<RecentMinutesSnapshot|null>{
   const redis=getRedis();
   if(!redis)return null;
