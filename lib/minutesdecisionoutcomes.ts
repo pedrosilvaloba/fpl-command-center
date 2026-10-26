@@ -36,6 +36,17 @@ export function gradeFrozenPair(pair:FrozenPair,actual:Map<number,SimulatedPlaye
   settledAt=new Date().toISOString()):SettledPair|null {
   if(pair.version!==1||Date.parse(pair.capturedAt)>=Date.parse(pair.deadline)||
     !Number.isFinite(Date.parse(pair.deadline))||Date.parse(settledAt)<=Date.parse(pair.deadline))return null;
+  const validate=(d:FrozenMinutesDecision,bench:number[])=>{
+    const squad=[...d.xi,...bench];
+    return d.valid && d.xi.length===11 && bench.length===4 &&
+      new Set(squad).size===15 && squad.every(id=>Number.isSafeInteger(id)&&id>0) &&
+      d.captain!==null && d.vice!==null && d.captain!==d.vice &&
+      d.xi.includes(d.captain) && d.xi.includes(d.vice);
+  };
+  if(!validate(pair.baseline,pair.benchBase)||!validate(pair.challenger,pair.benchChallenger)||
+    [...pair.baseline.xi,...pair.benchBase].slice().sort((a,b)=>a-b).join(",")!==
+    [...pair.challenger.xi,...pair.benchChallenger].slice().sort((a,b)=>a-b).join(","))
+    return null;
   const result=(d:FrozenMinutesDecision,bench:number[])=>simulateLineup({
     xi:d.xi,bench,captain:d.captain,vice:d.vice,players:actual,chip:null,hitCost:0,
   });
