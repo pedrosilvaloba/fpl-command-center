@@ -12,7 +12,7 @@ export function multiPeriodCacheKey(
   state:SquadState, forecasts:PeriodForecast[], horizon:number, beamWidth:number
 ):string{
   const h=createHash("sha256");
-  h.update("multi:v3:"+horizon+":"+beamWidth+";rev:"+(process.env.VERCEL_GIT_COMMIT_SHA?.slice(0,12)??"local")+";");
+  h.update("multi:v4:"+horizon+":"+beamWidth+";rev:"+(process.env.VERCEL_GIT_COMMIT_SHA?.slice(0,12)??"local")+";");
   h.update("bank:"+state.bankM+";ft:"+state.freeTransfers+";");
   state.owned.slice().sort((a,b)=>a.elementId-b.elementId).forEach(o=>
     h.update([o.elementId,o.sellingPriceM].join(":")+";")
@@ -21,10 +21,10 @@ export function multiPeriodCacheKey(
     h.update("gw:"+w.event+";");
     for(const p of w.players.slice().sort((a,b)=>a.element.id-b.element.id)){
       h.update([p.element.id,p.team.id,p.element.element_type,p.priceM,
-        p.element.status,p.expectedPointsNext].join(":")+";");
+        p.element.status,p.expectedPointsNext,p.pPlay,p.ownershipPct].join(":")+";");
     }
   }
-  return "fpl:multi:cache:v2:"+h.digest("hex");
+  return "fpl:multi:cache:v3:"+h.digest("hex");
 }
 export async function cachedMultiPeriod(
   state:SquadState,
