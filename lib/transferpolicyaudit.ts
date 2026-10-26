@@ -30,7 +30,7 @@ export function auditTransferShadow(weeks:PairedTransferWeek[]) {
   const counts=new Map<number,number>();
   for(const w of weeks) counts.set(w.advice.event,(counts.get(w.advice.event)??0)+1);
   const excluded:Record<string,number>={};
-  const paired:{event:number;shadowMinusCurrent:number;shadowMinusHold:number}[]=[];
+  const paired:{event:number;shadowMinusCurrent:number;shadowMinusHold:number;policiesDiffer:boolean}[]=[];
   for(const {advice,outcome,deadlineIso} of weeks){
     let reason:string|null=null;
     const deadline=Date.parse(deadlineIso),captured=Date.parse(advice.at),settled=Date.parse(outcome.settledAt);
@@ -64,7 +64,12 @@ export function auditTransferShadow(weeks:PairedTransferWeek[]) {
       Math.abs(s.simulated-s.holdPoints!-s.gainVsHold!)>0.001)
       reason="inconsistent-settlement";
     if(reason){excluded[reason]=(excluded[reason]??0)+1;continue;}
-    paired.push({event:advice.event,shadowMinusCurrent:s!.shadowVsLive!,shadowMinusHold:s!.shadowVsHold!});
+    const policiesDiffer=advice.captain!==shadow!.captain ||
+      advice.vice!==shadow!.vice || advice.hitCost!==shadow!.hitCost ||
+      advice.xi.some((id,i)=>id!==shadow!.xi[i]) ||
+      advice.bench.some((id,i)=>id!==shadow!.bench[i]);
+    paired.push({event:advice.event,shadowMinusCurrent:s!.shadowVsLive!,
+      shadowMinusHold:s!.shadowVsHold!,policiesDiffer});
   }
   paired.sort((a,b)=>a.event-b.event);
   const total=paired.reduce((a,b)=>a+b.shadowMinusCurrent,0);
@@ -73,15 +78,15 @@ export function auditTransferShadow(weeks:PairedTransferWeek[]) {
     shadowMinusCurrent:paired.length?total:null,
     meanShadowMinusCurrent:paired.length?total/paired.length:null,
     // Same-decision weeks inflate n without testing which policy is better.
-    divergentGameweeks:paired.filter(p=>p.shadowMinusCurrent!==0).length,
+    divergentGameweeks:paired.filter(p=>p.policiesDiffer).length,
     meanDifferenceWhenDivergent:(()=>{
-      const different=paired.filter(p=>p.shadowMinusCurrent!==0);
+      const different=paired.filter(p=>p.policiesDiffer);
       return different.length?different.reduce((sum,p)=>sum+p.shadowMinusCurrent,0)/different.length:null;
     })(),
     wins:paired.filter(p=>p.shadowMinusCurrent>0).length,
     losses:paired.filter(p=>p.shadowMinusCurrent<0).length,
     ties:paired.filter(p=>p.shadowMinusCurrent===0).length,
-    verdict:paired.filter(p=>p.shadowMinusCurrent!==0).length<12?"insufficient-evidence" as const:"descriptive-only" as const,
-    note:"Same-GW simulated points; tied outcomes do not count as policy disagreements. Budget, club quota, future FT accrual and multiweek feasibility remain unverified.",
+    verdict:paired.filter(p=>p.policiesDiffer).length<12?"insufficient-evidence" as const:"descriptive-only" as const,
+    note:"Same-GW simulated points; identical decisions do not count as independent policy comparisons. Budget, club quota, future FT accrual and multiweek feasibility remain unverified.",
   };
 }
