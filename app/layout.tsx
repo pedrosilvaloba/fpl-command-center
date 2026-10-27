@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Space_Grotesk, Inter, DM_Mono } from "next/font/google";
 import "./globals.css";
+import DecisionNavigation from "@/components/DecisionNavigation";
 
 // Space Grotesk for display, Inter for text, DM Mono for figures.
 //
@@ -50,7 +51,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="pt-PT"
       className={`${display.variable} ${body.variable} ${mono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">{children}<DecisionNavigation /></body>
     </html>
   );
 }
