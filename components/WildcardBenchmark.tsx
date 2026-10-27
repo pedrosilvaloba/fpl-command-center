@@ -27,7 +27,7 @@ export default function WildcardBenchmark({alternatives, main}:{
         </article>
         {alternatives.map(a=><article className="rounded-lg bg-surface-2 p-3" key={a.criterion}>
           <h4 className="text-sm font-semibold">{a.criterion==="ppg"?"Pontos por jogo":"Previsão oficial FPL"}</h4>
-          {a.available?<><p className="mt-1 text-xs text-text-muted">11 titulares: {a.xiIds.map(id=>main?.xi.find(p=>p.id===id)?.name ?? ("#"+id)).join(", ")}</p>
+          {a.available?<><p className="mt-1 text-xs text-text-muted">11 titulares: {a.xiNames.join(", ")}</p>
           <p className="mt-2 text-xs text-text-muted">Modelo: {a.modelXiNext?.toFixed(1)} xP próxima jornada · {a.modelXiWindow?.toFixed(1)} xP em 5 jornadas</p>
           <p className="text-xs text-text-muted">Saldo: £{a.budgetRemaining?.toFixed(1)}m</p></>
           :<p className="mt-1 text-xs text-warn">{a.reason}</p>}
