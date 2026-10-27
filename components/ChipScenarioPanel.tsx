@@ -12,6 +12,7 @@ import {
 } from "@/lib/chipscenarioview";
 import ClubKit from "./ClubKit";
 import WildcardPitch from "./WildcardPitch";
+import { auditWildcardXI } from "@/lib/wildcardaudit";
 
 /**
  * "GOSTAVA DE USAR O WILDCARD ESTA SEMANA. QUAIS SÃO AS MINHAS OPÇÕES?"
@@ -226,6 +227,22 @@ function Scenario({
         </div>
       )}
 
+      {s.chip === "wildcard" && s.xi.length === 11 && (() => {
+        const check = auditWildcardXI(s.xi,s.captainId);
+        const name = (id:number|null) => s.xi.find(p=>p.id===id)?.name ?? "Indisponível";
+        return <section className="rounded-xl border border-border bg-surface p-3 space-y-2">
+          <h3 className="font-semibold text-text text-sm">O modelo concorda com as referências?</h3>
+          <p className="text-xs text-text-muted">Verificação independente do capitão no mesmo onze titular.</p>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <div className="rounded-lg bg-surface-2 p-2"><p className="text-xs text-text-muted">O nosso modelo</p><p className="font-semibold text-sm text-text">{name(check.modelCaptain)}</p></div>
+            <div className="rounded-lg bg-surface-2 p-2"><p className="text-xs text-text-muted">Pontos por jogo (PPG)</p><p className="font-semibold text-sm text-text">{name(check.ppgCaptain)}</p></div>
+            <div className="rounded-lg bg-surface-2 p-2"><p className="text-xs text-text-muted">Previsão oficial FPL</p><p className="font-semibold text-sm text-text">{name(check.officialCaptain)}</p></div>
+          </div>
+          {check.comparable && (check.modelVsPpgDisagree || check.modelVsOfficialDisagree === true) &&
+            <p className="text-xs text-warn">Existem divergências entre referências. Não assumas que o nosso capitão é superior sem validação com jornadas reais.</p>}
+          <p className="text-xs text-text-muted">{check.reason}</p>
+        </section>;
+      })()}
       {s.xi.length > 0 && (
         <div className="space-y-3">
           <WildcardPitch players={s.xi} captainId={s.captainId} viceCaptainId={s.viceCaptainId} />
