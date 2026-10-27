@@ -1,6 +1,7 @@
 import type { ScoredPlayer } from "./recommend";
 import type { SquadState } from "./squadstate";
 import { planTransfers, type WildcardProfile } from "./transferplan";
+import { validateWildcardSquad } from "./wildcardvalidation";
 
 export interface WildcardAlternative {
   criterion: "ppg" | "fpl";
@@ -47,8 +48,9 @@ export function optimizeWildcardBaselines(
     }
     const xi=plan.xi.map(p=>p.element.id);
     const ids=[...xi,...plan.bench.map(p=>p.element.id)];
-    if(new Set(ids).size!==15 || ids.some(id=>!byId.has(id))) {
-      return {criterion,available:false,reason:"Equipa resultante inválida.",ids:[],xiIds:[],xiNames:[],captainId:null,budgetRemaining:null,modelXiNext:null,modelXiWindow:null};
+    const integrity = validateWildcardSquad(ids, scored, state);
+    if (!integrity.valid || new Set(ids).size!==15 || ids.some(id=>!byId.has(id))) {
+      return {criterion,available:false,reason:integrity.reason,ids:[],xiIds:[],xiNames:[],captainId:null,budgetRemaining:null,modelXiNext:null,modelXiWindow:null};
     }
     return {
       criterion,available:true,reason:"Plantel otimizado pelo critério independente; pontuação apresentada usa sempre o nosso modelo como unidade comum.",
