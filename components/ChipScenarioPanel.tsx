@@ -291,6 +291,11 @@ export default function ChipScenarioPanel({
   const premium = candidates.find((c) => c.name.toLowerCase().includes("haaland"));
   const currentWildIds = new Set([...(wcView?.xi ?? []), ...(wcView?.bench ?? [])].map(p => p.id));
   const premiumMissing = premium !== undefined && !currentWildIds.has(premium.id);
+  const eliteAlternatives = candidates
+    .filter((p) => p.id !== premium?.id && !currentWildIds.has(p.id))
+    .filter((p) => p.elite !== null && p.elite >= 30)
+    .sort((x, y) => (y.elite ?? 0) - (x.elite ?? 0))
+    .slice(0, 4);
 
 
   const go = (nextKept: number[], nextIncluded: number[], profile: WildcardProfile = wildcardProfile) => {
@@ -436,6 +441,24 @@ export default function ChipScenarioPanel({
             O cenário é recalculado com o mesmo orçamento. Diferenças pequenas na previsão não provam que uma equipa seja superior.
           </p>
         </div>
+      )}
+      {active === "wildcard" && eliteAlternatives.length > 0 && (
+        <section className="rounded-lg border border-border bg-surface-2 p-3">
+          <h3 className="text-sm font-semibold text-text">Comparar com jogadores da elite</h3>
+          <p className="my-2 text-xs text-text-muted">
+            Estes jogadores têm elevada presença nas equipas da elite, mas não constam deste Wildcard.
+            A popularidade não substitui uma previsão; usa os botões para testar alternativas.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {eliteAlternatives.map(p => (
+              <button key={p.id} type="button" disabled={pending || included.includes(p.id)}
+                onClick={() => go(kept, [...included, p.id])}
+                className="rounded-md border border-border px-3 py-2 text-xs text-text hover:border-accent disabled:opacity-50">
+                Incluir {p.name} · elite {Math.round(p.elite ?? 0)}%
+              </button>
+            ))}
+          </div>
+        </section>
       )}
       {(active === "wildcard" || active === "freehit") && candidates.length > 0 && (
         <div className="rounded-md border border-border bg-surface-2 p-3">
