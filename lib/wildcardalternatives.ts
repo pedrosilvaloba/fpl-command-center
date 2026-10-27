@@ -30,7 +30,7 @@ export function optimizeWildcardBaselines(
       return Number.isFinite(n) && n >= 0 ? n : null;
     };
     const measured = scored.filter(p => valid(p)!==null).length;
-    if (measured < scored.length*0.95) {
+    if (measured !== scored.length || scored.length === 0) {
       return { criterion,available:false,reason:"Cobertura de dados insuficiente para comparar sem valores inventados.",ids:[],xiIds:[],xiNames:[],captainId:null,budgetRemaining:null,modelXiNext:null,modelXiWindow:null };
     }
     const input = scored.map(p => {
