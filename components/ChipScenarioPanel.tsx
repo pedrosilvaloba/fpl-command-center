@@ -255,6 +255,7 @@ function Scenario({
               <PlayerRow key={p.id} p={p} lock={lockFor(p)} />
             ))}
           </div>
+          </div>
           </details>
         </div>
       )}
