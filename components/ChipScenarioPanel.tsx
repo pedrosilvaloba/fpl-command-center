@@ -430,6 +430,9 @@ export default function ChipScenarioPanel({
               ? "Haaland ficou de fora deste cenário. Isto não significa que seja uma má escolha: testa um plantel com ele antes de decidir."
               : "Haaland já pertence ao plantel projetado."}
           </p>
+          <p className="mt-1 text-xs text-text-muted">
+            Haaland: {premium.next.toFixed(1)} pontos previstos na próxima jornada · {premium.window.toFixed(1)} na janela · {premium.seasonPts} pontos na época · £{premium.price.toFixed(1)}m.
+          </p>
           {premiumMissing && (
             <button type="button" disabled={pending || included.includes(premium.id)}
               onClick={() => go(kept, [...included, premium.id])}
@@ -454,7 +457,7 @@ export default function ChipScenarioPanel({
               <button key={p.id} type="button" disabled={pending || included.includes(p.id)}
                 onClick={() => go(kept, [...included, p.id])}
                 className="rounded-md border border-border px-3 py-2 text-xs text-text hover:border-accent disabled:opacity-50">
-                Incluir {p.name} · elite {Math.round(p.elite ?? 0)}%
+                Incluir {p.name} · {p.next.toFixed(1)} xP · elite {Math.round(p.elite ?? 0)}%
               </button>
             ))}
           </div>
