@@ -81,6 +81,8 @@ import LeagueChipsPanel from "@/components/LeagueChipsPanel";
 import CaptainShortlist from "@/components/CaptainShortlist";
 import DeferralPanel from "@/components/DeferralPanel";
 import ChipScenarioPanel from "@/components/ChipScenarioPanel";
+import WildcardBenchmark from "@/components/WildcardBenchmark";
+import { optimizeWildcardBaselines } from "@/lib/wildcardalternatives";
 import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, parseWildcardProfile } from "@/lib/chipscenarioview";
 import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
 import { cachedMultiPeriod } from "@/lib/multiperiodcache";
@@ -947,6 +949,13 @@ export default async function Home({
   const scenarioCandidates = squadState.available
     ? includeCandidates(scored, ownedIdSet, eliteLookup)
     : [];
+  // Expensive independent whole-squad comparisons are explicit opt-in,
+  // never recomputed for every visitor or scheduled capture.
+  const wildcardAlternatives = view === "simular" && sp.comparar === "1" && squadState.available
+    ? optimizeWildcardBaselines(scored,squadState,{
+        ...transferPlanOpts,keepIds,includeIds
+      },wildcardProfile)
+    : null;
   // O conselho desta jornada fica registado até ao deadline (lib/decisions.ts).
   const advisedPlan = transferAdvice.recommended;
   const shadowPlan = selectShadowTransferPlan(transferAdvice.plans);
@@ -1433,7 +1442,9 @@ export default async function Home({
                 </p>
               </div>
             </div>
-            <ChipScenarioPanel
+            <WildcardBenchmark alternatives={wildcardAlternatives}
+            main={toScenarioViews(transferAdvice.scenarios, squadState.owned.map(o=>o.elementId),eliteLookup).find(s=>s.chip==="wildcard")} />
+          <ChipScenarioPanel
               scenarios={toScenarioViews(
                 transferAdvice.scenarios,
                 squadState.owned.map((o) => o.elementId),
