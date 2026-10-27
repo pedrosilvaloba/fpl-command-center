@@ -282,6 +282,7 @@ export default function ChipScenarioPanel({
   const [question, setQuestion] = useState("");
   const [notUnderstood, setNotUnderstood] = useState(false);
   const [includeText, setIncludeText] = useState("");
+  const [previousWildcard, setPreviousWildcard] = useState<ScenarioView | null>(null);
 
   if (scenarios.length === 0) {
     return (
@@ -306,6 +307,7 @@ export default function ChipScenarioPanel({
 
 
   const go = (nextKept: number[], nextIncluded: number[], profile: WildcardProfile = wildcardProfile) => {
+    if (active === "wildcard" && wcView?.xi.length && wcView?.gainWindow !== null) setPreviousWildcard(wcView);
     const href = scenarioHref(window.location.search, active ?? "wildcard", nextKept, nextIncluded, profile);
     startTransition(() => {
       router.replace(href, { scroll: false });
@@ -427,6 +429,31 @@ export default function ChipScenarioPanel({
             Podes fixar jogadores, exigir inclusões e voltar a comparar.
           </p>
         </div>
+      )}
+
+      {active === "wildcard" && previousWildcard && wcView &&
+        previousWildcard.gainWindow !== null && wcView.gainWindow !== null && (
+        <section className="rounded-lg border border-accent/40 bg-accent/5 p-3" aria-label="Comparação de wildcards">
+          <h3 className="text-sm font-bold text-text">Antes vs. nova alternativa</h3>
+          <div className="mt-2 grid grid-cols-2 gap-3 text-sm">
+            <div className="rounded-md bg-surface p-3">
+              <p className="text-xs text-text-muted">Antes</p>
+              <p className="font-semibold text-text">{previousWildcard.gainWindow.toFixed(1)} pontos / 5 jornadas</p>
+              <p className="text-xs text-text-muted">{previousWildcard.gainNext.toFixed(1)} pontos próxima jornada</p>
+            </div>
+            <div className="rounded-md bg-surface p-3">
+              <p className="text-xs text-text-muted">Nova alternativa</p>
+              <p className="font-semibold text-text">{wcView.gainWindow.toFixed(1)} pontos / 5 jornadas</p>
+              <p className="text-xs text-text-muted">{wcView.gainNext.toFixed(1)} pontos próxima jornada</p>
+            </div>
+          </div>
+          <p className="mt-2 text-xs text-text-muted">
+            Compara estimativas de momentos consecutivos, não pontos garantidos.
+            Pequenas diferenças são inconclusivas e os dados podem atualizar-se entre simulações.
+          </p>
+          <button type="button" onClick={() => setPreviousWildcard(null)}
+            className="mt-2 text-xs text-text-muted underline underline-offset-2">Fechar comparação</button>
+        </section>
       )}
 
       {active === "wildcard" && premium && (
