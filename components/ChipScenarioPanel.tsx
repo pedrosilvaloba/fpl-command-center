@@ -11,6 +11,7 @@ import {
   type ScenarioView,
 } from "@/lib/chipscenarioview";
 import ClubKit from "./ClubKit";
+import WildcardPitch from "./WildcardPitch";
 
 /**
  * "GOSTAVA DE USAR O WILDCARD ESTA SEMANA. QUAIS SÃO AS MINHAS OPÇÕES?"
@@ -226,7 +227,11 @@ function Scenario({
       )}
 
       {s.xi.length > 0 && (
-        <div className="grid gap-4 md:grid-cols-[1fr_18rem]">
+        <div className="space-y-3">
+          <WildcardPitch players={s.xi} captainId={s.captainId} viceCaptainId={s.viceCaptainId} />
+          <details className="rounded-lg border border-border bg-surface-2 p-3">
+            <summary className="cursor-pointer text-sm font-semibold text-text">Ver detalhe de jogadores, preços e banco</summary>
+            <div className="mt-3 grid gap-4 md:grid-cols-[1fr_18rem]">
           <div>
             <div className="mb-1 flex justify-between gap-2">
               <p className="eyebrow text-text-muted">Onze para esta jornada</p>
@@ -250,6 +255,8 @@ function Scenario({
               <PlayerRow key={p.id} p={p} lock={lockFor(p)} />
             ))}
           </div>
+          </div>
+          </details>
         </div>
       )}
 
@@ -271,10 +278,11 @@ export default function ChipScenarioPanel({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [active, setActive] = useState<ChipKey | null>(initialChip);
+  const [active, setActive] = useState<ChipKey | null>(initialChip ?? (scenarios.some(s => s.chip === "wildcard") ? "wildcard" : scenarios[0]?.chip ?? null));
   const [question, setQuestion] = useState("");
   const [notUnderstood, setNotUnderstood] = useState(false);
   const [includeText, setIncludeText] = useState("");
+  const [previousWildcard, setPreviousWildcard] = useState<ScenarioView | null>(null);
 
   if (scenarios.length === 0) {
     return (
@@ -288,8 +296,18 @@ export default function ChipScenarioPanel({
   const kept = wcView?.keptIds ?? [];
   const included = wcView?.includedIds ?? [];
   const nameOf = (id: number) => candidates.find((c) => c.id === id)?.name ?? `#${id}`;
+  const premium = candidates.find((c) => c.name.toLowerCase().includes("haaland"));
+  const currentWildIds = new Set([...(wcView?.xi ?? []), ...(wcView?.bench ?? [])].map(p => p.id));
+  const premiumMissing = premium !== undefined && !currentWildIds.has(premium.id);
+  const eliteAlternatives = candidates
+    .filter((p) => p.id !== premium?.id && !currentWildIds.has(p.id))
+    .filter((p) => p.elite !== null && p.elite >= 30)
+    .sort((x, y) => (y.elite ?? 0) - (x.elite ?? 0))
+    .slice(0, 4);
+
 
   const go = (nextKept: number[], nextIncluded: number[], profile: WildcardProfile = wildcardProfile) => {
+    if (active === "wildcard" && wcView?.xi.length && wcView?.gainWindow !== null) setPreviousWildcard(wcView);
     const href = scenarioHref(window.location.search, active ?? "wildcard", nextKept, nextIncluded, profile);
     startTransition(() => {
       router.replace(href, { scroll: false });
@@ -320,8 +338,10 @@ export default function ChipScenarioPanel({
 
   return (
     <div id="cenarios" className="scroll-mt-24 space-y-4">
+      <details className="rounded-lg border border-border bg-surface-2 p-3">
+        <summary className="cursor-pointer text-xs text-text-muted">Prefiro escrever uma pergunta</summary>
       <form
-        className="flex flex-col gap-2 sm:flex-row"
+        className="mt-2 flex flex-col gap-2 sm:flex-row"
         onSubmit={(e) => {
           e.preventDefault();
           ask(question);
@@ -341,6 +361,7 @@ export default function ChipScenarioPanel({
           Ver opções
         </button>
       </form>
+      </details>
 
       <div className="flex flex-wrap items-center gap-2">
         {scenarios.map((s) => (
@@ -413,6 +434,72 @@ export default function ChipScenarioPanel({
         </div>
       )}
 
+      {active === "wildcard" && previousWildcard && wcView &&
+        previousWildcard.gainWindow !== null && wcView.gainWindow !== null && (
+        <section className="rounded-lg border border-accent/40 bg-accent/5 p-3" aria-label="Comparação de wildcards">
+          <h3 className="text-sm font-bold text-text">Antes vs. nova alternativa</h3>
+          <div className="mt-2 grid grid-cols-2 gap-3 text-sm">
+            <div className="rounded-md bg-surface p-3">
+              <p className="text-xs text-text-muted">Antes</p>
+              <p className="font-semibold text-text">{previousWildcard.gainWindow.toFixed(1)} pontos / 5 jornadas</p>
+              <p className="text-xs text-text-muted">{previousWildcard.gainNext.toFixed(1)} pontos próxima jornada</p>
+            </div>
+            <div className="rounded-md bg-surface p-3">
+              <p className="text-xs text-text-muted">Nova alternativa</p>
+              <p className="font-semibold text-text">{wcView.gainWindow.toFixed(1)} pontos / 5 jornadas</p>
+              <p className="text-xs text-text-muted">{wcView.gainNext.toFixed(1)} pontos próxima jornada</p>
+            </div>
+          </div>
+          <p className="mt-2 text-xs text-text-muted">
+            Compara estimativas de momentos consecutivos, não pontos garantidos.
+            Pequenas diferenças são inconclusivas e os dados podem atualizar-se entre simulações.
+          </p>
+          <button type="button" onClick={() => setPreviousWildcard(null)}
+            className="mt-2 text-xs text-text-muted underline underline-offset-2">Fechar comparação</button>
+        </section>
+      )}
+
+      {active === "wildcard" && premium && (
+        <div className="rounded-lg border border-border bg-surface p-3">
+          <h3 className="text-sm font-semibold text-text">Verificar jogadores decisivos</h3>
+          <p className="mt-1 text-xs text-text-muted">
+            {premiumMissing
+              ? "Haaland ficou de fora deste cenário. Isto não significa que seja uma má escolha: testa um plantel com ele antes de decidir."
+              : "Haaland já pertence ao plantel projetado."}
+          </p>
+          <p className="mt-1 text-xs text-text-muted">
+            Haaland: {premium.next.toFixed(1)} pontos previstos na próxima jornada · {premium.window.toFixed(1)} na janela · {premium.seasonPts} pontos na época · £{premium.price.toFixed(1)}m.
+          </p>
+          {premiumMissing && (
+            <button type="button" disabled={pending || included.includes(premium.id)}
+              onClick={() => go(kept, [...included, premium.id])}
+              className="mt-2 rounded-md bg-accent px-3 py-2 text-sm font-semibold text-accent-contrast disabled:opacity-50">
+              {included.includes(premium.id) ? "Haaland incluído na comparação" : "Comparar Wildcard com Haaland"}
+            </button>
+          )}
+          <p className="mt-2 text-xs text-text-muted">
+            O cenário é recalculado com o mesmo orçamento. Diferenças pequenas na previsão não provam que uma equipa seja superior.
+          </p>
+        </div>
+      )}
+      {active === "wildcard" && eliteAlternatives.length > 0 && (
+        <section className="rounded-lg border border-border bg-surface-2 p-3">
+          <h3 className="text-sm font-semibold text-text">Comparar com jogadores da elite</h3>
+          <p className="my-2 text-xs text-text-muted">
+            Estes jogadores têm elevada presença nas equipas da elite, mas não constam deste Wildcard.
+            A popularidade não substitui uma previsão; usa os botões para testar alternativas.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {eliteAlternatives.map(p => (
+              <button key={p.id} type="button" disabled={pending || included.includes(p.id)}
+                onClick={() => go(kept, [...included, p.id])}
+                className="rounded-md border border-border px-3 py-2 text-xs text-text hover:border-accent disabled:opacity-50">
+                Incluir {p.name} · {p.next.toFixed(1)} xP · elite {Math.round(p.elite ?? 0)}%
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
       {(active === "wildcard" || active === "freehit") && candidates.length > 0 && (
         <div className="rounded-md border border-border bg-surface-2 p-3">
           <p className="eyebrow mb-2 text-text-muted">Incluir um jogador que não tens</p>

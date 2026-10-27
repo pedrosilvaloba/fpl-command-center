@@ -306,3 +306,11 @@ body {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
+
+header.topbar nav[aria-label="Áreas da aplicação"]{display:none}
+body{padding-bottom:5rem}
+.decision-dock{position:fixed;bottom:0;left:0;right:0;z-index:50;background:#24152b;color:#fff;padding:.5rem .75rem;box-shadow:0 -4px 20px #0003}
+.decision-dock-inner{max-width:70rem;margin:auto;display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) 2.5rem;gap:.4rem;align-items:center}
+.decision-dock-link{text-align:center;border-radius:.5rem;padding:.7rem .2rem;font-size:.8rem;font-weight:600;color:#fffc}
+.decision-dock-current{background:#bafc62;color:#23122a}
+.decision-dock-settings{text-align:center;color:#fffa;font-size:1.2rem}
