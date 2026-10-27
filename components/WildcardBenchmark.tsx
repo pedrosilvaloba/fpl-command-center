@@ -16,9 +16,9 @@ export default function WildcardBenchmark({alternatives, main}:{
       <h3 className="font-semibold text-text">Três maneiras de construir o Wildcard</h3>
       <p className="text-xs text-text-muted mt-1">Mesmas regras e orçamento. Cada alternativa constrói 15 jogadores, não apenas um capitão.</p>
     </div>
-    {!alternatives ? <a href={link()} className="inline-flex rounded-md bg-accent px-3 py-2 text-sm font-semibold text-accent-contrast">
+    {!alternatives ? <button type="button" onClick={() => window.location.assign(link())} className="inline-flex rounded-md bg-accent px-3 py-2 text-sm font-semibold text-accent-contrast">
       Comparar plantéis completos
-    </a> : <>
+    </button> : <>
       <div className="grid gap-2 md:grid-cols-3">
         <article className="rounded-lg bg-surface-2 p-3">
           <h4 className="text-sm font-semibold">Modelo Command Center</h4>
