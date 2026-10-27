@@ -299,6 +299,9 @@ export default function ChipScenarioPanel({
   const premium = candidates.find((c) => c.name.toLowerCase().includes("haaland"));
   const currentWildIds = new Set([...(wcView?.xi ?? []), ...(wcView?.bench ?? [])].map(p => p.id));
   const premiumMissing = premium !== undefined && !currentWildIds.has(premium.id);
+  const premiumForced = premium !== undefined && included.includes(premium.id);
+  const premiumInfeasible = premiumForced && (wcView?.xi.length ?? 0) === 0;
+
   const eliteAlternatives = candidates
     .filter((p) => p.id !== premium?.id && !currentWildIds.has(p.id))
     .filter((p) => p.elite !== null && p.elite >= 30)
@@ -463,9 +466,11 @@ export default function ChipScenarioPanel({
         <div className="rounded-lg border border-border bg-surface p-3">
           <h3 className="text-sm font-semibold text-text">Verificar jogadores decisivos</h3>
           <p className="mt-1 text-xs text-text-muted">
-            {premiumMissing
-              ? "Haaland ficou de fora deste cenário. Isto não significa que seja uma má escolha: testa um plantel com ele antes de decidir."
-              : "Haaland já pertence ao plantel projetado."}
+            {premiumInfeasible
+              ? "Não foi possível construir um plantel legal com Haaland e as restantes condições. Remove outros jogadores obrigatórios para voltar a calcular."
+              : premiumMissing
+                ? "Haaland ficou de fora deste cenário. Isto não significa que seja uma má escolha: testa um plantel com ele antes de decidir."
+                : "Haaland já pertence ao plantel projetado."}
           </p>
           <p className="mt-1 text-xs text-text-muted">
             Haaland: {premium.next.toFixed(1)} pontos previstos na próxima jornada · {premium.window.toFixed(1)} na janela · {premium.seasonPts} pontos na época · £{premium.price.toFixed(1)}m.
