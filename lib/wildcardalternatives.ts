@@ -8,6 +8,7 @@ export interface WildcardAlternative {
   reason: string;
   ids: number[];
   xiIds: number[];
+  xiNames: string[];
   captainId: number | null;
   budgetRemaining: number | null;
   modelXiNext: number | null;
@@ -30,7 +31,7 @@ export function optimizeWildcardBaselines(
     };
     const measured = scored.filter(p => valid(p)!==null).length;
     if (measured < scored.length*0.95) {
-      return { criterion,available:false,reason:"Cobertura de dados insuficiente para comparar sem valores inventados.",ids:[],xiIds:[],captainId:null,budgetRemaining:null,modelXiNext:null,modelXiWindow:null };
+      return { criterion,available:false,reason:"Cobertura de dados insuficiente para comparar sem valores inventados.",ids:[],xiIds:[],xiNames:[],captainId:null,budgetRemaining:null,modelXiNext:null,modelXiWindow:null };
     }
     const input = scored.map(p => {
       const value=valid(p) ?? 0;
@@ -42,16 +43,16 @@ export function optimizeWildcardBaselines(
     const scenario = advice.scenarios.find(s=>s.chip==="wildcard");
     const plan=scenario?.plan;
     if(!plan || plan.xi.length!==11 || plan.bench.length!==4) {
-      return {criterion,available:false,reason:"Não foi possível construir uma equipa legal sob estas restrições.",ids:[],xiIds:[],captainId:null,budgetRemaining:null,modelXiNext:null,modelXiWindow:null};
+      return {criterion,available:false,reason:"Não foi possível construir uma equipa legal sob estas restrições.",ids:[],xiIds:[],xiNames:[],captainId:null,budgetRemaining:null,modelXiNext:null,modelXiWindow:null};
     }
     const xi=plan.xi.map(p=>p.element.id);
     const ids=[...xi,...plan.bench.map(p=>p.element.id)];
     if(new Set(ids).size!==15 || ids.some(id=>!byId.has(id))) {
-      return {criterion,available:false,reason:"Equipa resultante inválida.",ids:[],xiIds:[],captainId:null,budgetRemaining:null,modelXiNext:null,modelXiWindow:null};
+      return {criterion,available:false,reason:"Equipa resultante inválida.",ids:[],xiIds:[],xiNames:[],captainId:null,budgetRemaining:null,modelXiNext:null,modelXiWindow:null};
     }
     return {
       criterion,available:true,reason:"Plantel otimizado pelo critério independente; pontuação apresentada usa sempre o nosso modelo como unidade comum.",
-      ids,xiIds:xi,captainId:plan.captain?.element.id??null,budgetRemaining:plan.bankAfterM,
+      ids,xiIds:xi,xiNames:xi.map(id=>byId.get(id)?.element.web_name??("#"+id)),captainId:plan.captain?.element.id??null,budgetRemaining:plan.bankAfterM,
       modelXiNext:Math.round(xi.reduce((sum,id)=>sum+(byId.get(id)?.expectedPointsNext??0),0)*10)/10,
       modelXiWindow:Math.round(xi.reduce((sum,id)=>sum+(byId.get(id)?.expectedPoints??0),0)*10)/10,
     };
