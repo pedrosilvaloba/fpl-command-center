@@ -278,7 +278,7 @@ export default function ChipScenarioPanel({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [active, setActive] = useState<ChipKey | null>(initialChip);
+  const [active, setActive] = useState<ChipKey | null>(initialChip ?? (scenarios.some(s => s.chip === "wildcard") ? "wildcard" : scenarios[0]?.chip ?? null));
   const [question, setQuestion] = useState("");
   const [notUnderstood, setNotUnderstood] = useState(false);
   const [includeText, setIncludeText] = useState("");
@@ -338,8 +338,10 @@ export default function ChipScenarioPanel({
 
   return (
     <div id="cenarios" className="scroll-mt-24 space-y-4">
+      <details className="rounded-lg border border-border bg-surface-2 p-3">
+        <summary className="cursor-pointer text-xs text-text-muted">Prefiro escrever uma pergunta</summary>
       <form
-        className="flex flex-col gap-2 sm:flex-row"
+        className="mt-2 flex flex-col gap-2 sm:flex-row"
         onSubmit={(e) => {
           e.preventDefault();
           ask(question);
@@ -359,6 +361,7 @@ export default function ChipScenarioPanel({
           Ver opções
         </button>
       </form>
+      </details>
 
       <div className="flex flex-wrap items-center gap-2">
         {scenarios.map((s) => (
