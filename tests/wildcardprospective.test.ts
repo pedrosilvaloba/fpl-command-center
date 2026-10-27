@@ -13,7 +13,7 @@ assert.ok(snap);assert.equal(snap.squads.length,3);
 assert.equal(freezeWildcardExperiment(9,deadline,main,[a("ppg"),a("fpl")],Date.parse(deadline)),null);
 assert.equal(freezeWildcardExperiment(9,deadline,main,[a("ppg")],before),null);
 const actual=new Map<number,SimulatedPlayer>();
-for(let i=1;i<=15;i++) actual.set(i,{id:i,position:i===1?1:i<=5?2:i<=12?3:4,minutes:90,points:2});
+for(let i=1;i<=15;i++) actual.set(i,{id:i,position:i===1||i===12?1:i<=5||i===13?2:i<=9||i===14?3:4,minutes:90,points:2});
 const settled=gradeWildcards(snap,actual,"2026-10-31T12:00:00Z");
 assert.ok(settled);assert.equal(settled.results.length,3);
 assert.equal(gradeWildcards(snap,actual,"2026-10-29T12:00:00Z"),null);
