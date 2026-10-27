@@ -23,6 +23,7 @@ export interface ScenarioPlayerView {
    * se uma troca faz sentido, e que o modelo não mostrava. */
   seasonPts: number;
   ppg: number;
+  officialNext: number | null;
   /** % de posse na elite, null quando os dados da elite não estão carregados */
   elite: number | null;
 }
@@ -67,6 +68,8 @@ function player(p: ScoredPlayer, eliteLookup: (id: number) => number | null): Sc
     window: r1(p.expectedPoints),
     seasonPts: Number(p.element.total_points) || 0,
     ppg: Number(p.element.points_per_game) || 0,
+    officialNext: p.element.ep_next === undefined || p.element.ep_next === null || p.element.ep_next === ""
+      ? null : Number.isFinite(Number(p.element.ep_next)) ? Number(p.element.ep_next) : null,
     elite: eliteLookup(p.element.id),
   };
 }
