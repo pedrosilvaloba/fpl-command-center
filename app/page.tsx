@@ -83,6 +83,7 @@ import DeferralPanel from "@/components/DeferralPanel";
 import ChipScenarioPanel from "@/components/ChipScenarioPanel";
 import WildcardBenchmark from "@/components/WildcardBenchmark";
 import { optimizeWildcardBaselines } from "@/lib/wildcardalternatives";
+import { freezeWildcardExperiment, captureWildcardExperiment } from "@/lib/wildcardprospective";
 import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, parseWildcardProfile } from "@/lib/chipscenarioview";
 import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
 import { cachedMultiPeriod } from "@/lib/multiperiodcache";
@@ -956,6 +957,17 @@ export default async function Home({
         ...transferPlanOpts,keepIds,includeIds
       },wildcardProfile)
     : null;
+  // Never store what-if experiments from previews, other managers, or postdeadline.
+  if (wildcardAlternatives && upcomingEvent && mayCaptureBenchmarks &&
+      teamId === Number(DEFAULT_TEAM_ID) && !experimentalRecentMinutes &&
+      keepIds.length === 0 && includeIds.length === 0 && wildcardProfile === "equilibrado") {
+    const mainWildcard = toScenarioViews(transferAdvice.scenarios,
+      squadState.owned.map(o=>o.elementId),eliteLookup).find(s=>s.chip==="wildcard");
+    try {
+      await captureWildcardExperiment(freezeWildcardExperiment(upcomingEvent.id,
+        upcomingEvent.deadline_time,mainWildcard,wildcardAlternatives,Date.now()));
+    } catch { console.warn("wildcard-prospective-capture-failed"); }
+  }
   // O conselho desta jornada fica registado até ao deadline (lib/decisions.ts).
   const advisedPlan = transferAdvice.recommended;
   const shadowPlan = selectShadowTransferPlan(transferAdvice.plans);
