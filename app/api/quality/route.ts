@@ -7,13 +7,14 @@ import { getBootstrap } from "@/lib/fpl-client";
 import { auditTransferShadow } from "@/lib/transferpolicyaudit";
 import { auditCaptainBaselines } from "@/lib/captainquality";
 import { getFrozenMinutesDecisionHistory } from "@/lib/minutesdecisionoutcomes";
+import { getWildcardHistory } from "@/lib/wildcardprospective";
 
 /** Public, aggregate-only evidence status: no manager identifiers, player
  * picks, notes, credentials or private team state. */
 export const dynamic = "force-dynamic";
 export async function GET() {
-  const [minutes,forward,decisions,minuteDecisions] = await Promise.all([
-    getMinuteABHistory(),getForwardHistory(),getDecisionHistory(),getFrozenMinutesDecisionHistory(),
+  const [minutes,forward,decisions,minuteDecisions,wildcards] = await Promise.all([
+    getMinuteABHistory(),getForwardHistory(),getDecisionHistory(),getFrozenMinutesDecisionHistory(),getWildcardHistory(),
   ]);
   // Use FPL deadlines exclusively to validate archived predeadline advice.
   // A missing upstream deadline never authorizes a comparison.
@@ -42,6 +43,11 @@ export async function GET() {
   );
   return NextResponse.json({
     status:"experimental",
+    wildcards:{configured:wildcards.configured,settledGameweeks:wildcards.results.length,
+      pending:wildcards.pending,
+      results:wildcards.results.map(r=>({event:r.event,...Object.fromEntries(r.results.map(s=>[s.policy,s.points]))})),
+      evidence:wildcards.results.length<12?"insufficient":"descriptive-only",
+      note:"Decisões hipotéticas congeladas antes do deadline, sem transferências reais, penalizações ou chips executados. Comparação descritiva de plantéis."},
     minutesDecisions:(()=>{const rows=minuteDecisions.results.filter(r=>r.different);
       return {pairedDifferentGameweeks:rows.length,pending:minuteDecisions.pending,
         challengerMinusBaseline:rows.length?rows.reduce((sum,r)=>sum+r.gain,0):null,
