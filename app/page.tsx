@@ -965,7 +965,7 @@ export default async function Home({
       squadState.owned.map(o=>o.elementId),eliteLookup).find(s=>s.chip==="wildcard");
     try {
       await captureWildcardExperiment(freezeWildcardExperiment(upcomingEvent.id,
-        upcomingEvent.deadline_time,mainWildcard,wildcardAlternatives,Date.now()));
+        upcomingEvent.deadline_time,mainWildcard,wildcardAlternatives,nowMs));
     } catch { console.warn("wildcard-prospective-capture-failed"); }
   }
   // O conselho desta jornada fica registado até ao deadline (lib/decisions.ts).
