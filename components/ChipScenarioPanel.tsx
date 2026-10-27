@@ -453,6 +453,32 @@ export default function ChipScenarioPanel({
               <p className="text-xs text-text-muted">{wcView.gainNext.toFixed(1)} pontos próxima jornada</p>
             </div>
           </div>
+          {(() => {
+            const delta = wcView.gainWindow! - previousWildcard.gainWindow!;
+            const removed = [...previousWildcard.xi, ...previousWildcard.bench]
+              .filter(p => ![...wcView.xi, ...wcView.bench].some(q => q.id === p.id))
+              .map(p => p.name);
+            const added = [...wcView.xi, ...wcView.bench]
+              .filter(p => ![...previousWildcard.xi, ...previousWildcard.bench].some(q => q.id === p.id))
+              .map(p => p.name);
+            return (
+              <div className="mt-2 text-sm text-text">
+                <p className="font-semibold">
+                  Diferença projetada: {delta >= 0 ? "+" : ""}{delta.toFixed(1)} pontos em 5 jornadas.
+                </p>
+                <p className="mt-1 text-xs text-text-muted">
+                  {Math.abs(delta) < 2
+                    ? "Diferença inferior a 2 pontos: não há evidência para declarar uma alternativa superior."
+                    : "A vantagem é apenas uma projeção e ainda não demonstra superioridade real."}
+                </p>
+                {(removed.length > 0 || added.length > 0) && (
+                  <p className="mt-1 text-xs text-text-muted">
+                    Saem: {removed.join(", ") || "nenhum"} · Entram: {added.join(", ") || "nenhum"}.
+                  </p>
+                )}
+              </div>
+            );
+          })()}
           <p className="mt-2 text-xs text-text-muted">
             Compara estimativas de momentos consecutivos, não pontos garantidos.
             Pequenas diferenças são inconclusivas e os dados podem atualizar-se entre simulações.
