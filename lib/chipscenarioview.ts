@@ -165,6 +165,7 @@ export interface IncludeCandidate {
   next: number;
   window: number;
   seasonPts: number;
+  alreadyOwned: boolean;
 }
 
 /** Os candidatos a "incluir": os melhores por posição e todos os que a
@@ -187,6 +188,7 @@ export function includeCandidates(
     next: Math.round(p.expectedPointsNext * 10) / 10,
     window: Math.round(p.expectedPoints * 10) / 10,
     seasonPts: Number(p.element.total_points) || 0,
+    alreadyOwned: ownedIds.has(p.element.id),
   });
   for (const t of [1, 2, 3, 4]) {
     scored
@@ -198,6 +200,20 @@ export function includeCandidates(
   for (const p of scored) {
     const e = eliteOwn(p.element.id);
     if (e !== null && e >= 20 && !ownedIds.has(p.element.id)) out.set(p.element.id, mk(p));
+  }
+  // Selection must not hide established stars just because our forecast is low.
+  for (const p of [...scored].sort((a,b) =>
+    (Number(b.element.total_points) || 0) - (Number(a.element.total_points) || 0)).slice(0, 25)) {
+    out.set(p.element.id, mk(p));
+  }
+  for (const p of [...scored].filter(p=>p.element.element_type>=3)
+    .sort((a,b)=>b.priceM-a.priceM).slice(0, 16)) {
+    out.set(p.element.id, mk(p));
+  }
+  // Check elite incumbents too: a wildcard may surprisingly sell them.
+  for (const p of scored) {
+    const share = eliteOwn(p.element.id);
+    if (share !== null && share >= 50) out.set(p.element.id, mk(p));
   }
   return [...out.values()].sort((a, b) => (b.elite ?? 0) - (a.elite ?? 0) || a.name.localeCompare(b.name));
 }
