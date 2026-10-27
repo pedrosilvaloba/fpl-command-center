@@ -45,6 +45,8 @@ export interface ScenarioView {
   keptIds: number[];
   includedIds: number[];
   includedByDefault: number[];
+  /** Alert when a high-ownership premium is absent; informational, never forces a player. */
+  missingElitePremiums?: {id:number;name:string;price:number;elite:number}[];
   /** Ids do plantel atual, para o painel saber quem pode ser fixado. */
   ownedIds: number[];
   xi: ScenarioPlayerView[];
