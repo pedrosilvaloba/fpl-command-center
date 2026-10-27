@@ -23,6 +23,7 @@ import { settleStrategies } from "./strategylearning";
 import { settleForwardSnapshots } from "./forwardbenchmark";
 import { settleMinuteBenchmarks } from "./minutebenchmark";
 import { settleFrozenMinutesPairs } from "./minutesdecisionoutcomes";
+import { settleWildcardExperiments } from "./wildcardprospective";
 import {
   LAST_SEASON_KEY,
   ratesFromHistoryPast,
@@ -665,6 +666,7 @@ export async function runDecisionsJob(
     settleForwardSnapshots(finishedEvents),
     settleMinuteBenchmarks(finishedEvents),
     settleFrozenMinutesPairs(finishedEvents),
+    settleWildcardExperiments(finishedEvents),
   ]);
   const trackingFailures = trackingResults.filter((r) => r.status === "rejected").length;
   if (trackingFailures) console.warn("fpl-tracking-partial", { trackingFailures });
