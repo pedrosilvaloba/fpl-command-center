@@ -11,6 +11,7 @@ import {
   type ScenarioView,
 } from "@/lib/chipscenarioview";
 import ClubKit from "./ClubKit";
+import WildcardPitch from "./WildcardPitch";
 
 /**
  * "GOSTAVA DE USAR O WILDCARD ESTA SEMANA. QUAIS SÃO AS MINHAS OPÇÕES?"
@@ -226,7 +227,11 @@ function Scenario({
       )}
 
       {s.xi.length > 0 && (
-        <div className="grid gap-4 md:grid-cols-[1fr_18rem]">
+        <div className="space-y-3">
+          <WildcardPitch players={s.xi} captainId={s.captainId} viceCaptainId={s.viceCaptainId} />
+          <details className="rounded-lg border border-border bg-surface-2 p-3">
+            <summary className="cursor-pointer text-sm font-semibold text-text">Ver detalhe de jogadores, preços e banco</summary>
+            <div className="mt-3 grid gap-4 md:grid-cols-[1fr_18rem]">
           <div>
             <div className="mb-1 flex justify-between gap-2">
               <p className="eyebrow text-text-muted">Onze para esta jornada</p>
@@ -250,6 +255,7 @@ function Scenario({
               <PlayerRow key={p.id} p={p} lock={lockFor(p)} />
             ))}
           </div>
+          </details>
         </div>
       )}
 
