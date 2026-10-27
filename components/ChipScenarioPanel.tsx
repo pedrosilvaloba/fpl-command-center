@@ -288,6 +288,10 @@ export default function ChipScenarioPanel({
   const kept = wcView?.keptIds ?? [];
   const included = wcView?.includedIds ?? [];
   const nameOf = (id: number) => candidates.find((c) => c.id === id)?.name ?? `#${id}`;
+  const premium = candidates.find((c) => c.name.toLowerCase().includes("haaland"));
+  const currentWildIds = new Set([...(wcView?.xi ?? []), ...(wcView?.bench ?? [])].map(p => p.id));
+  const premiumMissing = premium !== undefined && !currentWildIds.has(premium.id);
+
 
   const go = (nextKept: number[], nextIncluded: number[], profile: WildcardProfile = wildcardProfile) => {
     const href = scenarioHref(window.location.search, active ?? "wildcard", nextKept, nextIncluded, profile);
@@ -413,6 +417,26 @@ export default function ChipScenarioPanel({
         </div>
       )}
 
+      {active === "wildcard" && premium && (
+        <div className="rounded-lg border border-border bg-surface p-3">
+          <h3 className="text-sm font-semibold text-text">Verificar jogadores decisivos</h3>
+          <p className="mt-1 text-xs text-text-muted">
+            {premiumMissing
+              ? "Haaland ficou de fora deste cenário. Isto não significa que seja uma má escolha: testa um plantel com ele antes de decidir."
+              : "Haaland já pertence ao plantel projetado."}
+          </p>
+          {premiumMissing && (
+            <button type="button" disabled={pending || included.includes(premium.id)}
+              onClick={() => go(kept, [...included, premium.id])}
+              className="mt-2 rounded-md bg-accent px-3 py-2 text-sm font-semibold text-accent-contrast disabled:opacity-50">
+              {included.includes(premium.id) ? "Haaland incluído na comparação" : "Comparar Wildcard com Haaland"}
+            </button>
+          )}
+          <p className="mt-2 text-xs text-text-muted">
+            O cenário é recalculado com o mesmo orçamento. Diferenças pequenas na previsão não provam que uma equipa seja superior.
+          </p>
+        </div>
+      )}
       {(active === "wildcard" || active === "freehit") && candidates.length > 0 && (
         <div className="rounded-md border border-border bg-surface-2 p-3">
           <p className="eyebrow mb-2 text-text-muted">Incluir um jogador que não tens</p>
