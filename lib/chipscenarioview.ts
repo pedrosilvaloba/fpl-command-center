@@ -162,6 +162,9 @@ export interface IncludeCandidate {
   price: number;
   /** % de posse na elite, quando conhecida */
   elite: number | null;
+  next: number;
+  window: number;
+  seasonPts: number;
 }
 
 /** Os candidatos a "incluir": os melhores por posição e todos os que a
@@ -181,6 +184,9 @@ export function includeCandidates(
     pos: p.positionShort,
     price: p.priceM,
     elite: eliteOwn(p.element.id),
+    next: Math.round(p.expectedPointsNext * 10) / 10,
+    window: Math.round(p.expectedPoints * 10) / 10,
+    seasonPts: Number(p.element.total_points) || 0,
   });
   for (const t of [1, 2, 3, 4]) {
     scored
