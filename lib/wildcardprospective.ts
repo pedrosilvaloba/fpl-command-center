@@ -91,8 +91,17 @@ export async function settleWildcardExperiments(finished:number[]){
   }
 }
 export async function getWildcardHistory(){
-  const redis=getRedis();if(!redis)return {configured:false,results:[] as WildcardOutcome[],pending:[] as number[]};
-  const ids=(await redis.smembers(INDEX)??[]).map(Number).filter(Number.isSafeInteger).sort((a,b)=>b-a).slice(0,20);
-  const results=await Promise.all(ids.map(id=>redis.get<WildcardOutcome>(OUT(id))));
-  return {configured:true,results:results.filter((r):r is WildcardOutcome=>!!r),pending:ids.filter((id,i)=>!results[i])};
+  const empty={configured:false,results:[] as WildcardOutcome[],pending:[] as number[]};
+  const redis=getRedis();if(!redis)return empty;
+  try {
+    const ids=(await redis.smembers(INDEX)??[]).map(Number)
+      .filter(id=>Number.isSafeInteger(id)&&id>0).sort((a,b)=>b-a).slice(0,20);
+    const results=await Promise.all(ids.map(id=>redis.get<WildcardOutcome>(OUT(id))));
+    return {configured:true,results:results.filter((r):r is WildcardOutcome=>
+      !!r&&Number.isSafeInteger(r.event)&&r.results?.length===3),
+      pending:ids.filter((id,i)=>!results[i])};
+  } catch {
+    // Storage outage must never take down the owner's analysis dashboard.
+    return empty;
+  }
 }
