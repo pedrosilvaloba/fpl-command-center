@@ -82,6 +82,8 @@ import CaptainShortlist from "@/components/CaptainShortlist";
 import DeferralPanel from "@/components/DeferralPanel";
 import ChipScenarioPanel from "@/components/ChipScenarioPanel";
 import WildcardBenchmark from "@/components/WildcardBenchmark";
+import WildcardEvidence from "@/components/WildcardEvidence";
+import {getWildcardHistory} from "@/lib/wildcardprospective";
 import { optimizeWildcardBaselines } from "@/lib/wildcardalternatives";
 import { freezeWildcardExperiment, captureWildcardExperiment } from "@/lib/wildcardprospective";
 import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, parseWildcardProfile } from "@/lib/chipscenarioview";
@@ -952,6 +954,7 @@ export default async function Home({
     : [];
   // Expensive independent whole-squad comparisons are explicit opt-in,
   // never recomputed for every visitor or scheduled capture.
+  const wildcardEvidence = view === "analisar" ? await getWildcardHistory() : null;
   const wildcardAlternatives = view === "simular" && sp.comparar === "1" && squadState.available
     ? optimizeWildcardBaselines(scored,squadState,{
         ...transferPlanOpts,keepIds,includeIds
@@ -1481,6 +1484,8 @@ export default async function Home({
         </>)}
         {view === "analisar" && (<>
           <TierHeading label="Perceber" note="como correu, e o que o modelo aprendeu com isso" />
+          {wildcardEvidence && <WildcardEvidence {...wildcardEvidence} />}
+
         {/* ================= 2. revisão da jornada ================= */}
         <Section
           id="revisao"
