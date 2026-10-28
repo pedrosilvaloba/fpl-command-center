@@ -2162,6 +2162,21 @@ function testHitIsOnlyTakenWhenItPaysForItself() {
   );
 }
 
+function testWildcardRecognizesProvenPremiumWithoutNameRule() {
+  const pool=mkTransferPool([]);
+  const premium=mkSim(987654,{type:4,teamId:19,epNext:3.8,price:10,own:48});
+  premium.element.web_name="Proven Premium";
+  premium.element.total_points=155;
+  premium.element.points_per_game="8.5";
+  premium.element.minutes=1350;
+  const advice=planTransfers([...pool.scored,premium],mkState(pool.owned,1,20),{currentEvent:12});
+  const wc=advice.scenarios.find(s=>s.chip==="wildcard");
+  check("Wildcard identifica um premium comprovado sem depender do nome",
+    !!wc?.plan?.squad.some(p=>p.element.id===premium.element.id));
+  check("Wildcard premium segue a composição legal e orçamento",
+    !!wc?.plan && wc.plan.squad.length===15 && wc.plan.bankAfterM>=-0.01);
+}
+
 function testFreeTransfersHaveOptionValue() {
   // A banked free transfer is an option on next week's information. Without
   // a price on it the planner spent every accumulated transfer on any
@@ -4786,6 +4801,7 @@ testFreeTransferReconstruction();
 testSellingPriceEstimation();
 testChipSummary();
 testTransferPlanRespectsTheRules();
+testWildcardRecognizesProvenPremiumWithoutNameRule();
 testHitIsOnlyTakenWhenItPaysForItself();
 testFreeTransfersHaveOptionValue();
 testNoUpgradeMeansHold();

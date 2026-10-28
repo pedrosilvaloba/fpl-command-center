@@ -1,4 +1,5 @@
 import solver from "javascript-lp-solver";
+import { wildcardCaptainAwareValue } from "./wildcarddecision";
 import type { ScoredPlayer } from "./recommend";
 import { pickBestXI, pickCaptain, orderBench } from "./recommend";
 import { WILDCARD_BREAK_PREMIUM, type CalendarContext } from "./chipplan";
@@ -1519,6 +1520,59 @@ function buildChipScenarios(ctx: {
       }
     }
   }
+  // The LP allocates budget to the XI, but it does not price the *extra*
+  // captain copy. A premium with strong sustainable output can therefore
+  // be omitted even when the full (XI + captain + bench) team scores higher.
+  // Check the strongest historically established forwards under the same
+  // FPL constraints. This is a counterfactual solve, NOT a forced-pick rule:
+  // keep the unrestricted solution unless the constrained one scores better.
+  const captainAwareScore = (squad: ScoredPlayer[]) => {
+    const byId = new Map(profilePool.map(p => [p.element.id, p]));
+    const objectiveSquad = squad.map(p => byId.get(p.element.id) ?? p);
+    const e = evaluate(objectiveSquad, beta);
+    return wildcardCaptainAwareValue(e.xi,e.bench,e.captain);
+  };
+  let captainOpportunityNote = "";
+  if (wcSolved && ctx.requiredWildcardIds.length === 0 && !ctx.includeIds.size &&
+      !ctx.keepIds.size && profile === "equilibrado") {
+    const score = captainAwareScore;
+    let best = wcSolved;
+    let bestScore = score(best);
+    let examined = 0;
+    let leadingRejected: {name:string;gap:number}|null = null;
+    const establishedForwards = ctx.scored.filter(p =>
+      p.element.element_type === 4 && p.element.minutes >= 270 &&
+      Number(p.element.total_points) >= 30 &&
+      !best.some(q => q.element.id === p.element.id));
+    // Use independent evidence to SELECT who deserves a counterfactual.
+    // Test the top season scorer and the top per-game forward, not just
+    // whichever names the experimental forecast already likes.
+    const bySeason=[...establishedForwards].sort((a,b)=>
+      Number(b.element.total_points)-Number(a.element.total_points))[0];
+    const byPpg=[...establishedForwards].sort((a,b)=>
+      Number(b.element.points_per_game)-Number(a.element.points_per_game))[0];
+    const eliteForwards=[...new Map([bySeason,byPpg].filter(
+      (p):p is ScoredPlayer=>!!p).map(p=>[p.element.id,p] as const)).values()];
+    for (const candidate of eliteForwards) {
+      const trial = solveWc(new Set([...wildcardForced, ...defaultUsed, candidate.element.id]));
+      if (!trial) continue;
+      const trialScore = score(trial);
+      examined++;
+      if (trialScore <= bestScore + 0.05 &&
+          (leadingRejected === null || trialScore > bestScore - leadingRejected.gap)) {
+        leadingRejected = {name:candidate.element.web_name,gap:Math.round((bestScore-trialScore)*10)/10};
+      }
+      if (trialScore > bestScore + 0.05) {
+        best = trial;
+        bestScore = trialScore;
+        captainOpportunityNote = ` Ao contabilizar o valor adicional da capitania, o melhor plantel inclui ${candidate.element.web_name}; a alternativa sem ele ficou abaixo na avaliação completa.`;
+      }
+    }
+    if (!captainOpportunityNote && examined > 0 && leadingRejected) {
+      captainOpportunityNote = ` Comparação premium: ${leadingRejected.name} foi avaliado num plantel legal alternativo, incluindo o valor extra da capitania; ficou ${leadingRejected.gap.toFixed(1)} pts abaixo nesta estimativa de 5 jornadas.`;
+    }
+    wcSolved = best;
+  }
   const nameById = new Map(ctx.scored.map((p) => [p.element.id, p.element.web_name] as [number, string]));
   const defaultNote = defaultUsed.length > 0
     ? `Incluí por omissão ${defaultUsed.map((id) => nameById.get(id) ?? `#${id}`).join(", ")}: núcleo de referência do cenário. `
@@ -1534,7 +1588,7 @@ function buildChipScenarios(ctx: {
         ? "Cenário de curto prazo: o solver prioriza a próxima jornada, mas os ganhos de 5 jornadas continuam medidos com as previsões originais. Não é necessariamente a melhor equipa para o mês."
         : profile === "continuidade"
           ? `Cenário de continuidade: preserva automaticamente ${protectedByProfile.length} titulares fiáveis (${protectedByProfile.map((id) => nameById.get(id) ?? "#" + id).join(", ") || "nenhum possível"}), além dos fixos escolhidos por ti. Só são preservados quando existe plantel legal.`
-          : "Cenário equilibrado: o solver privilegia o conjunto das próximas cinco jornadas. Isto é uma opção de simulação, não uma ordem para gastar o Wildcard.";
+          : "Cenário equilibrado: o solver privilegia o conjunto das próximas cinco jornadas. Isto é uma opção de simulação, não uma ordem para gastar o Wildcard." + captainOpportunityNote;
   }
   if (wcPlanForScenario && ctx.wildcard) {
     const p = wcPlanForScenario;
