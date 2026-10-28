@@ -42,7 +42,8 @@ export async function runDailyMinutesCapture():Promise<{ok:boolean;status:string
     try{
       const response=await fetch("https://"+domain+"/?view=analisar",{
         signal:controller.signal,cache:"no-store",redirect:"error",
-        headers:{"x-fpl-snapshot-trigger":"scheduled"}
+        headers:{"x-fpl-snapshot-trigger":"scheduled",
+      ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET?{"x-vercel-protection-bypass":process.env.VERCEL_AUTOMATION_BYPASS_SECRET}:{})}
       });
       if(!response.ok)return {ok:false,status:"analysis-page-"+response.status};
     }finally{clearTimeout(timeout);}
