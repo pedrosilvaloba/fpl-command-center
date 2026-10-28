@@ -857,6 +857,8 @@ export function planTransfers(
      * equipas) que ele não tem. Ordenados do mais para o menos possuído; os
      * que não couberem no orçamento ficam de fora, um a um. */
     defaultIncludeIds?: number[];
+    /** Core players always required only in Wildcard, never Free Hit. */
+    requiredWildcardIds?: number[];
     /** Um só cenário calculado por visita: evita 3 solves adicionais em SSR. */
     wildcardProfile?: WildcardProfile;
   } = {}
@@ -936,6 +938,8 @@ export function planTransfers(
     (id) => byId.has(id) && !ownedIds.has(id) && !includeIds.has(id)
   );
   for (const id of defaultIncludeIds) poolMap.set(id, byId.get(id)!);
+  const requiredWildcardIds = (opts.requiredWildcardIds ?? []).filter(id => byId.has(id));
+  for (const id of requiredWildcardIds) poolMap.set(id,byId.get(id)!);
   const pool = [...poolMap.values()];
 
   // How much evidence the model actually has: gameweeks already played. This
@@ -1322,7 +1326,8 @@ export function planTransfers(
     retention,
     keepIds: new Set((opts.keepIds ?? []).filter((id) => ownedIds.has(id))),
     includeIds,
-    defaultIncludeIds: defaultIncludeIds.filter(id => !includeIds.has(id)),
+    defaultIncludeIds: includeIds.size > 0 ? [] : defaultIncludeIds,
+    requiredWildcardIds,
     wildcardProfile: opts.wildcardProfile ?? "equilibrado",
     scored,
   });
@@ -1367,6 +1372,7 @@ function buildChipScenarios(ctx: {
   keepIds: Set<number>;
   includeIds: Set<number>;
   defaultIncludeIds: number[];
+  requiredWildcardIds: number[];
   wildcardProfile: WildcardProfile;
   scored: ScoredPlayer[];
 }): ChipScenario[] {
@@ -1389,7 +1395,7 @@ function buildChipScenarios(ctx: {
   // O encolhimento da maldição do vencedor continua dentro do solver; só
   // sai a exigência de vantagem sobre quem já está no plantel.
   const wcAvailable = chipAvailable(state, "wildcard");
-  const forced = new Set([...ctx.keepIds, ...ctx.includeIds]);
+  const forced = new Set([...ctx.keepIds, ...ctx.includeIds, ...ctx.requiredWildcardIds]);
   const forceIds = forced.size > 0 ? forced : undefined;
   const includedIds = [...ctx.includeIds];
   const incumbentBonus = provenIncumbentBonus(ctx.ownedSquad, ctx.scored, ctx.retention);
@@ -1484,8 +1490,7 @@ function buildChipScenarios(ctx: {
       }
     }
   }
-  // A required premium must never vanish silently after a failed solve.
-  if (!wcSolved && ctx.defaultIncludeIds.length === 0) wcSolved = solveWc(forceIds);
+  if (!wcSolved) wcSolved = solveWc(forceIds);
   if (wcSolved && profileCore.length > 0) {
     const mandatory = new Set([...forced, ...defaultUsed]);
     for (const id of profileCore) {
@@ -1499,11 +1504,11 @@ function buildChipScenarios(ctx: {
   }
   const nameById = new Map(ctx.scored.map((p) => [p.element.id, p.element.web_name] as [number, string]));
   const defaultNote = defaultUsed.length > 0
-    ? "Haaland entra como jogador-chave obrigatório neste Wildcard. O modelo continua a otimizar os outros 14 lugares com as regras e o orçamento reais. "
+    ? `Incluí por omissão ${defaultUsed.map((id) => nameById.get(id) ?? `#${id}`).join(", ")}: núcleo de referência do cenário. `
     : "";
   const wcPlanForScenario = wcSolved
     ? makePlan("wildcard", "Wildcard — reconstruir o plantel", wcSolved, ownedSquad, state, costM, beta, risers, fallers, 0)
-    : (forceIds || ctx.defaultIncludeIds.length > 0)
+    : forceIds
       ? null
       : ctx.wildcardPlan;
   if (wcPlanForScenario) {
@@ -1542,7 +1547,7 @@ function buildChipScenarios(ctx: {
     });
     const last = out[out.length - 1];
     if (last.available) last.verdict = defaultNote + last.verdict + describeKinds(last.moveKinds);
-  } else if ((forceIds || ctx.defaultIncludeIds.length > 0) && ctx.wildcard) {
+  } else if (forceIds && ctx.wildcard) {
     out.push({
       chip: "wildcard",
       label: "Wildcard",
@@ -1555,7 +1560,7 @@ function buildChipScenarios(ctx: {
       keptIds,
       includedIds,
       verdict:
-        "Não foi possível construir um Wildcard legal incluindo Haaland e as restantes condições. O modelo NÃO recomenda um plantel que o exclua silenciosamente; verifica orçamento, jogadores fixos e limite por clube.",
+        "Não há plantel possível com esses jogadores fixos e incluídos: ou não cabem no orçamento, ou ficam mais de 3 do mesmo clube ou de uma posição. Verifica as condições e tenta de novo.",
     });
   }
   // --- Free Hit -----------------------------------------------------------
