@@ -85,6 +85,7 @@ import WildcardBenchmark from "@/components/WildcardBenchmark";
 import WildcardEvidence from "@/components/WildcardEvidence";
 import {getWildcardHistory} from "@/lib/wildcardprospective";
 import { optimizeWildcardBaselines } from "@/lib/wildcardalternatives";
+import { wildcardCoreHaaland } from "@/lib/wildcardcore";
 import { freezeWildcardExperiment, captureWildcardExperiment } from "@/lib/wildcardprospective";
 import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, parseWildcardProfile } from "@/lib/chipscenarioview";
 import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
@@ -719,12 +720,7 @@ export default async function Home({
   // dominant premium forward by default. Only the Wildcard scenario is
   // constrained; normal transfers and captaincy remain unchanged.
   // The solver must still satisfy the real budget and squad rules.
-  const haalandWildcardCore = scored.find(p =>
-    p.element.element_type === 4 &&
-    /\bhaaland\b/i.test(p.element.web_name) &&
-    !ownedIdSet.has(p.element.id) &&
-    Number(p.element.total_points) > 0
-  );
+  const haalandWildcardCore = wildcardCoreHaaland(scored,ownedIdSet);
 
   // eslint-disable-next-line react-hooks/purity
   const plannerStartedAt = performance.now();
@@ -732,7 +728,7 @@ export default async function Home({
     ...transferPlanOpts,
     keepIds,
     includeIds,
-    defaultIncludeIds: haalandWildcardCore ? [haalandWildcardCore.element.id] : [],
+    defaultIncludeIds: haalandWildcardCore,
     wildcardProfile,
   });
   // eslint-disable-next-line react-hooks/purity
