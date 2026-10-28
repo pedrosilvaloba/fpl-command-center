@@ -8892,6 +8892,22 @@ function testConsultantImprovements() {
   const explicitWins = planTransfers(scored, mkState(owned, 1), { currentEvent: 8, includeIds: [outsider.element.id], defaultIncludeIds: gks.slice(0, 1) });
   check("o que o gestor inclui substitui as inclusões por omissão", (explicitWins.scenarios.find((s) => s.chip === "wildcard")!.includedByDefault ?? []).length === 0);
 
+  // Mandatory premium anchor is NOT an optional elite default. It remains
+  // required even when a manager includes other players in the Wildcard.
+  const premiumRequired = planTransfers(scored, mkState(owned, 1), {
+    currentEvent: 8, requiredWildcardIds: [outsider.element.id],
+    includeIds: gks.slice(0, 1),
+  });
+  check("Wildcard premium obrigatório permanece com outras inclusões",
+    premiumRequired.scenarios.find(s=>s.chip==="wildcard")?.plan?.squad
+      .some(p=>p.element.id===outsider.element.id) === true);
+  const premiumImpossible = planTransfers(scored, mkState(owned, 1), {
+    currentEvent: 8, requiredWildcardIds: [outsider.element.id],
+    includeIds: gks,
+  });
+  check("Wildcard premium impossível não é substituído silenciosamente",
+    premiumImpossible.scenarios.find(s=>s.chip==="wildcard")?.plan === null);
+
   // 7. Cron: os extras correm às 6h e podem ser pedidos à mão.
   check("as 6h também recolhem a época passada, a elite e as decisões", planFromRequest("0 6 * * *", null).extras.join(",") === "officialscout,research,lastseason,elite,decisions");
   check("?only=elite corre só a elite", (() => { const p = planFromRequest(null, "elite"); return !p.backtest && !p.calibration && p.extras.join(",") === "elite"; })());

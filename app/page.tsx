@@ -85,6 +85,7 @@ import WildcardBenchmark from "@/components/WildcardBenchmark";
 import WildcardEvidence from "@/components/WildcardEvidence";
 import {getWildcardHistory} from "@/lib/wildcardprospective";
 import { optimizeWildcardBaselines } from "@/lib/wildcardalternatives";
+import { wildcardCoreHaaland } from "@/lib/wildcardcore";
 import { freezeWildcardExperiment, captureWildcardExperiment } from "@/lib/wildcardprospective";
 import { toScenarioViews, parseKeepParam, parseChipParam, includeCandidates, parseWildcardProfile } from "@/lib/chipscenarioview";
 import { parseTeamId, parseAppView, viewHref } from "@/lib/appcontext";
@@ -715,6 +716,12 @@ export default async function Home({
   // explicit ?incluir= remains available for user-directed scenarios.
   const ownedIdSet = new Set(squadState.owned.map((o) => o.elementId));
   const eliteMissing = eliteGaps(elite, scored, ownedIdSet);
+  // Wildcard core policy: prevent the model's low-xP bias from excluding a
+  // dominant premium forward by default. Only the Wildcard scenario is
+  // constrained; normal transfers and captaincy remain unchanged.
+  // The solver must still satisfy the real budget and squad rules.
+  const haalandWildcardCore = wildcardCoreHaaland(scored,ownedIdSet);
+
   // eslint-disable-next-line react-hooks/purity
   const plannerStartedAt = performance.now();
   const transferAdvice = planTransfers(scored, squadState, {
@@ -722,6 +729,7 @@ export default async function Home({
     keepIds,
     includeIds,
     defaultIncludeIds: [],
+    requiredWildcardIds: haalandWildcardCore,
     wildcardProfile,
   });
   // eslint-disable-next-line react-hooks/purity

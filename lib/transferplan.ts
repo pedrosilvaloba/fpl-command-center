@@ -857,6 +857,8 @@ export function planTransfers(
      * equipas) que ele não tem. Ordenados do mais para o menos possuído; os
      * que não couberem no orçamento ficam de fora, um a um. */
     defaultIncludeIds?: number[];
+    /** Core players always required only in Wildcard, never Free Hit. */
+    requiredWildcardIds?: number[];
     /** Um só cenário calculado por visita: evita 3 solves adicionais em SSR. */
     wildcardProfile?: WildcardProfile;
   } = {}
@@ -936,6 +938,8 @@ export function planTransfers(
     (id) => byId.has(id) && !ownedIds.has(id) && !includeIds.has(id)
   );
   for (const id of defaultIncludeIds) poolMap.set(id, byId.get(id)!);
+  const requiredWildcardIds = (opts.requiredWildcardIds ?? []).filter(id => byId.has(id));
+  for (const id of requiredWildcardIds) poolMap.set(id,byId.get(id)!);
   const pool = [...poolMap.values()];
 
   // How much evidence the model actually has: gameweeks already played. This
@@ -1323,6 +1327,7 @@ export function planTransfers(
     keepIds: new Set((opts.keepIds ?? []).filter((id) => ownedIds.has(id))),
     includeIds,
     defaultIncludeIds: includeIds.size > 0 ? [] : defaultIncludeIds,
+    requiredWildcardIds,
     wildcardProfile: opts.wildcardProfile ?? "equilibrado",
     scored,
   });
@@ -1367,6 +1372,7 @@ function buildChipScenarios(ctx: {
   keepIds: Set<number>;
   includeIds: Set<number>;
   defaultIncludeIds: number[];
+  requiredWildcardIds: number[];
   wildcardProfile: WildcardProfile;
   scored: ScoredPlayer[];
 }): ChipScenario[] {
@@ -1391,6 +1397,8 @@ function buildChipScenarios(ctx: {
   const wcAvailable = chipAvailable(state, "wildcard");
   const forced = new Set([...ctx.keepIds, ...ctx.includeIds]);
   const forceIds = forced.size > 0 ? forced : undefined;
+  const wildcardForced = new Set([...forced, ...ctx.requiredWildcardIds]);
+  const wildcardForceIds = wildcardForced.size > 0 ? wildcardForced : undefined;
   const includedIds = [...ctx.includeIds];
   const incumbentBonus = provenIncumbentBonus(ctx.ownedSquad, ctx.scored, ctx.retention);
   const incumbentBonusNext = new Map(
@@ -1471,12 +1479,12 @@ function buildChipScenarios(ctx: {
   let wcSolved = null as ReturnType<typeof solveSquad>;
   const defaultUsed: number[] = [];
   if (ctx.defaultIncludeIds.length > 0) {
-    const all = new Set([...forced, ...ctx.defaultIncludeIds]);
+    const all = new Set([...wildcardForced, ...ctx.defaultIncludeIds]);
     wcSolved = solveWc(all);
     if (wcSolved) defaultUsed.push(...ctx.defaultIncludeIds);
     else {
       for (const id of ctx.defaultIncludeIds) {
-        const trial = solveWc(new Set([...forced, ...defaultUsed, id]));
+        const trial = solveWc(new Set([...wildcardForced, ...defaultUsed, id]));
         if (trial) {
           defaultUsed.push(id);
           wcSolved = trial;
@@ -1484,9 +1492,9 @@ function buildChipScenarios(ctx: {
       }
     }
   }
-  if (!wcSolved) wcSolved = solveWc(forceIds);
+  if (!wcSolved) wcSolved = solveWc(wildcardForceIds);
   if (wcSolved && profileCore.length > 0) {
-    const mandatory = new Set([...forced, ...defaultUsed]);
+    const mandatory = new Set([...wildcardForced, ...defaultUsed]);
     for (const id of profileCore) {
       if (mandatory.has(id)) continue;
       const trial = solveWc(new Set([...mandatory, ...protectedByProfile, id]));
@@ -1497,13 +1505,12 @@ function buildChipScenarios(ctx: {
     }
   }
   const nameById = new Map(ctx.scored.map((p) => [p.element.id, p.element.web_name] as [number, string]));
-  const defaultNote =
-    defaultUsed.length > 0
-      ? `Incluí por omissão ${defaultUsed.map((id) => nameById.get(id) ?? `#${id}`).join(", ")}: ${defaultUsed.length === 1 ? "está" : "estão"} em 70% ou mais das 200 melhores equipas e o modelo não prevê melhor do que a média de pontos, por isso não tem base para ${defaultUsed.length === 1 ? "o" : "os"} deixar de fora. Tira-${defaultUsed.length === 1 ? "o" : "os"} em "limpar". `
-      : "";
+  const defaultNote = defaultUsed.length > 0
+    ? `Incluí por omissão ${defaultUsed.map((id) => nameById.get(id) ?? `#${id}`).join(", ")}: núcleo de referência do cenário. `
+    : "";
   const wcPlanForScenario = wcSolved
     ? makePlan("wildcard", "Wildcard — reconstruir o plantel", wcSolved, ownedSquad, state, costM, beta, risers, fallers, 0)
-    : forceIds
+    : wildcardForceIds
       ? null
       : ctx.wildcardPlan;
   if (wcPlanForScenario) {
@@ -1542,7 +1549,7 @@ function buildChipScenarios(ctx: {
     });
     const last = out[out.length - 1];
     if (last.available) last.verdict = defaultNote + last.verdict + describeKinds(last.moveKinds);
-  } else if (forceIds && ctx.wildcard) {
+  } else if (wildcardForceIds && ctx.wildcard) {
     out.push({
       chip: "wildcard",
       label: "Wildcard",
@@ -1555,7 +1562,7 @@ function buildChipScenarios(ctx: {
       keptIds,
       includedIds,
       verdict:
-        "Não há plantel possível com esses jogadores fixos e incluídos: ou não cabem no orçamento, ou ficam mais de 3 do mesmo clube ou de uma posição. Tira um deles e tenta de novo.",
+        "Não há plantel possível com esses jogadores fixos e incluídos: ou não cabem no orçamento, ou ficam mais de 3 do mesmo clube ou de uma posição. Verifica as condições e tenta de novo.",
     });
   }
   // --- Free Hit -----------------------------------------------------------
