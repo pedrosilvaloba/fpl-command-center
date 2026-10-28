@@ -1,4 +1,5 @@
 import solver from "javascript-lp-solver";
+import { wildcardCaptainAwareValue } from "./wildcarddecision";
 import type { ScoredPlayer } from "./recommend";
 import { pickBestXI, pickCaptain, orderBench } from "./recommend";
 import { WILDCARD_BREAK_PREMIUM, type CalendarContext } from "./chipplan";
@@ -1529,9 +1530,7 @@ function buildChipScenarios(ctx: {
     const byId = new Map(profilePool.map(p => [p.element.id, p]));
     const objectiveSquad = squad.map(p => byId.get(p.element.id) ?? p);
     const e = evaluate(objectiveSquad, beta);
-    return e.xi.reduce((sum,p)=>sum+p.expectedPoints,0) +
-      (e.captain?.expectedPoints ?? 0) +
-      e.bench.reduce((sum,p)=>sum+p.expectedPoints,0)*0.15;
+    return wildcardCaptainAwareValue(e.xi,e.bench,e.captain);
   };
   let captainOpportunityNote = "";
   if (wcSolved && ctx.requiredWildcardIds.length === 0 && !ctx.includeIds.size &&
