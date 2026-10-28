@@ -1450,7 +1450,7 @@ function buildChipScenarios(ctx: {
     const games=p.element.minutes/90;
     const ppg=Number(p.element.points_per_game);
     const hasHistory=games>=3 && Number.isFinite(ppg) && ppg>=0;
-    const evidenceWeight=hasHistory?Math.min(.35,(games/12)*.35):0;
+    const evidenceWeight=hasHistory?Math.min(.12,(games/12)*.12):0;
     const historicalWindow=ppg*WINDOW_GAMEWEEKS;
     const nextBaseline=profile==="imediato"
       ? p.expectedPointsNext*WINDOW_GAMEWEEKS : p.expectedPoints;
