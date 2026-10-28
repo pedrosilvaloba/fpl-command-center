@@ -1540,12 +1540,19 @@ function buildChipScenarios(ctx: {
     let bestScore = score(best);
     let examined = 0;
     let leadingRejected: {name:string;gap:number}|null = null;
-    const eliteForwards = [...ctx.scored]
-      .filter(p => p.element.element_type === 4 && p.element.minutes >= 270 &&
-        Number(p.element.total_points) >= 30 &&
-        !best.some(q => q.element.id === p.element.id))
-      .sort((a,b) => Number(b.element.points_per_game)-Number(a.element.points_per_game))
-      .slice(0, 2);
+    const establishedForwards = ctx.scored.filter(p =>
+      p.element.element_type === 4 && p.element.minutes >= 270 &&
+      Number(p.element.total_points) >= 30 &&
+      !best.some(q => q.element.id === p.element.id));
+    // Use independent evidence to SELECT who deserves a counterfactual.
+    // Test the top season scorer and the top per-game forward, not just
+    // whichever names the experimental forecast already likes.
+    const bySeason=[...establishedForwards].sort((a,b)=>
+      Number(b.element.total_points)-Number(a.element.total_points))[0];
+    const byPpg=[...establishedForwards].sort((a,b)=>
+      Number(b.element.points_per_game)-Number(a.element.points_per_game))[0];
+    const eliteForwards=[...new Map([bySeason,byPpg].filter(
+      (p):p is ScoredPlayer=>!!p).map(p=>[p.element.id,p] as const)).values()];
     for (const candidate of eliteForwards) {
       const trial = solveWc(new Set([...wildcardForced, ...defaultUsed, candidate.element.id]));
       if (!trial) continue;
