@@ -927,6 +927,15 @@ export function planTransfers(
       .slice(0, CHEAP_ENABLERS_PER_POSITION);
     for (const p of [...best, ...cheap]) poolMap.set(p.element.id, p);
   }
+  // Independent historical evidence: do not let a single weak projection
+  // remove top season performers from the candidate pool altogether.
+  for (const posId of [1,2,3,4]) {
+    const proven=[...scored].filter(p=>p.element.element_type===posId &&
+      p.element.minutes>=270 && Number(p.element.total_points)>0)
+      .sort((a,b)=>Number(b.element.points_per_game)-Number(a.element.points_per_game))
+      .slice(0,12);
+    for(const p of proven)poolMap.set(p.element.id,p);
+  }
   // Jogadores pedidos em "incluir" entram sempre no conjunto de candidatos,
   // mesmo que não estejam entre os melhores da posição — senão o solver não
   // os podia escolher.
@@ -1434,14 +1443,20 @@ function buildChipScenarios(ctx: {
   const originalById = new Map(base.pool.map((p) => [p.element.id, p]));
   // The objective may change, but displayed points and costs must ALWAYS
   // come from the original model — never from temporary solver weights.
-  const profilePool =
-    profile === "imediato"
-      ? base.pool.map((p) => ({
-          ...p,
-          expectedPoints: p.expectedPointsNext * WINDOW_GAMEWEEKS,
-          score: p.expectedPointsNext * WINDOW_GAMEWEEKS,
-        }))
-      : base.pool;
+  // A forecast that persistently undervalues established high scorers
+  // should be checked against recent on-pitch evidence. Blend across all
+  // players, with a bounded prior; never force any player's identity.
+  const profilePool = base.pool.map(p=>{
+    const games=p.element.minutes/90;
+    const ppg=Number(p.element.points_per_game);
+    const hasHistory=games>=3 && Number.isFinite(ppg) && ppg>=0;
+    const evidenceWeight=hasHistory?Math.min(.12,(games/12)*.12):0;
+    const historicalWindow=ppg*WINDOW_GAMEWEEKS;
+    const nextBaseline=profile==="imediato"
+      ? p.expectedPointsNext*WINDOW_GAMEWEEKS : p.expectedPoints;
+    const adjusted=nextBaseline*(1-evidenceWeight)+historicalWindow*evidenceWeight;
+    return {...p,expectedPoints:adjusted,score:adjusted};
+  });
   const solveWc = (ids: Set<number> | undefined) => {
     const solved = solveSquad({
       ...base,
