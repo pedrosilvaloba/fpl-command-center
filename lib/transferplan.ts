@@ -1395,8 +1395,10 @@ function buildChipScenarios(ctx: {
   // O encolhimento da maldição do vencedor continua dentro do solver; só
   // sai a exigência de vantagem sobre quem já está no plantel.
   const wcAvailable = chipAvailable(state, "wildcard");
-  const forced = new Set([...ctx.keepIds, ...ctx.includeIds, ...ctx.requiredWildcardIds]);
+  const forced = new Set([...ctx.keepIds, ...ctx.includeIds]);
   const forceIds = forced.size > 0 ? forced : undefined;
+  const wildcardForced = new Set([...forced, ...ctx.requiredWildcardIds]);
+  const wildcardForceIds = wildcardForced.size > 0 ? wildcardForced : undefined;
   const includedIds = [...ctx.includeIds];
   const incumbentBonus = provenIncumbentBonus(ctx.ownedSquad, ctx.scored, ctx.retention);
   const incumbentBonusNext = new Map(
@@ -1477,12 +1479,12 @@ function buildChipScenarios(ctx: {
   let wcSolved = null as ReturnType<typeof solveSquad>;
   const defaultUsed: number[] = [];
   if (ctx.defaultIncludeIds.length > 0) {
-    const all = new Set([...forced, ...ctx.defaultIncludeIds]);
+    const all = new Set([...wildcardForced, ...ctx.defaultIncludeIds]);
     wcSolved = solveWc(all);
     if (wcSolved) defaultUsed.push(...ctx.defaultIncludeIds);
     else {
       for (const id of ctx.defaultIncludeIds) {
-        const trial = solveWc(new Set([...forced, ...defaultUsed, id]));
+        const trial = solveWc(new Set([...wildcardForced, ...defaultUsed, id]));
         if (trial) {
           defaultUsed.push(id);
           wcSolved = trial;
@@ -1490,9 +1492,9 @@ function buildChipScenarios(ctx: {
       }
     }
   }
-  if (!wcSolved) wcSolved = solveWc(forceIds);
+  if (!wcSolved) wcSolved = solveWc(wildcardForceIds);
   if (wcSolved && profileCore.length > 0) {
-    const mandatory = new Set([...forced, ...defaultUsed]);
+    const mandatory = new Set([...wildcardForced, ...defaultUsed]);
     for (const id of profileCore) {
       if (mandatory.has(id)) continue;
       const trial = solveWc(new Set([...mandatory, ...protectedByProfile, id]));
@@ -1508,7 +1510,7 @@ function buildChipScenarios(ctx: {
     : "";
   const wcPlanForScenario = wcSolved
     ? makePlan("wildcard", "Wildcard — reconstruir o plantel", wcSolved, ownedSquad, state, costM, beta, risers, fallers, 0)
-    : forceIds
+    : wildcardForceIds
       ? null
       : ctx.wildcardPlan;
   if (wcPlanForScenario) {
@@ -1547,7 +1549,7 @@ function buildChipScenarios(ctx: {
     });
     const last = out[out.length - 1];
     if (last.available) last.verdict = defaultNote + last.verdict + describeKinds(last.moveKinds);
-  } else if (forceIds && ctx.wildcard) {
+  } else if (wildcardForceIds && ctx.wildcard) {
     out.push({
       chip: "wildcard",
       label: "Wildcard",
