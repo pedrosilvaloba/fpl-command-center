@@ -1484,7 +1484,8 @@ function buildChipScenarios(ctx: {
       }
     }
   }
-  if (!wcSolved) wcSolved = solveWc(forceIds);
+  // A required premium must never vanish silently after a failed solve.
+  if (!wcSolved && ctx.defaultIncludeIds.length === 0) wcSolved = solveWc(forceIds);
   if (wcSolved && profileCore.length > 0) {
     const mandatory = new Set([...forced, ...defaultUsed]);
     for (const id of profileCore) {
@@ -1497,13 +1498,12 @@ function buildChipScenarios(ctx: {
     }
   }
   const nameById = new Map(ctx.scored.map((p) => [p.element.id, p.element.web_name] as [number, string]));
-  const defaultNote =
-    defaultUsed.length > 0
-      ? `Incluí por omissão ${defaultUsed.map((id) => nameById.get(id) ?? `#${id}`).join(", ")}: ${defaultUsed.length === 1 ? "está" : "estão"} em 70% ou mais das 200 melhores equipas e o modelo não prevê melhor do que a média de pontos, por isso não tem base para ${defaultUsed.length === 1 ? "o" : "os"} deixar de fora. Tira-${defaultUsed.length === 1 ? "o" : "os"} em "limpar". `
-      : "";
+  const defaultNote = defaultUsed.length > 0
+    ? "Haaland entra como jogador-chave obrigatório neste Wildcard. O modelo continua a otimizar os outros 14 lugares com as regras e o orçamento reais. "
+    : "";
   const wcPlanForScenario = wcSolved
     ? makePlan("wildcard", "Wildcard — reconstruir o plantel", wcSolved, ownedSquad, state, costM, beta, risers, fallers, 0)
-    : forceIds
+    : (forceIds || ctx.defaultIncludeIds.length > 0)
       ? null
       : ctx.wildcardPlan;
   if (wcPlanForScenario) {
@@ -1542,7 +1542,7 @@ function buildChipScenarios(ctx: {
     });
     const last = out[out.length - 1];
     if (last.available) last.verdict = defaultNote + last.verdict + describeKinds(last.moveKinds);
-  } else if (forceIds && ctx.wildcard) {
+  } else if ((forceIds || ctx.defaultIncludeIds.length > 0) && ctx.wildcard) {
     out.push({
       chip: "wildcard",
       label: "Wildcard",
@@ -1555,7 +1555,7 @@ function buildChipScenarios(ctx: {
       keptIds,
       includedIds,
       verdict:
-        "Não há plantel possível com esses jogadores fixos e incluídos: ou não cabem no orçamento, ou ficam mais de 3 do mesmo clube ou de uma posição. Tira um deles e tenta de novo.",
+        "Não foi possível construir um Wildcard legal incluindo Haaland e as restantes condições. O modelo NÃO recomenda um plantel que o exclua silenciosamente; verifica orçamento, jogadores fixos e limite por clube.",
     });
   }
   // --- Free Hit -----------------------------------------------------------
