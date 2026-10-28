@@ -1538,6 +1538,8 @@ function buildChipScenarios(ctx: {
     const score = captainAwareScore;
     let best = wcSolved;
     let bestScore = score(best);
+    let examined = 0;
+    let leadingRejected: {name:string;gap:number}|null = null;
     const eliteForwards = [...ctx.scored]
       .filter(p => p.element.element_type === 4 && p.element.minutes >= 270 &&
         Number(p.element.total_points) >= 30 &&
@@ -1548,11 +1550,19 @@ function buildChipScenarios(ctx: {
       const trial = solveWc(new Set([...wildcardForced, ...defaultUsed, candidate.element.id]));
       if (!trial) continue;
       const trialScore = score(trial);
+      examined++;
+      if (trialScore <= bestScore + 0.05 &&
+          (leadingRejected === null || trialScore > bestScore - leadingRejected.gap)) {
+        leadingRejected = {name:candidate.element.web_name,gap:Math.round((bestScore-trialScore)*10)/10};
+      }
       if (trialScore > bestScore + 0.05) {
         best = trial;
         bestScore = trialScore;
         captainOpportunityNote = ` Ao contabilizar o valor adicional da capitania, o melhor plantel inclui ${candidate.element.web_name}; a alternativa sem ele ficou abaixo na avaliação completa.`;
       }
+    }
+    if (!captainOpportunityNote && examined > 0 && leadingRejected) {
+      captainOpportunityNote = ` Comparação premium: ${leadingRejected.name} foi avaliado num plantel legal alternativo, incluindo o valor extra da capitania; ficou ${leadingRejected.gap.toFixed(1)} pts abaixo nesta estimativa de 5 jornadas.`;
     }
     wcSolved = best;
   }
