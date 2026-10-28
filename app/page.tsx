@@ -728,7 +728,8 @@ export default async function Home({
     ...transferPlanOpts,
     keepIds,
     includeIds,
-    defaultIncludeIds: haalandWildcardCore,
+    defaultIncludeIds: [],
+    requiredWildcardIds: haalandWildcardCore,
     wildcardProfile,
   });
   // eslint-disable-next-line react-hooks/purity
