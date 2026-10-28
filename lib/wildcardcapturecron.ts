@@ -25,3 +25,17 @@ export async function runDailyWildcardCapture():Promise<{ok:boolean;status:strin
   return await redis.get(key)?{ok:true,status:"frozen"}:{ok:false,status:"capture-unavailable"};
  }catch{return {ok:false,status:"capture-failed"}}
 }
+
+/** Persist operational outcome separately from immutable match evidence. */
+export async function runDailyWildcardCapture():Promise<{ok:boolean;status:string}>{
+ const result=await attemptWildcardCapture();
+ if(process.env.VERCEL_ENV==="production"){
+   try{
+     const redis=getRedis();
+     if(redis)await redis.set("fpl:wildcard-abc:last-capture:v1",{
+       at:new Date().toISOString(),ok:result.ok,status:result.status
+     });
+   }catch{/* Never hide the original capture outcome behind telemetry failure. */}
+ }
+ return result;
+}
