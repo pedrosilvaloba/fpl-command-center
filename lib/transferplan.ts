@@ -1519,6 +1519,44 @@ function buildChipScenarios(ctx: {
       }
     }
   }
+  // The LP allocates budget to the XI, but it does not price the *extra*
+  // captain copy. A premium with strong sustainable output can therefore
+  // be omitted even when the full (XI + captain + bench) team scores higher.
+  // Check the strongest historically established forwards under the same
+  // FPL constraints. This is a counterfactual solve, NOT a forced-pick rule:
+  // keep the unrestricted solution unless the constrained one scores better.
+  let captainOpportunityNote = "";
+  if (wcSolved && ctx.requiredWildcardIds.length === 0 && !ctx.includeIds.size &&
+      !ctx.keepIds.size && profile === "equilibrado") {
+    const score = (squad: ScoredPlayer[]) => {
+      const byId = new Map(profilePool.map(p => [p.element.id, p]));
+      const objectiveSquad = squad.map(p => byId.get(p.element.id) ?? p);
+      const e = evaluate(objectiveSquad, beta);
+      // Values below are on the same five-GW scale.
+      return e.xi.reduce((sum,p)=>sum+p.expectedPoints,0) +
+        (e.captain?.expectedPoints ?? 0) +
+        e.bench.reduce((sum,p)=>sum+p.expectedPoints,0)*0.15;
+    };
+    let best = wcSolved;
+    let bestScore = score(best);
+    const eliteForwards = [...ctx.scored]
+      .filter(p => p.element.element_type === 4 && p.element.minutes >= 270 &&
+        Number(p.element.total_points) >= 30 &&
+        !best.some(q => q.element.id === p.element.id))
+      .sort((a,b) => Number(b.element.points_per_game)-Number(a.element.points_per_game))
+      .slice(0, 2);
+    for (const candidate of eliteForwards) {
+      const trial = solveWc(new Set([...wildcardForced, ...defaultUsed, candidate.element.id]));
+      if (!trial) continue;
+      const trialScore = score(trial);
+      if (trialScore > bestScore + 0.05) {
+        best = trial;
+        bestScore = trialScore;
+        captainOpportunityNote = ` Ao contabilizar o valor adicional da capitania, o melhor plantel inclui ${candidate.element.web_name}; a alternativa sem ele ficou abaixo na avaliação completa.`;
+      }
+    }
+    wcSolved = best;
+  }
   const nameById = new Map(ctx.scored.map((p) => [p.element.id, p.element.web_name] as [number, string]));
   const defaultNote = defaultUsed.length > 0
     ? `Incluí por omissão ${defaultUsed.map((id) => nameById.get(id) ?? `#${id}`).join(", ")}: núcleo de referência do cenário. `
@@ -1534,7 +1572,7 @@ function buildChipScenarios(ctx: {
         ? "Cenário de curto prazo: o solver prioriza a próxima jornada, mas os ganhos de 5 jornadas continuam medidos com as previsões originais. Não é necessariamente a melhor equipa para o mês."
         : profile === "continuidade"
           ? `Cenário de continuidade: preserva automaticamente ${protectedByProfile.length} titulares fiáveis (${protectedByProfile.map((id) => nameById.get(id) ?? "#" + id).join(", ") || "nenhum possível"}), além dos fixos escolhidos por ti. Só são preservados quando existe plantel legal.`
-          : "Cenário equilibrado: o solver privilegia o conjunto das próximas cinco jornadas. Isto é uma opção de simulação, não uma ordem para gastar o Wildcard.";
+          : "Cenário equilibrado: o solver privilegia o conjunto das próximas cinco jornadas. Isto é uma opção de simulação, não uma ordem para gastar o Wildcard." + captainOpportunityNote;
   }
   if (wcPlanForScenario && ctx.wildcard) {
     const p = wcPlanForScenario;
