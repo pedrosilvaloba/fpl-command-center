@@ -91,15 +91,18 @@ export async function settleWildcardExperiments(finished:number[]){
   }
 }
 export async function getWildcardHistory(){
-  const empty={configured:false,results:[] as WildcardOutcome[],pending:[] as number[]};
+  const empty={configured:false,results:[] as WildcardOutcome[],pending:[] as number[],lastCapture:null as {at:string;ok:boolean;status:string}|null};
   const redis=getRedis();if(!redis)return empty;
   try {
     const ids=(await redis.smembers(INDEX)??[]).map(Number)
       .filter(id=>Number.isSafeInteger(id)&&id>0).sort((a,b)=>b-a).slice(0,20);
-    const results=await Promise.all(ids.map(id=>redis.get<WildcardOutcome>(OUT(id))));
+    const [results,lastCapture]=await Promise.all([
+      Promise.all(ids.map(id=>redis.get<WildcardOutcome>(OUT(id)))),
+      redis.get<{at:string;ok:boolean;status:string}>("fpl:wildcard-abc:last-capture:v1")
+    ]);
     return {configured:true,results:results.filter((r):r is WildcardOutcome=>
       !!r&&Number.isSafeInteger(r.event)&&r.results?.length===3),
-      pending:ids.filter((id,i)=>!results[i])};
+      pending:ids.filter((id,i)=>!results[i]),lastCapture:lastCapture??null};
   } catch {
     // Storage outage must never take down the owner's analysis dashboard.
     return empty;
