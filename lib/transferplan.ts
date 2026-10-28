@@ -1525,18 +1525,18 @@ function buildChipScenarios(ctx: {
   // Check the strongest historically established forwards under the same
   // FPL constraints. This is a counterfactual solve, NOT a forced-pick rule:
   // keep the unrestricted solution unless the constrained one scores better.
+  const captainAwareScore = (squad: ScoredPlayer[]) => {
+    const byId = new Map(profilePool.map(p => [p.element.id, p]));
+    const objectiveSquad = squad.map(p => byId.get(p.element.id) ?? p);
+    const e = evaluate(objectiveSquad, beta);
+    return e.xi.reduce((sum,p)=>sum+p.expectedPoints,0) +
+      (e.captain?.expectedPoints ?? 0) +
+      e.bench.reduce((sum,p)=>sum+p.expectedPoints,0)*0.15;
+  };
   let captainOpportunityNote = "";
   if (wcSolved && ctx.requiredWildcardIds.length === 0 && !ctx.includeIds.size &&
       !ctx.keepIds.size && profile === "equilibrado") {
-    const score = (squad: ScoredPlayer[]) => {
-      const byId = new Map(profilePool.map(p => [p.element.id, p]));
-      const objectiveSquad = squad.map(p => byId.get(p.element.id) ?? p);
-      const e = evaluate(objectiveSquad, beta);
-      // Values below are on the same five-GW scale.
-      return e.xi.reduce((sum,p)=>sum+p.expectedPoints,0) +
-        (e.captain?.expectedPoints ?? 0) +
-        e.bench.reduce((sum,p)=>sum+p.expectedPoints,0)*0.15;
-    };
+    const score = captainAwareScore;
     let best = wcSolved;
     let bestScore = score(best);
     const eliteForwards = [...ctx.scored]
