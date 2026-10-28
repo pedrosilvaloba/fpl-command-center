@@ -33,13 +33,13 @@ export default function WildcardBenchmark({alternatives, main}:{
           <h4 className="text-sm font-semibold">{a.criterion==="ppg"?"Pontos por jogo":"Previsão oficial FPL"}</h4>
           {a.available?<><p className="mt-1 text-xs text-text-muted">11 titulares: {a.xiNames.join(", ")}</p>
           <p className="mt-2 text-xs text-text-muted">Capitão: {a.xiNames[a.xiIds.indexOf(a.captainId??-1)] ?? "—"}</p>
-          <p className="text-xs text-text-muted">Onze + capitão (escala do nosso modelo): {a.modelXiNext?.toFixed(1)} xP base, sem segundo crédito de capitão</p>
+          <p className="text-xs text-text-muted">Onze + capitão (escala do nosso modelo): {a.modelXiNext!==null&&a.modelCaptainNext!==null?(a.modelXiNext+a.modelCaptainNext).toFixed(1):"—"} xP próxima jornada</p>
           <p className="text-xs text-text-muted">Onze: {a.modelXiWindow?.toFixed(1)} xP em 5 jornadas, sem capitania</p>
           <p className="text-xs text-text-muted">Saldo: £{a.budgetRemaining?.toFixed(1)}m</p></>
           :<p className="mt-1 text-xs text-warn">{a.reason}</p>}
         </article>)}
       </div>
-      <p className="text-xs text-text-muted">A pontuação do onze e a escolha de capitão são apresentadas separadamente: não compares os totais como se incluíssem as mesmas parcelas. Esta comparação usa o nosso modelo apenas para avaliar todas as equipas na mesma escala. Não demonstra qual dará mais pontos reais; a previsão oficial é de uma jornada e o PPG é histórico.</p>
+      <p className="text-xs text-text-muted">Esta comparação usa o nosso modelo apenas para avaliar todas as equipas na mesma escala. Não demonstra qual dará mais pontos reais; a previsão oficial é de uma jornada e o PPG é histórico.</p>
     </>}
   </section>;
 }
