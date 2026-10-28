@@ -1322,7 +1322,7 @@ export function planTransfers(
     retention,
     keepIds: new Set((opts.keepIds ?? []).filter((id) => ownedIds.has(id))),
     includeIds,
-    defaultIncludeIds: includeIds.size > 0 ? [] : defaultIncludeIds,
+    defaultIncludeIds: defaultIncludeIds.filter(id => !includeIds.has(id)),
     wildcardProfile: opts.wildcardProfile ?? "equilibrado",
     scored,
   });
