@@ -3,7 +3,7 @@ import {getRedis} from "./kv";
 
 /** Uses the already authenticated production cron to warm a hypothetical
  * same-input three-way Wildcard snapshot; no additional Vercel schedule. */
-export async function runDailyWildcardCapture():Promise<{ok:boolean;status:string}>{
+async function attemptWildcardCapture():Promise<{ok:boolean;status:string}>{
  if(process.env.VERCEL_ENV!=="production")return {ok:false,status:"production-only"};
  const redis=getRedis(),host=process.env.VERCEL_PROJECT_PRODUCTION_URL;
  if(!redis||!host||!/^[a-z0-9.-]+$/i.test(host))return {ok:false,status:"storage-or-host-missing"};
