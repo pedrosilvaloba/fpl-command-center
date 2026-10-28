@@ -721,7 +721,7 @@ export default async function Home({
   // The solver must still satisfy the real budget and squad rules.
   const haalandWildcardCore = scored.find(p =>
     p.element.element_type === 4 &&
-    /\\bhaaland\\b/i.test(p.element.web_name) &&
+    /\bhaaland\b/i.test(p.element.web_name) &&
     !ownedIdSet.has(p.element.id) &&
     Number(p.element.total_points) > 0
   );
