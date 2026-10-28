@@ -11,6 +11,10 @@ export default function WildcardBenchmark({alternatives, main}:{
     q.set("view","simular");q.set("chip","wildcard");q.set("comparar","1");
     return "/?"+q.toString()+"#cenarios";
   };
+  const mainNext = main?.xi.reduce((sum,p)=>sum+p.next,0);
+  const mainCaptain = main?.xi.find(p=>p.id===main.captainId);
+  const mainNextWithCaptain = mainNext === undefined ? null :
+    mainNext+(mainCaptain?.next??0);
   return <section className="rounded-xl border border-border bg-surface p-3 space-y-3" aria-label="Comparação de plantéis">
     <div>
       <h3 className="font-semibold text-text">Três maneiras de construir o Wildcard</h3>
@@ -23,12 +27,14 @@ export default function WildcardBenchmark({alternatives, main}:{
         <article className="rounded-lg bg-surface-2 p-3">
           <h4 className="text-sm font-semibold">Modelo Command Center</h4>
           <p className="mt-1 text-xs text-text-muted">11 titulares: {main?.xi.map(p=>p.name).join(", ") || "Indisponível"}</p>
-          <p className="mt-2 text-xs text-text-muted">Modelo: {main?.xi.reduce((sum,p)=>sum+p.next,0).toFixed(1) ?? "—"} xP próxima jornada</p>
+          <p className="mt-2 text-xs text-text-muted">Capitão: {mainCaptain?.name ?? "—"} · Onze + capitão: {mainNextWithCaptain?.toFixed(1) ?? "—"} xP na próxima jornada</p>
         </article>
         {alternatives.map(a=><article className="rounded-lg bg-surface-2 p-3" key={a.criterion}>
           <h4 className="text-sm font-semibold">{a.criterion==="ppg"?"Pontos por jogo":"Previsão oficial FPL"}</h4>
           {a.available?<><p className="mt-1 text-xs text-text-muted">11 titulares: {a.xiNames.join(", ")}</p>
-          <p className="mt-2 text-xs text-text-muted">Modelo: {a.modelXiNext?.toFixed(1)} xP próxima jornada · {a.modelXiWindow?.toFixed(1)} xP em 5 jornadas</p>
+          <p className="mt-2 text-xs text-text-muted">Capitão: {a.xiNames[a.xiIds.indexOf(a.captainId??-1)] ?? "—"}</p>
+          <p className="text-xs text-text-muted">Onze + capitão (escala do nosso modelo): {a.modelXiNext!==null&&a.modelCaptainNext!==null?(a.modelXiNext+a.modelCaptainNext).toFixed(1):"—"} xP próxima jornada</p>
+          <p className="text-xs text-text-muted">Onze: {a.modelXiWindow?.toFixed(1)} xP em 5 jornadas, sem capitania</p>
           <p className="text-xs text-text-muted">Saldo: £{a.budgetRemaining?.toFixed(1)}m</p></>
           :<p className="mt-1 text-xs text-warn">{a.reason}</p>}
         </article>)}
