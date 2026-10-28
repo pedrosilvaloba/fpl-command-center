@@ -715,13 +715,24 @@ export default async function Home({
   // explicit ?incluir= remains available for user-directed scenarios.
   const ownedIdSet = new Set(squadState.owned.map((o) => o.elementId));
   const eliteMissing = eliteGaps(elite, scored, ownedIdSet);
+  // Wildcard core policy: prevent the model's low-xP bias from excluding a
+  // dominant premium forward by default. Only the Wildcard scenario is
+  // constrained; normal transfers and captaincy remain unchanged.
+  // The solver must still satisfy the real budget and squad rules.
+  const haalandWildcardCore = scored.find(p =>
+    p.element.element_type === 4 &&
+    /\\bhaaland\\b/i.test(p.element.web_name) &&
+    !ownedIdSet.has(p.element.id) &&
+    Number(p.element.total_points) > 0
+  );
+
   // eslint-disable-next-line react-hooks/purity
   const plannerStartedAt = performance.now();
   const transferAdvice = planTransfers(scored, squadState, {
     ...transferPlanOpts,
     keepIds,
     includeIds,
-    defaultIncludeIds: [],
+    defaultIncludeIds: haalandWildcardCore ? [haalandWildcardCore.element.id] : [],
     wildcardProfile,
   });
   // eslint-disable-next-line react-hooks/purity
