@@ -11,6 +11,7 @@ import {
 } from "@/lib/jobs";
 import { startJobRun, finishJobRun } from "@/lib/joblog";
 import { runDailyMinutesCapture } from "@/lib/minutescapturecron";
+import {runDailyWildcardCapture} from "@/lib/wildcardcapturecron";
 
 /**
  * THE SCHEDULED RUN. Vercel calls this; nothing and nobody else has to.
@@ -85,7 +86,7 @@ const CALIBRATION_SCHEDULE = "0 7 * * *";
 
 /** Trabalhos leves que correm DEPOIS dos principais, com o tempo que sobrar.
  * Não contam como "uma tarefa por horário": são manutenção de dados. */
-export type CronExtra = "lastseason" | "elite" | "decisions" | "officialscout" | "research" | "minutescapture";
+export type CronExtra = "lastseason" | "elite" | "decisions" | "officialscout" | "research" | "minutescapture" | "wildcardcapture";
 export type CronPlan = { backtest: boolean; calibration: boolean; extras: CronExtra[] };
 const ALL_EXTRAS: CronExtra[] = ["officialscout", "research", "lastseason", "elite", "decisions"];
 
@@ -103,6 +104,7 @@ export function planFromRequest(
   schedule: string | null | undefined,
   only: string | null | undefined
 ): CronPlan {
+  if (only === "wildcardcapture") return { backtest:false, calibration:false, extras:["wildcardcapture"] };
   if (only === "minutescapture") return { backtest:false, calibration:false, extras:["minutescapture"] };
   if (only === "backtest") return { backtest: true, calibration: false, extras: [] };
   if (only === "calibration") return { backtest: false, calibration: true, extras: [] };
@@ -113,7 +115,7 @@ export function planFromRequest(
   // A época passada e a elite vêm ANTES do backtest das 6h: o backtest usa
   // a época passada, e a elite tem de estar fresca para a página da manhã.
   if (s === BACKTEST_SCHEDULE) return { backtest: true, calibration: false, extras: ALL_EXTRAS };
-  if (s === CALIBRATION_SCHEDULE) return { backtest: false, calibration: true, extras: ["minutescapture", "officialscout", "research", "elite"] };
+  if (s === CALIBRATION_SCHEDULE) return { backtest: false, calibration: true, extras: ["wildcardcapture", "minutescapture", "officialscout", "research", "elite"] };
   return { backtest: true, calibration: true, extras: ALL_EXTRAS };
 }
 
@@ -138,6 +140,12 @@ export async function GET(req: NextRequest) {
   for (const extra of plan.extras) {
     if (deadline - Date.now() < 20_000) {
       ran[extra] = { ok: null, skipped: "sem tempo" };
+      continue;
+    }
+    if(extra==="wildcardcapture"){
+      const capture=await runDailyWildcardCapture();
+      ran.wildcardcapture=capture;
+      if(!capture.ok)console.warn("fpl:wildcard-capture-unavailable",{status:capture.status});
       continue;
     }
     if(extra==="minutescapture"){
