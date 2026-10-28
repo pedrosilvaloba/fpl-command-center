@@ -19,7 +19,8 @@ export async function runDailyWildcardCapture():Promise<{ok:boolean;status:strin
   try{
    const response=await fetch("https://"+host+"/?view=simular&chip=wildcard&comparar=1",{
     signal:controller.signal,cache:"no-store",redirect:"error",
-    headers:{"x-fpl-snapshot-trigger":"scheduled"}});
+    headers:{"x-fpl-snapshot-trigger":"scheduled",
+      ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET?{"x-vercel-protection-bypass":process.env.VERCEL_AUTOMATION_BYPASS_SECRET}:{})}});
    if(!response.ok)return {ok:false,status:"simulator-http-"+response.status};
   }finally{clearTimeout(timer)}
   return await redis.get(key)?{ok:true,status:"frozen"}:{ok:false,status:"capture-unavailable"};
