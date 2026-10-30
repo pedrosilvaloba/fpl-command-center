@@ -67,6 +67,7 @@ import CountdownTimer from "@/components/CountdownTimer";
 import FixtureTicker from "@/components/FixtureTicker";
 import PlayerTable from "@/components/PlayerTable";
 import PitchView from "@/components/PitchView";
+import ActionHero from "@/components/ActionHero";
 import MyTeamPanel from "@/components/MyTeamPanel";
 import ShadowTeamPanel from "@/components/ShadowTeamPanel";
 import LeagueSimPanel from "@/components/LeagueSimPanel";
@@ -1125,75 +1126,27 @@ export default async function Home({
           title="O Que Fazer Antes do Deadline"
           primary
         >
-          <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-surface-2 px-3 py-2 text-xs text-text-muted">
-            <span>Equipa <strong className="text-text">#{teamId}</strong></span>
-            <span>·</span>
-            <span>FPL: {getFplDataHealth().degraded ? "dados de reserva" : "feed disponível"}</span>
-            <span>·</span>
-            <span>Odds: {oddsActive ? "disponíveis" : "sem mercado"}</span>
-            <span>·</span>
-            <span>Projeção: experimental, sem vantagem comprovada</span>
-          </div>
-          {/* The headline answer, then the handful of facts that qualify it —
-              as inline pairs, not as bordered tiles. */}
-          <div className="mb-4 border-b border-border pb-4">
-            <p className="font-display text-lg font-bold leading-snug tracking-tight sm:text-xl md:text-2xl">
-              {decisionHeadline}
-            </p>
-            {squadState.available && squadState.chips.some((chip) => chip.name === "wildcard" && chip.remaining > 0) && (
-              <a
-                href={viewHref(teamId, "simular", { chip: "wildcard", perfil: wildcardProfile }) + "#cenarios"}
-                className="mt-2 inline-block text-[13px] font-semibold text-accent underline underline-offset-2"
-              >
-                Quero explorar alternativas de Wildcard, mesmo que o modelo aconselhe guardar →
-              </a>
+          <ActionHero
+            headline={decisionHeadline}
+            captain={decisionCaptain?.element.web_name??"—"}
+            vice={decisionVice?.element.web_name??"—"}
+            freeTransfers={squadState.available?squadState.freeTransfers:null}
+            bank={squadState.available?squadState.totalBudgetM:null}
+            gain={transferAdvice.recommended?.netGainVsHold??null}
+            simHref={viewHref(teamId,"simular",{chip:"wildcard",perfil:wildcardProfile})+"#cenarios"}
+          >
+            {(transferAdvice.recommended?.moves??[]).length>0&&(
+              <div className="action-hero-moves">
+                {transferAdvice.recommended!.moves.slice(0,3).map(m=>(
+                  <div className="action-hero-move" key={m.in.element.id}>
+                    <span className="action-out">{m.out.element.web_name}</span>
+                    <span aria-hidden>→</span>
+                    <span className="action-in">{m.in.element.web_name}</span>
+                  </div>
+                ))}
+              </div>
             )}
-            <div className="mt-2.5 flex flex-wrap items-baseline gap-x-5 gap-y-2">
-              <Fact
-                label="Capitão"
-                value={decisionCaptain?.element.web_name ?? "—"}
-                tone="accent"
-              />
-              <Fact label="Vice" value={decisionVice?.element.web_name ?? "—"} />
-              {squadState.available ? (
-                <>
-                  <Fact
-                    label="Livres"
-                    value={String(squadState.freeTransfers)}
-                  />
-                  <Fact
-                    label="Orçamento"
-                    value={`£${squadState.totalBudgetM.toFixed(1)}m`}
-                  />
-                  {transferAdvice.recommended &&
-                    transferAdvice.recommended.netGainVsHold !== 0 && (
-                      <Fact
-                        label="Ganho"
-                        value={`${transferAdvice.recommended.netGainVsHold >= 0 ? "+" : ""}${transferAdvice.recommended.netGainVsHold.toFixed(1)} pts`}
-                        tone={
-                          transferAdvice.recommended.netGainVsHold >= 0
-                            ? "accent"
-                            : "danger"
-                        }
-                      />
-                    )}
-                </>
-              ) : (
-                <Fact label="Onze ideal" value={`${xiExpected.toFixed(1)} pts`} />
-              )}
-              {posture.beta !== 0 && (
-                <Fact
-                  label="Postura"
-                  value={posture.label}
-                  tone={posture.label === "atacar" ? "danger" : "warn"}
-                />
-              )}
-              {effectiveOutlook.me && (
-                <Fact label="Liga" value={`${effectiveOutlook.me.rank}º`} />
-              )}
-            </div>
-          </div>
-
+          </ActionHero>
           {/* ═══ O ONZE. ═══
               A app dizia quem comprar e quem capitanear, e nunca dizia
               QUEM ALINHA. O plantel são quinze e jogam onze: escolher os
@@ -1211,12 +1164,7 @@ export default async function Home({
               captainId={decisionCaptain?.element.id}
               viceCaptainId={decisionVice?.element.id}
             />
-            <p className="mt-2 text-[11px] leading-relaxed text-text-muted">
-              Este é o onze do plantel que terás DEPOIS das transferências
-              recomendadas acima. A ordem do banco é a ordem em que as
-              substituições automáticas entram se alguém não jogar — não é
-              decorativa.
-            </p>
+
           </div>
 
           <DeferralPanel plan={deferral} />
