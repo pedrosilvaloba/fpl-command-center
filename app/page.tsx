@@ -264,7 +264,12 @@ function Section({
           </p>
         )}
       </div>
-      <div className={`${primary ? "card-primary" : "card"} p-4 md:p-5`}>{children}</div>
+      {id === "aprendizagem" || id === "referencia" || id === "mercado" ?
+        <details className="card p-4 md:p-5">
+          <summary className="cursor-pointer text-sm font-semibold text-accent">Ver detalhes e indicadores</summary>
+          <div className="mt-4">{children}</div>
+        </details> :
+        <div className={`${primary ? "card-primary" : "card"} p-4 md:p-5`}>{children}</div>}
     </section>
   );
 }
