@@ -177,6 +177,12 @@ function Scenario({
         </p>
       )}
 
+      {s.xi.length === 11 && (
+        <div className="mb-3">
+          <WildcardPitch players={s.xi} captainId={s.captainId} viceCaptainId={s.viceCaptainId} />
+        </div>
+      )}
+
       {rebuilds && s.xi.length > 0 && (
         <div>
           <p className="eyebrow mb-2 text-text-muted">
@@ -230,7 +236,7 @@ function Scenario({
       {s.chip === "wildcard" && s.xi.length === 11 && (() => {
         const check = auditWildcardXI(s.xi,s.captainId);
         const name = (id:number|null) => s.xi.find(p=>p.id===id)?.name ?? "Indisponível";
-        return <section className="rounded-xl border border-border bg-surface p-3 space-y-2">
+        return <details className="rounded-xl border border-border bg-surface p-3 space-y-2"><summary className="cursor-pointer text-sm font-semibold text-text">Como chegámos a este capitão?</summary><div className="mt-3 space-y-2">
           <h3 className="font-semibold text-text text-sm">O modelo concorda com as referências?</h3>
           <p className="text-xs text-text-muted">Verificação independente do capitão no mesmo onze titular.</p>
           <div className="grid gap-2 sm:grid-cols-3">
@@ -241,11 +247,11 @@ function Scenario({
           {check.comparable && (check.modelVsPpgDisagree || check.modelVsOfficialDisagree === true) &&
             <p className="text-xs text-warn">Existem divergências entre referências. Não assumas que o nosso capitão é superior sem validação com jornadas reais.</p>}
           <p className="text-xs text-text-muted">{check.reason}</p>
-        </section>;
+        </div></details>;
       })()}
       {s.xi.length > 0 && (
         <div className="space-y-3">
-          <WildcardPitch players={s.xi} captainId={s.captainId} viceCaptainId={s.viceCaptainId} />
+
           <details className="rounded-lg border border-border bg-surface-2 p-3">
             <summary className="cursor-pointer text-sm font-semibold text-text">Ver detalhe de jogadores, preços e banco</summary>
             <div className="mt-3 grid gap-4 md:grid-cols-[1fr_18rem]">
