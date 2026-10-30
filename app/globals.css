@@ -314,3 +314,24 @@ body{padding-bottom:5rem}
 .decision-dock-link{text-align:center;border-radius:.5rem;padding:.7rem .2rem;font-size:.8rem;font-weight:600;color:#fffc}
 .decision-dock-current{background:#bafc62;color:#23122a}
 .decision-dock-settings{text-align:center;color:#fffa;font-size:1.2rem}
+
+
+/* Action-first V2: the recommendation owns the visual hierarchy. */
+.action-hero{background:linear-gradient(135deg,#16152b,#30234c);color:white;border-radius:18px;padding:clamp(18px,3vw,28px);margin-bottom:20px;box-shadow:0 12px 32px rgba(22,14,42,.13)}
+.action-hero-eyebrow{font-size:11px;font-weight:800;letter-spacing:.16em;color:#b8ffa1}
+.action-hero-headline{font-family:var(--font-display);font-size:clamp(24px,3.4vw,36px);font-weight:800;line-height:1.14;max-width:750px;margin:10px 0 22px;letter-spacing:-.03em}
+.action-hero-quick{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;padding-bottom:19px;border-bottom:1px solid rgba(255,255,255,.17)}
+.action-hero-quick>div{display:flex;flex-direction:column;gap:4px;min-width:0}
+.action-hero-quick span{font-size:10px;letter-spacing:.06em;color:#b8b7ce;font-weight:700}
+.action-hero-quick strong{font-size:clamp(15px,2vw,19px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.action-hero-moves{display:grid;gap:8px;margin-top:16px}
+.action-hero-move{display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-size:14px;font-weight:700}
+.action-out{color:#f8a9bc}.action-in{color:#b8ffa1}
+.action-hero-bottom{display:flex;flex-wrap:wrap;gap:9px;margin-top:19px}
+.action-primary,.action-secondary{border-radius:10px;min-height:44px;display:inline-flex;justify-content:center;align-items:center;padding:10px 15px;text-decoration:none;font-size:14px;font-weight:750}
+.action-primary{background:#b6ff96;color:#182516;gap:8px}.action-secondary{border:1px solid rgba(255,255,255,.30);color:white}
+.action-primary:hover{background:#d0ffb9}.action-secondary:hover{background:rgba(255,255,255,.1)}
+.action-hero-foot{font-size:11px;color:#b7b3cb;margin-top:13px}
+.decision-dock{padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(min-width:720px){.action-hero-quick{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media(max-width:580px){.action-hero{padding:16px}.action-hero-bottom>*{width:100%}.decision-dock-link{min-height:44px}}
