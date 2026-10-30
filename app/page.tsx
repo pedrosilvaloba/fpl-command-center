@@ -1335,6 +1335,17 @@ export default async function Home({
           <TierHeading label="Simular" note="escolhe uma opção e vê a equipa" />
           <Section id="laboratorio" title="Experimentar outro plano"
             eyebrow="Sem alterar a tua equipa FPL">
+            <div className="mb-4 flex flex-wrap gap-2">
+              <a href="#cenarios" className="action-link-primary">Simular Wildcard ou outro chip</a>
+              <a href="#alternativas" className="action-link-secondary">Comparar transferências</a>
+            </div>
+            <div id="alternativas" className="mb-5 scroll-mt-24 rounded-xl border border-border p-3 sm:p-4">
+              <SubHeading>Transferências</SubHeading>
+              <DecisionLabPanel alternatives={toDecisionAlternatives(transferAdvice.plans, transferAdvice.recommended)} />
+            </div>
+            <details className="mb-5 rounded-xl border border-border bg-surface-2 p-4">
+              <summary className="cursor-pointer text-sm font-semibold text-text">Mais opções e análises avançadas</summary>
+              <div className="mt-4 space-y-3">
             <div className="mb-6 border-b border-border pb-5">
               <AdviserPanel context={{
                 event:fromEvent,
@@ -1362,7 +1373,7 @@ export default async function Home({
             </div>
             <div className="mb-6 border-b border-border pb-5">
               <SubHeading>Transferências — comparar e desafiar</SubHeading>
-              <DecisionLabPanel alternatives={toDecisionAlternatives(transferAdvice.plans, transferAdvice.recommended)} />
+              
               <div className="mt-3 rounded-lg border border-border bg-surface-2 p-3 text-xs text-text-muted">
                 <p className="font-semibold text-text">Ensaio de robustez (não altera o conselho)</p>
                 <p className="mt-1">
@@ -1405,6 +1416,9 @@ export default async function Home({
                 </p>
               </div>
             </div>
+
+              </div>
+            </details>
             <WildcardBenchmark alternatives={wildcardAlternatives}
             main={toScenarioViews(transferAdvice.scenarios, squadState.owned.map(o=>o.elementId),eliteLookup).find(s=>s.chip==="wildcard")} />
           <ChipScenarioPanel
