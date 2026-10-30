@@ -67,6 +67,7 @@ import CountdownTimer from "@/components/CountdownTimer";
 import FixtureTicker from "@/components/FixtureTicker";
 import PlayerTable from "@/components/PlayerTable";
 import PitchView from "@/components/PitchView";
+import ActionHero from "@/components/ActionHero";
 import MyTeamPanel from "@/components/MyTeamPanel";
 import ShadowTeamPanel from "@/components/ShadowTeamPanel";
 import LeagueSimPanel from "@/components/LeagueSimPanel";
@@ -263,7 +264,12 @@ function Section({
           </p>
         )}
       </div>
-      <div className={`${primary ? "card-primary" : "card"} p-4 md:p-5`}>{children}</div>
+      {id === "aprendizagem" || id === "referencia" || id === "mercado" ?
+        <details className="card p-4 md:p-5">
+          <summary className="cursor-pointer text-sm font-semibold text-accent">Ver detalhes e indicadores</summary>
+          <div className="mt-4">{children}</div>
+        </details> :
+        <div className={`${primary ? "card-primary" : "card"} p-4 md:p-5`}>{children}</div>}
     </section>
   );
 }
@@ -1117,83 +1123,35 @@ export default async function Home({
             primeira coisa a saber, não uma nota de rodapé no fim. */}
         <StaleDataBanner health={getFplDataHealth()} now={nowMs} />
         {view === "hoje" && (<>
-        <TierHeading label="Decidir" note="o que fazer antes do deadline" />
+        <TierHeading label="Hoje" note="a tua próxima ação" />
         {/* ================= 1. o que fazer ================= */}
         <Section
           id="fazer"
           eyebrow="A decisão"
-          title="O Que Fazer Antes do Deadline"
+          title="A decisão desta jornada"
           primary
         >
-          <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-surface-2 px-3 py-2 text-xs text-text-muted">
-            <span>Equipa <strong className="text-text">#{teamId}</strong></span>
-            <span>·</span>
-            <span>FPL: {getFplDataHealth().degraded ? "dados de reserva" : "feed disponível"}</span>
-            <span>·</span>
-            <span>Odds: {oddsActive ? "disponíveis" : "sem mercado"}</span>
-            <span>·</span>
-            <span>Projeção: experimental, sem vantagem comprovada</span>
-          </div>
-          {/* The headline answer, then the handful of facts that qualify it —
-              as inline pairs, not as bordered tiles. */}
-          <div className="mb-4 border-b border-border pb-4">
-            <p className="font-display text-lg font-bold leading-snug tracking-tight sm:text-xl md:text-2xl">
-              {decisionHeadline}
-            </p>
-            {squadState.available && squadState.chips.some((chip) => chip.name === "wildcard" && chip.remaining > 0) && (
-              <a
-                href={viewHref(teamId, "simular", { chip: "wildcard", perfil: wildcardProfile }) + "#cenarios"}
-                className="mt-2 inline-block text-[13px] font-semibold text-accent underline underline-offset-2"
-              >
-                Quero explorar alternativas de Wildcard, mesmo que o modelo aconselhe guardar →
-              </a>
+          <ActionHero
+            headline={decisionHeadline}
+            captain={decisionCaptain?.element.web_name??"—"}
+            vice={decisionVice?.element.web_name??"—"}
+            freeTransfers={squadState.available?squadState.freeTransfers:null}
+            bank={squadState.available?squadState.totalBudgetM:null}
+            gain={transferAdvice.recommended?.netGainVsHold??null}
+            simHref={viewHref(teamId,"simular",{chip:"wildcard",perfil:wildcardProfile})+"#cenarios"}
+          >
+            {(transferAdvice.recommended?.moves??[]).length>0&&(
+              <div className="action-hero-moves">
+                {transferAdvice.recommended!.moves.slice(0,3).map(m=>(
+                  <div className="action-hero-move" key={m.in.element.id}>
+                    <span className="action-out">{m.out.element.web_name}</span>
+                    <span aria-hidden>→</span>
+                    <span className="action-in">{m.in.element.web_name}</span>
+                  </div>
+                ))}
+              </div>
             )}
-            <div className="mt-2.5 flex flex-wrap items-baseline gap-x-5 gap-y-2">
-              <Fact
-                label="Capitão"
-                value={decisionCaptain?.element.web_name ?? "—"}
-                tone="accent"
-              />
-              <Fact label="Vice" value={decisionVice?.element.web_name ?? "—"} />
-              {squadState.available ? (
-                <>
-                  <Fact
-                    label="Livres"
-                    value={String(squadState.freeTransfers)}
-                  />
-                  <Fact
-                    label="Orçamento"
-                    value={`£${squadState.totalBudgetM.toFixed(1)}m`}
-                  />
-                  {transferAdvice.recommended &&
-                    transferAdvice.recommended.netGainVsHold !== 0 && (
-                      <Fact
-                        label="Ganho"
-                        value={`${transferAdvice.recommended.netGainVsHold >= 0 ? "+" : ""}${transferAdvice.recommended.netGainVsHold.toFixed(1)} pts`}
-                        tone={
-                          transferAdvice.recommended.netGainVsHold >= 0
-                            ? "accent"
-                            : "danger"
-                        }
-                      />
-                    )}
-                </>
-              ) : (
-                <Fact label="Onze ideal" value={`${xiExpected.toFixed(1)} pts`} />
-              )}
-              {posture.beta !== 0 && (
-                <Fact
-                  label="Postura"
-                  value={posture.label}
-                  tone={posture.label === "atacar" ? "danger" : "warn"}
-                />
-              )}
-              {effectiveOutlook.me && (
-                <Fact label="Liga" value={`${effectiveOutlook.me.rank}º`} />
-              )}
-            </div>
-          </div>
-
+          </ActionHero>
           {/* ═══ O ONZE. ═══
               A app dizia quem comprar e quem capitanear, e nunca dizia
               QUEM ALINHA. O plantel são quinze e jogam onze: escolher os
@@ -1211,12 +1169,7 @@ export default async function Home({
               captainId={decisionCaptain?.element.id}
               viceCaptainId={decisionVice?.element.id}
             />
-            <p className="mt-2 text-[11px] leading-relaxed text-text-muted">
-              Este é o onze do plantel que terás DEPOIS das transferências
-              recomendadas acima. A ordem do banco é a ordem em que as
-              substituições automáticas entram se alguém não jogar — não é
-              decorativa.
-            </p>
+
           </div>
 
           <DeferralPanel plan={deferral} />
@@ -1384,9 +1337,20 @@ export default async function Home({
 
         </>)}
         {view === "simular" && (<>
-          <TierHeading label="Simular" note="compara alternativas sem executar transferências" />
-          <Section id="laboratorio" title="Laboratório de decisões"
-            eyebrow="Explorar cenários" intro="O conselho principal não limita as tuas opções. Todos os cenários usam o plantel ativo e o orçamento estimado, sem alterar a FPL.">
+          <TierHeading label="Simular" note="escolhe uma opção e vê a equipa" />
+          <Section id="laboratorio" title="Experimentar outro plano"
+            eyebrow="Sem alterar a tua equipa FPL">
+            <div className="mb-4 flex flex-wrap gap-2">
+              <a href="#cenarios" className="action-link-primary">Simular Wildcard ou outro chip</a>
+              <a href="#alternativas" className="action-link-secondary">Comparar transferências</a>
+            </div>
+            <div id="alternativas" className="mb-5 scroll-mt-24 rounded-xl border border-border p-3 sm:p-4">
+              <SubHeading>Transferências</SubHeading>
+              <DecisionLabPanel alternatives={toDecisionAlternatives(transferAdvice.plans, transferAdvice.recommended)} />
+            </div>
+            <details className="mb-5 rounded-xl border border-border bg-surface-2 p-4">
+              <summary className="cursor-pointer text-sm font-semibold text-text">Mais opções e análises avançadas</summary>
+              <div className="mt-4 space-y-3">
             <div className="mb-6 border-b border-border pb-5">
               <AdviserPanel context={{
                 event:fromEvent,
@@ -1414,7 +1378,7 @@ export default async function Home({
             </div>
             <div className="mb-6 border-b border-border pb-5">
               <SubHeading>Transferências — comparar e desafiar</SubHeading>
-              <DecisionLabPanel alternatives={toDecisionAlternatives(transferAdvice.plans, transferAdvice.recommended)} />
+              
               <div className="mt-3 rounded-lg border border-border bg-surface-2 p-3 text-xs text-text-muted">
                 <p className="font-semibold text-text">Ensaio de robustez (não altera o conselho)</p>
                 <p className="mt-1">
@@ -1457,6 +1421,9 @@ export default async function Home({
                 </p>
               </div>
             </div>
+
+              </div>
+            </details>
             <WildcardBenchmark alternatives={wildcardAlternatives}
             main={toScenarioViews(transferAdvice.scenarios, squadState.owned.map(o=>o.elementId),eliteLookup).find(s=>s.chip==="wildcard")} />
           <ChipScenarioPanel
@@ -1483,7 +1450,7 @@ export default async function Home({
 
         </>)}
         {view === "analisar" && (<>
-          <TierHeading label="Perceber" note="como correu, e o que o modelo aprendeu com isso" />
+          <TierHeading label="Resultados" note="o que funcionou e o que melhorar" />
           {wildcardEvidence && <WildcardEvidence {...wildcardEvidence} />}
 
         {/* ================= 2. revisão da jornada ================= */}
@@ -1494,8 +1461,8 @@ export default async function Home({
               ? `Jornada ${gwReview.event}${gwReview.finished ? "" : " · ainda a decorrer"}`
               : "Ainda sem jornadas"
           }
-          title="Como Correu a Minha Equipa"
-          intro="Previsto contra real, jogador a jogador. Ordenado por desvio face à previsão, não por pontos: um jogador que fez o que era esperado não é notícia; um que ficou muito abaixo, é."
+          title="A última jornada"
+          intro="Pontos reais, decisões e oportunidades perdidas."
         >
           <GameweekReviewPanel review={gwReview} />
           <div className="mt-6 border-t border-border pt-5">

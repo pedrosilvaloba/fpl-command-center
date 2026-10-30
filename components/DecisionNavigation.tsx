@@ -15,9 +15,9 @@ function NavigationLinks() {
   };
   const current = parseAppView(params.get("view") ?? undefined);
   const links = [
-    { id: "hoje", label: "A minha jornada" },
-    { id: "simular", label: "Planear" },
-    { id: "analisar", label: "Analisar" },
+    { id: "hoje", label: "Hoje" },
+    { id: "simular", label: "Simular" },
+    { id: "analisar", label: "Resultados" },
   ] as const;
   return (
     <nav aria-label="Navegação principal" className="decision-dock">

@@ -54,6 +54,12 @@ const KITS: Record<string, [string, string]> = {
   SWA: ["#ffffff", "#000000"],
 };
 
+const CLUB_PATTERNS: Record<string,"stripes"|"hoops"|"halves"|"single"> = {
+  BHA:"stripes",BOU:"stripes",BRE:"stripes",NEW:"stripes",SOU:"stripes",SUN:"stripes",
+  SHU:"stripes",WBA:"stripes",WAT:"hoops",CRY:"stripes",BUR:"single",
+  AVL:"single",WHU:"single",FUL:"single",TOT:"single",ARS:"single",
+};
+
 const FALLBACK: [string, string] = ["#37003c", "#00ff87"];
 
 export default function ClubKit({
@@ -80,6 +86,7 @@ export default function ClubKit({
       aria-hidden="true"
       focusable="false"
     >
+      <defs><clipPath id="shirt-clip"><path d="M11 4 6 7 4 13l4 1.6V28h16V14.6l4-1.6-2-6-5-3-1.2 2.2a4.2 4.2 0 0 1-7.6 0Z"/></clipPath></defs>
       <path
         d="M11 4 6 7 4 13l4 1.6V28h16V14.6l4-1.6-2-6-5-3-1.2 2.2a4.2 4.2 0 0 1-7.6 0Z"
         fill={primary}
@@ -87,6 +94,18 @@ export default function ClubKit({
         strokeWidth="1"
         strokeLinejoin="round"
       />
+      {!isKeeper && CLUB_PATTERNS[shortName] === "stripes" && (
+        <g clipPath="url(#shirt-clip)" opacity="0.96">
+          <rect x="11.5" y="8" width="3.3" height="21" fill={secondary}/>
+          <rect x="18" y="8" width="3.3" height="21" fill={secondary}/>
+        </g>
+      )}
+      {!isKeeper && CLUB_PATTERNS[shortName] === "hoops" && (
+        <g clipPath="url(#shirt-clip)" opacity="0.95">
+          <rect x="8" y="12" width="17" height="3.5" fill={secondary}/>
+          <rect x="8" y="20" width="17" height="3.5" fill={secondary}/>
+        </g>
+      )}
       <path d="M12.2 4h1.6l1 2h4.4l1-2h1.6l-2 4h-5.6Z" fill={secondary} opacity="0.9" />
       <path d="M8 14.6 4 13l2-6 3-1.8v9.4Z" fill={secondary} opacity="0.55" />
       <path d="M24 14.6 28 13l-2-6-3-1.8v9.4Z" fill={secondary} opacity="0.55" />
