@@ -1118,12 +1118,12 @@ export default async function Home({
             primeira coisa a saber, não uma nota de rodapé no fim. */}
         <StaleDataBanner health={getFplDataHealth()} now={nowMs} />
         {view === "hoje" && (<>
-        <TierHeading label="Decidir" note="o que fazer antes do deadline" />
+        <TierHeading label="Hoje" note="a tua próxima ação" />
         {/* ================= 1. o que fazer ================= */}
         <Section
           id="fazer"
           eyebrow="A decisão"
-          title="O Que Fazer Antes do Deadline"
+          title="A decisão desta jornada"
           primary
         >
           <ActionHero
@@ -1332,9 +1332,9 @@ export default async function Home({
 
         </>)}
         {view === "simular" && (<>
-          <TierHeading label="Simular" note="compara alternativas sem executar transferências" />
-          <Section id="laboratorio" title="Laboratório de decisões"
-            eyebrow="Explorar cenários" intro="O conselho principal não limita as tuas opções. Todos os cenários usam o plantel ativo e o orçamento estimado, sem alterar a FPL.">
+          <TierHeading label="Simular" note="escolhe uma opção e vê a equipa" />
+          <Section id="laboratorio" title="Experimentar outro plano"
+            eyebrow="Sem alterar a tua equipa FPL">
             <div className="mb-6 border-b border-border pb-5">
               <AdviserPanel context={{
                 event:fromEvent,
@@ -1431,7 +1431,7 @@ export default async function Home({
 
         </>)}
         {view === "analisar" && (<>
-          <TierHeading label="Perceber" note="como correu, e o que o modelo aprendeu com isso" />
+          <TierHeading label="Resultados" note="o que funcionou e o que melhorar" />
           {wildcardEvidence && <WildcardEvidence {...wildcardEvidence} />}
 
         {/* ================= 2. revisão da jornada ================= */}
@@ -1442,8 +1442,8 @@ export default async function Home({
               ? `Jornada ${gwReview.event}${gwReview.finished ? "" : " · ainda a decorrer"}`
               : "Ainda sem jornadas"
           }
-          title="Como Correu a Minha Equipa"
-          intro="Previsto contra real, jogador a jogador. Ordenado por desvio face à previsão, não por pontos: um jogador que fez o que era esperado não é notícia; um que ficou muito abaixo, é."
+          title="A última jornada"
+          intro="Pontos reais, decisões e oportunidades perdidas."
         >
           <GameweekReviewPanel review={gwReview} />
           <div className="mt-6 border-t border-border pt-5">
