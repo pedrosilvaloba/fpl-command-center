@@ -1,4 +1,6 @@
+import {finishCaptureRender} from "./capturerender";
 import {getBootstrap} from "./fpl-client";
+import {DEFAULT_TEAM_ID} from "./constants";
 import {getRedis} from "./kv";
 
 /** Uses the already authenticated production cron to warm a hypothetical
@@ -15,13 +17,15 @@ async function attemptWildcardCapture():Promise<{ok:boolean;status:string}>{
   if(Date.parse(next.deadline_time)-now<3600000)return {ok:false,status:"deadline-too-close"};
   const key="fpl:wildcard-abc:snapshot:v1:"+next.id;
   if(await redis.get(key))return {ok:true,status:"already-frozen"};
-  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),45000);
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),110000);
   try{
-   const response=await fetch("https://"+host+"/?view=simular&chip=wildcard&comparar=1",{
+   const response=await fetch("https://"+host+"/?view=simular&chip=wildcard&comparar=1&team="+encodeURIComponent(DEFAULT_TEAM_ID),{
     signal:controller.signal,cache:"no-store",redirect:"error",
     headers:{"x-fpl-snapshot-trigger":"scheduled",
       ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET?{"x-vercel-protection-bypass":process.env.VERCEL_AUTOMATION_BYPASS_SECRET}:{})}});
    if(!response.ok)return {ok:false,status:"simulator-http-"+response.status};
+      // fetch resolves at headers; snapshot side effects finish during streaming.
+      await finishCaptureRender(response);
   }finally{clearTimeout(timer)}
   return await redis.get(key)?{ok:true,status:"frozen"}:{ok:false,status:"capture-unavailable"};
  }catch{return {ok:false,status:"capture-failed"}}

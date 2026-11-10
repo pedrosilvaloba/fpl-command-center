@@ -5,6 +5,7 @@
 
 export interface FplTeam {
   id: number;
+  code?: number;
   name: string;
   short_name: string;
   strength: number;

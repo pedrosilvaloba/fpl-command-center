@@ -136,7 +136,7 @@ export const dynamic = "force-dynamic";
 // expiry pays for all of it at once, and Vercel's default function timeout
 // is short enough to cut that off midway. Asking for more headroom costs
 // nothing on a request that finishes early.
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 /**
  * A PÁGINA TINHA ONZE SECÇÕES DE TOPO E NENHUMA HIERARQUIA.
@@ -930,7 +930,8 @@ export default async function Home({
     transferAdvice.recommended?.bench ?? bench,
     expectationsByTeamForDisplay,
     fromEvent,
-    5
+    5,
+    decisionCaptain
   );
 
   const chipAdvice = planChips({
@@ -1172,6 +1173,7 @@ export default async function Home({
 
           </div>
 
+          <details className="mb-4 rounded-lg border border-border p-3"><summary className="cursor-pointer text-sm font-semibold">Comparar capitães e planear chips</summary>
           <DeferralPanel plan={deferral} />
 
           {/* A braçadeira aparecia como um nome sem contexto. Dobra pontos:
@@ -1207,6 +1209,7 @@ export default async function Home({
             <LeagueChipsPanel state={leagueChipState} />
           </div>
 
+          </details>
           <TransferPlanPanel
             advice={transferAdvice}
             state={squadState}
@@ -1228,6 +1231,7 @@ export default async function Home({
 
           {/* "E se eu usasse o chip X esta semana?" — o cenário de cada chip
               é sempre calculado, mesmo quando o modelo não o aconselha. */}
+          <details className="mt-4 rounded-lg border border-border p-3"><summary className="cursor-pointer text-sm font-semibold">Referências da liga e calendário</summary>
           <div className="mt-6 border-t border-border pt-5">
             <SubHeading>O que a elite faz</SubHeading>
             <ElitePanel
@@ -1245,6 +1249,7 @@ export default async function Home({
             </div>
           )}
 
+          </details>
           <a className="mt-4 inline-block rounded-lg border border-accent px-4 py-3 text-sm font-semibold text-accent"
              href={viewHref(teamId, "simular", { chip: "wildcard", perfil: wildcardProfile }) + "#cenarios"}>
             Abrir laboratório de cenários — Wildcard, Free Hit e transferências
@@ -1414,7 +1419,7 @@ export default async function Home({
               </div>
               <div className="mt-4">
                 <SubHeading>E se esperasse e acumulasse mais uma FT?</SubHeading>
-                <DeferralPanel plan={deferral} />
+          <DeferralPanel plan={deferral} />
                 <p className="mt-2 text-xs text-text-muted">
                   Projeção condicional feita com a informação de hoje. Ainda não é um otimizador
                   completo de sequências de transferências em várias jornadas.

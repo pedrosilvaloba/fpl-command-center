@@ -556,8 +556,8 @@ function buildPosture(
     rationale = `A simulação dá-te ${Math.round(p * 100)}% de hipóteses de acabar à frente de ${target.playerName} (${target.entryName}). Com uma vantagem destas, a jogada certa deixa de ser marcar mais pontos e passa a ser reduzir a probabilidade de algo correr mal: quanto mais o teu onze se parecer com o dele, menos jornadas existem em que ele te ultrapassa. O otimizador passa a preferir os jogadores que o pelotão também tem.`;
   } else {
     label = "equilibrar";
-    headline = "Corrida equilibrada — sem inclinação artificial";
-    rationale = `A simulação dá-te ${Math.round(p * 100)}% de hipóteses de acabar à frente de ${target.playerName} (${target.entryName}) — perto de uma moeda ao ar. Nesta zona nem procurar variância nem suprimi-la melhora as tuas hipóteses de forma clara, por isso o modelo fica a maximizar pontos esperados.`;
+    headline = "Prioridade aos pontos esperados";
+    rationale = `A simulação dá-te ${Math.round(p * 100)}% de hipóteses de acabar à frente de ${target.playerName} (${target.entryName}) em ${gameweeksRemaining} jornadas. A postura mantém prioridade aos pontos esperados: depende também do tempo restante e dos limites de risco, não significa uma probabilidade próxima de 50%.`;
   }
 
   return { beta, label, headline, rationale, targetName: target.playerName, source: "simulação" };

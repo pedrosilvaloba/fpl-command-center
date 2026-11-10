@@ -1,3 +1,4 @@
+import {finishCaptureRender} from "./capturerender";
 import { getBootstrap } from "./fpl-client";
 import { getRedis } from "./kv";
 import { validProspectiveMinutesSnapshot,readRecentMinutes,refreshRecentMinutes } from "./recentminutes";
@@ -38,7 +39,7 @@ export async function runDailyMinutesCapture():Promise<{ok:boolean;status:string
     if(!validProspectiveMinutesSnapshot(recent,next.id,next.deadline_time))
       return {ok:false,status:"missing-prospective-history"};
     const controller=new AbortController();
-    const timeout=setTimeout(()=>controller.abort(),35_000);
+    const timeout=setTimeout(()=>controller.abort(),110_000);
     try{
       const response=await fetch("https://"+domain+"/?view=analisar",{
         signal:controller.signal,cache:"no-store",redirect:"error",
@@ -46,6 +47,8 @@ export async function runDailyMinutesCapture():Promise<{ok:boolean;status:string
       ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET?{"x-vercel-protection-bypass":process.env.VERCEL_AUTOMATION_BYPASS_SECRET}:{})}
       });
       if(!response.ok)return {ok:false,status:"analysis-page-"+response.status};
+      // fetch resolves at headers; snapshot side effects finish during streaming.
+      await finishCaptureRender(response);
     }finally{clearTimeout(timeout);}
     const saved=await redis.get("fpl:minutes-decisions:snapshot:v1:"+next.id);
     return saved?{ok:true,status:"frozen"}:{ok:false,status:"analysis-did-not-freeze"};

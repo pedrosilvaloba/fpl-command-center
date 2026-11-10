@@ -68,7 +68,7 @@ function PlayerChip({
         </span>
       )}
       <ClubKit
-        shortName={player.team.short_name}
+        shortName={player.team.short_name} teamCode={player.team.code}
         isKeeper={player.element.element_type === 1}
         size={34}
       />

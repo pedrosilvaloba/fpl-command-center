@@ -67,7 +67,8 @@ export async function captureWildcardExperiment(snapshot:FrozenWildcardExperimen
   if(!snapshot||Date.now()>=Date.parse(snapshot.deadline))return;
   const redis=getRedis();if(!redis)return;
   const saved=await redis.set(SNAP(snapshot.event),snapshot,{nx:true});
-  if(saved==="OK")await redis.sadd(INDEX,String(snapshot.event));
+  if(saved==="OK" || await redis.get(SNAP(snapshot.event)))
+    await redis.sadd(INDEX,String(snapshot.event));
 }
 export async function settleWildcardExperiments(finished:number[]){
   const redis=getRedis();if(!redis)return;

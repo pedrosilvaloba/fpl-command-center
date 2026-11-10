@@ -55,7 +55,7 @@ export default function PlayerTable({
           >
             <div className="flex items-start gap-2.5">
               <ClubKit
-                shortName={p.team.short_name}
+                shortName={p.team.short_name} teamCode={p.team.code}
                 isKeeper={p.element.element_type === 1}
                 size={26}
               />
@@ -117,7 +117,7 @@ export default function PlayerTable({
                 <td className="py-2 pr-3">
                   <span className="inline-flex items-center gap-1.5 text-text-muted">
                     <ClubKit
-                      shortName={p.team.short_name}
+                      shortName={p.team.short_name} teamCode={p.team.code}
                       isKeeper={p.element.element_type === 1}
                       size={18}
                     />

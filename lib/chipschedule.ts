@@ -85,7 +85,8 @@ export interface EventProjection {
 function projectPlayer(
   p: ScoredPlayer,
   event: number,
-  expectations: Map<number, FixtureExpectation[]>
+  expectations: Map<number, FixtureExpectation[]>,
+  fromEvent: number
 ): number {
   const base = Number.isFinite(p.expectedPointsNext) ? p.expectedPointsNext : 0;
   if (base <= 0) return 0;
@@ -93,15 +94,16 @@ function projectPlayer(
   const here = all.filter((f) => f.event === event);
   if (here.length === 0) return 0; // jornada em branco para a equipa dele
 
+  // Current-gameweek estimates already include every fixture and availability.
+  if (event === fromEvent) return base;
+
   // A referência é o jogo mais próximo que a equipa tem, que é aquele sobre
   // o qual `expectedPointsNext` foi calculado.
-  const upcoming = all
-    .filter((f) => typeof f.event === "number" && (f.event as number) >= 1)
-    .sort((a, b) => (a.event ?? 0) - (b.event ?? 0));
-  const reference = upcoming[0];
-  const refIndex = reference
-    ? Math.max(0.15, fixtureIndex(p.element.element_type, reference))
-    : 1;
+  const reference = all.filter(f => f.event === fromEvent);
+  // No valid reference in a blank week: do not invent a later forecast.
+  if (!reference.length) return 0;
+  const refIndex = Math.max(0.15, reference.reduce(
+    (sum, f) => sum + fixtureIndex(p.element.element_type, f), 0));
 
   let scale = 0;
   for (const f of here) {
@@ -123,22 +125,26 @@ export function projectChipsByEvent(
   bench: ScoredPlayer[],
   expectations: Map<number, FixtureExpectation[]>,
   fromEvent: number,
-  horizon = 5
+  horizon = 5,
+  currentCaptain?: ScoredPlayer | null
 ): EventProjection[] {
   const out: EventProjection[] = [];
   for (let e = fromEvent; e < fromEvent + horizon; e += 1) {
     const xiProjected = xi.map((p) => ({
       p,
-      pts: projectPlayer(p, e, expectations),
+      pts: projectPlayer(p, e, expectations, fromEvent),
     }));
     const benchPts = bench.reduce(
-      (s, p) => s + projectPlayer(p, e, expectations),
+      (s, p) => s + projectPlayer(p, e, expectations, fromEvent),
       0
     );
-    const best = xiProjected.reduce<{ p: ScoredPlayer; pts: number } | null>(
+    const bestProjected = xiProjected.reduce<{ p: ScoredPlayer; pts: number } | null>(
       (b, c) => (!b || c.pts > b.pts ? c : b),
       null
     );
+    const best = e === fromEvent && currentCaptain
+      ? xiProjected.find(x => x.p.element.id === currentCaptain.element.id) ?? bestProjected
+      : bestProjected;
     const maxFixtures = [...xi, ...bench].reduce((m, p) => {
       const n = (expectations.get(p.team?.id ?? -1) ?? []).filter(
         (f) => f.event === e

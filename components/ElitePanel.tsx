@@ -60,7 +60,7 @@ export default function ElitePanel({
                 key={g.player.element.id}
                 className="flex items-center gap-2 rounded-md border border-warn/40 bg-warn/5 px-2 py-1.5 text-[12px]"
               >
-                <ClubKit shortName={g.player.team.short_name} isKeeper={g.player.element.element_type === 1} size={16} />
+                <ClubKit shortName={g.player.team.short_name} teamCode={g.player.team.code} isKeeper={g.player.element.element_type === 1} size={16} />
                 <span className="font-semibold text-text">{g.player.element.web_name}</span>
                 <span className="text-text-muted">
                   {g.player.positionShort} · £{g.player.priceM.toFixed(1)} · {g.player.element.total_points} pts
