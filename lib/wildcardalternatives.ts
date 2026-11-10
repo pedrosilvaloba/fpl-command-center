@@ -18,6 +18,15 @@ export interface WildcardAlternative {
   modelXiWindow: number | null;
 }
 
+/** Official forecasts may legitimately be negative (cards, own goals, etc.). */
+export function baselineValue(raw:unknown):number|null {
+ if(raw===null||raw===undefined||raw==="" ||
+    (typeof raw!=="number"&&typeof raw!=="string"))return null;
+ if(typeof raw==="string"&&raw.trim()==="")return null;
+ const n=Number(raw);
+ return Number.isFinite(n)?n:null;
+}
+
 export function optimizeWildcardBaselines(
   scored: ScoredPlayer[],
   state: SquadState,
@@ -26,12 +35,9 @@ export function optimizeWildcardBaselines(
 ): WildcardAlternative[] {
   const byId = new Map(scored.map(p => [p.element.id,p]));
   return (["ppg","fpl"] as const).map(criterion => {
-    const valid = (p: ScoredPlayer) => {
-      const raw = criterion === "ppg" ? p.element.points_per_game : p.element.ep_next;
-      if (raw === null || raw === undefined || raw === "") return null;
-      const n = Number(raw);
-      return Number.isFinite(n) && n >= 0 ? n : null;
-    };
+    const valid = (p: ScoredPlayer) => baselineValue(
+      criterion === "ppg" ? p.element.points_per_game : p.element.ep_next);
+
     const measured = scored.filter(p => valid(p)!==null).length;
     if (measured !== scored.length || scored.length === 0) {
       return { criterion,available:false,reason:"Cobertura de dados insuficiente para comparar sem valores inventados.",ids:[],xiIds:[],xiNames:[],captainId:null,viceCaptainId:null,budgetRemaining:null,modelXiNext:null,modelCaptainNext:null,modelXiWindow:null };

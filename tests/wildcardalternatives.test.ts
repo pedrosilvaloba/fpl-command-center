@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { optimizeWildcardBaselines } from "../lib/wildcardalternatives";
+import { optimizeWildcardBaselines, baselineValue } from "../lib/wildcardalternatives";
 import { makeElement, makeTeam } from "./fixtures";
 import type { ScoredPlayer } from "../lib/recommend";
 import type { SquadState } from "../lib/squadstate";
@@ -15,3 +15,8 @@ assert.equal(official?.available,false);
 assert.match(official?.reason??"",/insuficiente/i);
 assert.equal(official?.ids.length,0);
 console.log("Full wildcard baseline incomplete-official-data safety passed");
+
+assert.equal(baselineValue('-0.8'),-0.8);
+assert.equal(baselineValue('0'),0);
+for(const value of [null,undefined,'',' ',NaN,Infinity,{},'unknown']) assert.equal(baselineValue(value),null);
+console.log('Negative official predictions remain evidence; missing values are not invented');
